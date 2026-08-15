@@ -122,6 +122,11 @@ def ui_download_clients():
     return render('settings_download_clients.html')
 
 
+@ui.route('/settings/notifications', methods=methods)
+def ui_notifications():
+    return render('settings_notifications.html')
+
+
 @ui.route('/settings/metadata', methods=methods)
 def ui_metadata():
     return render('settings_metadata.html')

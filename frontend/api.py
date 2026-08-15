@@ -41,6 +41,7 @@ from backend.implementations.file_matching import (get_file_matching,
                                                    set_file_matching)
 from backend.implementations.naming import (generate_volume_folder_name,
                                             preview_mass_rename)
+from backend.implementations.notifications import Notifications
 from backend.implementations.remote_mapping import RemoteMappings
 from backend.implementations.root_folders import RootFolders
 from backend.implementations.volumes import Library, delete_issue_file
@@ -1406,6 +1407,65 @@ def api_external_client(id: int):
 
     elif request.method == 'DELETE':
         client.delete_client()
+        return return_api({})
+
+
+# =====================
+# Notifications
+# =====================
+@api.route('/notifications', methods=['GET', 'POST'])
+@error_handler
+@auth
+def api_notifications():
+    if request.method == 'GET':
+        result = Notifications.get_all()
+        return return_api(result)
+
+    elif request.method == 'POST':
+        data: dict = request.get_json()
+        result = Notifications.add(data).get_data()
+        return return_api(result, code=201)
+
+
+@api.route('/notifications/options', methods=['GET'])
+@error_handler
+@auth
+def api_notifications_options():
+    return return_api({
+        'service_types': Notifications.get_service_types(),
+        'events': Notifications.get_event_types()
+    })
+
+
+@api.route('/notifications/test', methods=['POST'])
+@error_handler
+@auth
+def api_notifications_test():
+    data: dict = request.get_json()
+    result = Notifications.test(
+        data.get('service_type'),
+        data.get('url')
+    )
+    return return_api({'success': result})
+
+
+@api.route('/notifications/<int:id>', methods=['GET', 'PUT', 'DELETE'])
+@error_handler
+@auth
+def api_notification(id: int):
+    service = Notifications.get_one(id)
+
+    if request.method == 'GET':
+        result = service.get_data()
+        return return_api(result)
+
+    elif request.method == 'PUT':
+        data: dict = request.get_json()
+        service.update(data)
+        return return_api(service.get_data())
+
+    elif request.method == 'DELETE':
+        service.delete()
         return return_api({})
 
 

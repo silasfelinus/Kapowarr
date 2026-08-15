@@ -1184,3 +1184,19 @@ def _migrate_add_forced_file_match_column():
     """)
 
     return
+
+
+@DatabaseMigrationHandler.register_handler(45)
+def _migrate_add_notification_services():
+    get_db().executescript("""
+        CREATE TABLE IF NOT EXISTS notification_services(
+            id INTEGER PRIMARY KEY,
+            service_type VARCHAR(30) NOT NULL,
+            title VARCHAR(255) NOT NULL,
+            url TEXT NOT NULL,
+            events VARCHAR(255) NOT NULL DEFAULT "",
+            enabled BOOL NOT NULL DEFAULT 1
+        );
+    """)
+
+    return

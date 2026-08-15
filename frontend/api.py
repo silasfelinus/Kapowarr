@@ -45,6 +45,7 @@ from backend.implementations.remote_mapping import RemoteMappings
 from backend.implementations.root_folders import RootFolders
 from backend.implementations.volumes import Library, delete_issue_file
 from backend.internals.db_models import FilesDB
+from backend.internals.health import get_health_data
 from backend.internals.server import Server, StartTypeHandlers
 from backend.internals.settings import Settings, get_about_data
 
@@ -284,6 +285,13 @@ def api_public():
 @auth
 def api_about():
     return return_api(get_about_data())
+
+
+@api.route('/system/health', methods=['GET'])
+@error_handler
+@auth
+def api_health():
+    return return_api(get_health_data())
 
 
 @api.route('/system/logs', methods=['GET'])

@@ -20,6 +20,24 @@ section:not(:first-of-type) h2 {
 	margin-top: 1rem;
 }
 
+#health-list {
+	display: flex;
+	flex-direction: column;
+	gap: .5rem;
+}
+
+#health-list > li {
+	padding: .5rem .75rem;
+	border-left: 3px solid var(--error-color);
+	background-color: var(--hover-color);
+	color: var(--text-color);
+	border-radius: 2px;
+}
+
+#health-list > li > strong {
+	color: var(--error-color);
+}
+
 .container {
 	overflow-x: auto;
 	color: var(--text-color);

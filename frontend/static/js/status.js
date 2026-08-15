@@ -1,4 +1,6 @@
 const StatEls = {
+	health_section: document.querySelector('#health-section'),
+	health_list: document.querySelector('#health-list'),
 	version: document.querySelector('#version'),
 	python_version: document.querySelector('#python-version'),
 	database_version: document.querySelector('#database-version'),
@@ -30,6 +32,8 @@ const about_table = `
 
 usingApiKey()
 .then(api_key => {
+	fillHealth(api_key);
+
 	fetchAPI('/system/about', api_key)
 	.then(json => {
 		StatEls.version.innerText = json.result.version;
@@ -67,6 +71,40 @@ usingApiKey()
 			setTimeout(() => window.location.reload(), 1000);
 		};
 });
+
+
+function fillHealth(api_key) {
+	fetchAPI('/system/health', api_key)
+	.then(json => {
+		const warnings = json.result;
+		StatEls.health_list.innerHTML = '';
+
+		if (!warnings.length) {
+			StatEls.health_section.classList.add('hidden');
+			return;
+		}
+
+		warnings.forEach(w => {
+			const li = document.createElement('li');
+
+			const source = document.createElement('strong');
+			source.textContent = w.source + ': ';
+			li.appendChild(source);
+
+			const message = document.createElement('span');
+			message.textContent = w.message;
+			li.appendChild(message);
+
+			StatEls.health_list.appendChild(li);
+		});
+
+		StatEls.health_section.classList.remove('hidden');
+	})
+	.catch(e => {
+		// Leave the section hidden -- a failed health check itself
+		// shouldn't leave a broken/half-built UI on the Status page.
+	});
+}
 
 
 function copy(text) {

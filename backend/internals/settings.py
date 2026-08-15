@@ -78,6 +78,7 @@ class PublicSettingsValues:
     host: str = '0.0.0.0'
     port: int = 5656
     url_base: str = ''
+    app_title: str = ''
 
     proxy_type: ProxyType = ProxyType.NONE
     proxy_host: str = ''

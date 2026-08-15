@@ -4,6 +4,7 @@ function fillSettings(api_key) {
 		document.querySelector('#bind-address-input').value = json.result.host;
 		document.querySelector('#port-input').value = json.result.port;
 		document.querySelector('#url-base-input').value = json.result.url_base;
+		document.querySelector('#app-title-input').value = json.result.app_title;
 		document.querySelector('#username-input').value = json.result.auth_username;
 		document.querySelector('#password-input').value = json.result.auth_password;
 		document.querySelector('#api-input').value = api_key;
@@ -42,6 +43,7 @@ function saveSettings(api_key) {
 		'host': document.querySelector('#bind-address-input').value,
 		'port': parseInt(document.querySelector('#port-input').value),
 		'url_base': document.querySelector('#url-base-input').value,
+		'app_title': document.querySelector('#app-title-input').value,
 		'auth_username': '',
 		'auth_password': '',
 		'proxy_type': document.querySelector('#proxy-type-input').value || null,

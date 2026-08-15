@@ -47,6 +47,9 @@ class Constants:
     DB_NAME = "Kapowarr.db"
     "Name of database file itself"
 
+    DEFAULT_APP_TITLE = "Kapowarr"
+    "Displayed application title when no custom app_title setting is set"
+
     DB_TIMEOUT = 10.0 # seconds
     "Seconds to wait on database command before timing out"
 

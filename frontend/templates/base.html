@@ -24,10 +24,12 @@
 	<script src="https://cdn.socket.io/4.7.5/socket.io.min.js" integrity="sha384-2huaZvOR9iDzHqslqwpR87isEmrfxqyWOF7hr7BY6KG0+hVKLoEXMPUJw3ynWuhO" crossorigin="anonymous"></script>
 	<script src="{{ url_for('static', filename='js/auth.js') }}"></script>
 	<script src="{{ url_for('static', filename='js/general.js') }}" defer></script>
+	<script src="{{ url_for('static', filename='js/loading_lines.js') }}" defer></script>
+	<script src="{{ url_for('static', filename='js/launch_flair.js') }}" defer></script>
 	{% block js %}
 	{% endblock js %}
 
-	<title>{% block title %}{% endblock %} - Kapowarr</title>
+	<title>{% block title %}{% endblock %} - {{ app_title }}</title>
 
 </head>
 <body>
@@ -56,6 +58,7 @@
 			<a href="{{url_base}}/" aria-label="Go to homepage">
 				<img src="{{ url_for('static', filename='img/favicon.svg') }}" alt="">
 			</a>
+			<p id="launch-flair" aria-live="polite"></p>
 		</div>
 		{% block right_side_header %}
 		{% endblock %}

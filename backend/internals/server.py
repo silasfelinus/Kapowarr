@@ -134,7 +134,10 @@ class Server(metaclass=Singleton):
         def not_found(e):
             if request.path.startswith(Constants.API_PREFIX):
                 return {'error': 'NotFound', 'result': {}}, 404
-            return render_template('page_not_found.html')
+            return render_template(
+                'page_not_found.html',
+                app_title=Settings().get_public_settings().app_title or Constants.DEFAULT_APP_TITLE
+            )
 
         @app.errorhandler(405)
         def method_not_allowed(e):

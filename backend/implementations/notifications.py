@@ -10,10 +10,16 @@ POST request describing it.
 
 Sending is deliberately fire-and-forget: `send_notification()` looks up
 the matching services synchronously (a cheap local DB read) but hands
-each actual HTTP request off to its own background thread and never lets
-a network failure propagate back into the caller -- post-processing and
-the download queue must never stall or fail because a Discord webhook is
-slow or unreachable.
+each actual HTTP request off to a shared, bounded worker pool
+(`_notification_pool`) and never lets a network failure propagate back
+into the caller -- post-processing and the download queue must never
+stall or fail because a Discord webhook is slow or unreachable. The pool
+is sized (`NOTIFICATION_POOL_MAX_WORKERS`) rather than spawning one raw
+`Thread` per service per event -- fine at today's scale (a handful of
+services, downloads aren't that frequent), but a library with many
+enabled services and frequent concurrent downloads could otherwise
+accumulate unboundedly many short-lived threads at once (kapowarr/t-016,
+kaizen from t-012).
 
 Every request (including the interactive "Test" button) goes through
 `_post_bounded()`, which caps the whole call -- across all of `Session`'s
@@ -30,7 +36,6 @@ was measured to take 90+ seconds. Same bug, same fix, as
 
 from concurrent.futures import (Future, ThreadPoolExecutor,
                                 TimeoutError as FutureTimeoutError)
-from threading import Thread
 from typing import Any, Dict, List, Mapping, Union
 
 from requests import RequestException, Response
@@ -44,6 +49,23 @@ from backend.internals.db import get_db
 from backend.internals.server import Server
 
 NOTIFICATION_REQUEST_TIMEOUT = 10.0 # seconds
+
+# Caps how many notification sends (one per matching enabled service per
+# event) can be dispatched at once -- see module docstring. Each of these
+# workers spends most of its time blocked on _post_bounded's own
+# NOTIFICATION_REQUEST_TIMEOUT-bounded wait, not doing CPU work, so a
+# modest worker count comfortably covers today's "a handful of services"
+# scale while still capping the worst case.
+NOTIFICATION_POOL_MAX_WORKERS = 8
+
+# Long-lived and never explicitly shut down -- same lifetime as the app
+# process. Idle workers block on the internal queue, which the
+# `concurrent.futures` atexit hook signals and joins cleanly on process
+# exit, so this doesn't need its own shutdown handling.
+_notification_pool = ThreadPoolExecutor(
+    max_workers=NOTIFICATION_POOL_MAX_WORKERS,
+    thread_name_prefix="NotificationSender"
+)
 
 
 def _raw_post(url: str, payload: Dict[str, Any]) -> Response:
@@ -146,8 +168,8 @@ def send_notification(
     message: str
 ) -> None:
     """Notify every enabled service subscribed to this event. Never raises;
-    all sending happens in background threads so the caller is never
-    blocked or interrupted by a notification failure.
+    all sending happens on the shared `_notification_pool` so the caller
+    is never blocked or interrupted by a notification failure.
 
     Args:
         event (NotificationEvent): The event that occurred.
@@ -175,12 +197,9 @@ def send_notification(
             )
             continue
 
-        Thread(
-            target=_send_one,
-            args=(service_type, service['url'], event, title, message),
-            name=f"NotificationSender-{event.value}",
-            daemon=True
-        ).start()
+        _notification_pool.submit(
+            _send_one, service_type, service['url'], event, title, message
+        )
 
     return
 

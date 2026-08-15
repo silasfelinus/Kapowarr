@@ -10,6 +10,8 @@
 
 # Kapowarr
 
+> **Personal fork:** This repository is Silas Felinus's fork of [Casvt/Kapowarr](https://github.com/Casvt/Kapowarr). It keeps the upstream GPL-3.0 license and attribution while adding optional personality/quality-of-life changes and planned Usenet/NZB support. Fork container builds are published as `ghcr.io/silasfelinus/kapowarr:latest`; upstream remains the original project and maintainer.
+
 Kapowarr is a software to build and manage a comic book library, fitting in the *arr suite of software.
 
 Kapowarr allows you to build a digital library of comics. You can add volumes, map them to a folder and start managing! Download, rename, move and convert issues of the volume (including TPBs, One Shots, Hard Covers, and more). The whole process is automated and can be customised in the settings.
@@ -29,15 +31,15 @@ Featured on [Noted](https://noted.lol/kapowarr/) and [Respectlytics](https://res
 
 ## Installation, support and documentation
 
-- For instructions on how to install Kapowarr, see the [installation documentation](https://casvt.github.io/Kapowarr/installation/installation/).
-- For support, a [Discord server](https://discord.gg/5gWtW3ekgZ) and [subreddit](https://www.reddit.com/r/kapowarr/) are available, or [make an issue](https://github.com/Casvt/Kapowarr/issues).
-- For the planning of features or their progress, check the [project board](https://github.com/users/Casvt/projects/5).
-- For all documentation, see the [documentation hub](https://casvt.github.io/Kapowarr/).
-- For donations, go to the [Ko-Fi page](https://ko-fi.com/casvt).
+- For this fork's Docker/Compose deployment, use `ghcr.io/silasfelinus/kapowarr:latest` (the included `docker-compose.yml` already points there).
+- For upstream instructions on how to install Kapowarr, see the [installation documentation](https://casvt.github.io/Kapowarr/installation/installation/).
+- For upstream support, a [Discord server](https://discord.gg/5gWtW3ekgZ) and [subreddit](https://www.reddit.com/r/kapowarr/) are available, or [make an issue](https://github.com/Casvt/Kapowarr/issues).
+- For upstream planning of features or their progress, check the [project board](https://github.com/users/Casvt/projects/5).
+- For upstream documentation, see the [documentation hub](https://casvt.github.io/Kapowarr/).
+- For donations to the upstream author, go to the [Ko-Fi page](https://ko-fi.com/casvt).
 
 ## Screenshots
 
 ![](https://github.com/user-attachments/assets/04656209-288e-4263-a2df-93e06758c443)
 ![](https://github.com/user-attachments/assets/3fa8177c-f016-4cbd-b73e-6b577840b08e)
 ![](https://github.com/user-attachments/assets/69d59c21-3983-4acc-8777-ae0c7b65fdff)
-![](https://github.com/user-attachments/assets/6e26c4e9-3c75-4b2c-b853-9fe2b56c9617)

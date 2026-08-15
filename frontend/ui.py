@@ -6,23 +6,29 @@ from typing import Any
 
 from flask import Blueprint, redirect, render_template, send_file
 
+from backend.base.definitions import Constants
 from backend.internals.server import Server
+from backend.internals.settings import Settings
 
 ui = Blueprint('ui', __name__)
 methods = ['GET']
 
 
 def render(filename: str, **kwargs: Any) -> str:
-    return render_template(filename, url_base=Server.url_base, **kwargs)
+    app_title = Settings().get_public_settings().app_title or Constants.DEFAULT_APP_TITLE
+    return render_template(
+        filename, url_base=Server.url_base, app_title=app_title, **kwargs
+    )
 
 
 @ui.route('/manifest.json', methods=methods)
 def ui_manifest():
+    app_title = Settings().get_public_settings().app_title or Constants.DEFAULT_APP_TITLE
     return send_file(
         BytesIO(dumps(
             {
-                "name": "Kapowarr",
-                "short_name": "Kapowarr",
+                "name": app_title,
+                "short_name": app_title,
                 "description": "Kapowarr is a software to build and manage a comic book library, fitting in the *arr suite of software.",
                 "display": "standalone",
                 "orientation": "portrait-primary",

@@ -13,11 +13,11 @@
 	<script src="{{ url_for('static', filename='js/auth.js') }}"></script>
 	<script src="{{ url_for('static', filename='js/login.js') }}" defer></script>
 
-	<title>Login - Kapowarr</title>
+	<title>Login - {{ app_title }}</title>
 </head>
 <body>
 	<div id="text-container">
-		<h1>Kapowarr</h1>
+		<h1>{{ app_title }}</h1>
 		<p>Please log in</p>
 	</div>
 	<noscript>

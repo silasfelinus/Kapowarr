@@ -1015,6 +1015,21 @@ class Library:
         return result
 
     @classmethod
+    def get_random_title(cls) -> Union[str, None]:
+        """Get the title of a random volume in the library, for display
+        purposes only (e.g. launch flair). Not suitable for anything that
+        needs a stable or weighted selection.
+
+        Returns:
+            Union[str, None]: The title of a random volume, or `None` if the
+                library is empty.
+        """
+        result = get_db().execute(
+            "SELECT title FROM volumes ORDER BY RANDOM() LIMIT 1;"
+        ).fetchonedict()
+        return result['title'] if result else None
+
+    @classmethod
     def get_volumes(cls) -> List[int]:
         """Get a list of the IDs of all the volumes.
 

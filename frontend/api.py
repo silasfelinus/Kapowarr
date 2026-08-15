@@ -838,6 +838,14 @@ def api_volumes_stats():
     return return_api(result)
 
 
+@api.route('/system/launchflair', methods=['GET'])
+@error_handler
+@auth
+def api_launch_flair():
+    result = {'title': Library.get_random_title()}
+    return return_api(result)
+
+
 @api.route('/volumes/<int:id>', methods=['GET', 'PUT', 'DELETE'])
 @error_handler
 @auth

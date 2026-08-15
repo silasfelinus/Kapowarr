@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 
+from concurrent.futures import (ThreadPoolExecutor,
+                                TimeoutError as FutureTimeoutError)
 from sqlite3 import IntegrityError
 from typing import Any, Dict, List, Mapping, Type, Union
 
@@ -11,7 +13,17 @@ from backend.base.custom_exceptions import (ClientNotWorking,
 from backend.base.definitions import (ClientTestResult, DownloadType,
                                       ExternalDownloadClient)
 from backend.base.helpers import get_subclasses, normalise_base_url
+from backend.base.logging import LOGGER
 from backend.internals.db import get_db
+
+# Deliberately shorter than a Session's full retry cycle (several retries
+# with exponential backoff -- see Constants.TOTAL_RETRIES/
+# BACKOFF_FACTOR_RETRIES). Matches backend/internals/health.py's
+# HEALTH_CHECK_TIMEOUT bound: a user clicking "Test" against an
+# unreachable client should see a result in roughly ten seconds, not wait
+# out the full retry cycle (observed to take 90+ seconds live against a
+# non-responding host in testing).
+EXTERNAL_CLIENT_TEST_TIMEOUT = 10.0 # seconds
 
 
 # =====================
@@ -208,18 +220,39 @@ class ExternalClients:
         Returns:
             ClientTestResult: Whether the test was successful.
         """
-        client_types = ExternalClients.get_client_types()
-
         try:
-            client_types[client_type].test(
+            client_class = ExternalClients.get_client_types()[client_type]
+        except KeyError:
+            raise InvalidKeyValue('type', client_type)
+
+        # Bounded the same way health.py bounds its own client checks --
+        # see EXTERNAL_CLIENT_TEST_TIMEOUT above. Not a `with
+        # ThreadPoolExecutor(...) as executor:` block for the same reason
+        # as health.py: its __exit__ calls shutdown(wait=True), which
+        # would block returning a result until the thread finishes even
+        # after we've already given up on it via future.result's timeout.
+        executor = ThreadPoolExecutor(max_workers=1)
+        try:
+            future = executor.submit(
+                client_class.test,
                 normalise_base_url(base_url),
                 username,
                 password,
                 api_token
             )
+            future.result(timeout=EXTERNAL_CLIENT_TEST_TIMEOUT)
 
-        except KeyError:
-            raise InvalidKeyValue('type', client_type)
+        except FutureTimeoutError:
+            LOGGER.warning(
+                "External client test for %s didn't finish within %ss",
+                client_type, EXTERNAL_CLIENT_TEST_TIMEOUT
+            )
+            return ClientTestResult({
+                'success': False,
+                'description':
+                    'Timed out waiting for a response. It may be slow to '
+                    'respond or unreachable.'
+            })
 
         except ClientNotWorking as e:
             return ClientTestResult({
@@ -238,6 +271,9 @@ class ExternalClients:
                 'success': True,
                 'description': None
             })
+
+        finally:
+            executor.shutdown(wait=False)
 
     @staticmethod
     def add(

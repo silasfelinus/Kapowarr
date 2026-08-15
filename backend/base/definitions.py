@@ -525,6 +525,24 @@ class DownloadState(BaseEnum):
     "Download was stopped because Kapowarr is shutting down"
 
 
+class NotificationServiceType(BaseEnum):
+    "The type of an outbound notification service"
+
+    DISCORD = "discord"
+    WEBHOOK = "webhook"
+    "A generic webhook, sent a plain JSON body"
+
+
+class NotificationEvent(BaseEnum):
+    "An event that a notification service can be subscribed to"
+
+    DOWNLOAD_COMPLETED = "download_completed"
+    "A download finished and was successfully imported into the library"
+
+    IMPORT_FAILED = "import_failed"
+    "A download permanently failed and was added to the blocklist"
+
+
 QUERY_FORMATS: Dict[str, Tuple[str, ...]] = {
     "TPB": (
         "{title} Vol. {volume_number} ({year}) TPB",

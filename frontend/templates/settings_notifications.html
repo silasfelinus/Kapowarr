@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% from "base.html" import window %}
+{% block title %}Notifications{% endblock %}
+{% block css %}
+	<link rel="stylesheet" href="{{ url_for('static', filename='css/window.css') }}">
+	<link rel="stylesheet" href="{{ url_for('static', filename='css/settings.css') }}">
+{% endblock %}
+{% block js %}
+	<script src="{{ url_for('static', filename='js/window.js') }}" defer></script>
+	<script src="{{ url_for('static', filename='js/settings_notifications.js') }}" defer></script>
+{% endblock %}
+
+{% block windows %}
+	{% set add_content %}
+		<p class="error hidden" id="add-error"></p>
+		<form id="add-notification-form">
+			<table>
+				<tr>
+					<th><label for="add-title-input">Title</label></th>
+					<td>
+						<input type="text" id="add-title-input" required>
+					</td>
+				</tr>
+				<tr>
+					<th><label for="add-type-input">Type</label></th>
+					<td>
+						<select id="add-type-input" required></select>
+					</td>
+				</tr>
+				<tr>
+					<th><label for="add-url-input">Webhook URL</label></th>
+					<td>
+						<input type="text" id="add-url-input" required>
+					</td>
+				</tr>
+				<tr>
+					<th>Events</th>
+					<td id="add-events-list"></td>
+				</tr>
+				<tr>
+					<th><label for="add-enabled-input">Enabled</label></th>
+					<td>
+						<input type="checkbox" id="add-enabled-input" checked>
+					</td>
+				</tr>
+			</table>
+		</form>
+	{% endset %}
+
+	{% set add_submit %}
+		<button id="test-notification-add" class="test-button" type="button">
+			<div>Failed</div>
+			<div>Test</div>
+			<div>Success</div>
+		</button>
+		<button id="submit-notification-add" type="submit" form="add-notification-form">Add</button>
+	{% endset %}
+
+	{{ window(False, "add-notification-window", "Add Notification Service", add_content, add_submit) }}
+
+	{% set edit_content %}
+		<p class="error hidden" id="edit-error"></p>
+		<form id="edit-notification-form">
+			<table>
+				<tr>
+					<th><label for="edit-title-input">Title</label></th>
+					<td>
+						<input type="text" id="edit-title-input" required>
+					</td>
+				</tr>
+				<tr>
+					<th>Type</th>
+					<td id="edit-type-display"></td>
+				</tr>
+				<tr>
+					<th><label for="edit-url-input">Webhook URL</label></th>
+					<td>
+						<input type="text" id="edit-url-input" required>
+					</td>
+				</tr>
+				<tr>
+					<th>Events</th>
+					<td id="edit-events-list"></td>
+				</tr>
+				<tr>
+					<th><label for="edit-enabled-input">Enabled</label></th>
+					<td>
+						<input type="checkbox" id="edit-enabled-input">
+					</td>
+				</tr>
+			</table>
+		</form>
+	{% endset %}
+
+	{% set edit_submit %}
+		<button id="delete-notification-edit" type="button">Delete</button>
+		<button id="test-notification-edit" class="test-button" type="button">
+			<div>Failed</div>
+			<div>Test</div>
+			<div>Success</div>
+		</button>
+		<button id="submit-notification-edit" type="submit" form="edit-notification-form">Save</button>
+	{% endset %}
+
+	{{ window(False, "edit-notification-window", "Edit Notification Service", edit_content, edit_submit) }}
+{% endblock windows %}
+
+{% block main %}
+<main>
+	<div class="settings-container">
+		<h2>Notification Services</h2>
+		<p class="description">
+			Send a message to Discord or a generic webhook whenever a download completes or a download
+			permanently fails and is added to the blocklist.
+		</p>
+		<div id="notification-list" class="client-list">
+			<button id="add-notification" class="add-button icon-text-color" title="Add notification service">
+				<img src="{{url_base}}/static/img/cancel.svg" alt="">
+			</button>
+		</div>
+	</div>
+</main>
+{% endblock main %}

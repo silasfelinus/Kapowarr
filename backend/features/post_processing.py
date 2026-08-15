@@ -10,8 +10,8 @@ from os.path import basename, exists, isfile, join, splitext
 from time import time
 from typing import TYPE_CHECKING, Dict
 
-from backend.base.definitions import (BlocklistReason,
-                                      DownloadState, FileConstants)
+from backend.base.definitions import (BlocklistReason, DownloadState,
+                                      FileConstants, NotificationEvent)
 from backend.base.files import (copy_directory, delete_file_folder,
                                 rename_file, set_detected_extension)
 from backend.base.logging import LOGGER
@@ -22,6 +22,7 @@ from backend.implementations.download_clients import TorrentDownload
 from backend.implementations.file_matching import scan_files
 from backend.implementations.file_processing import mass_process_files
 from backend.implementations.naming import mass_rename
+from backend.implementations.notifications import send_notification
 from backend.implementations.volumes import Volume
 from backend.internals.db import commit, get_db
 from backend.internals.db_models import FilesDB
@@ -328,6 +329,11 @@ class PostProcessor:
     def success(cls, download) -> None:
         LOGGER.info(f'Postprocessing of successful download: {download.id}')
         cls._run_actions(cls.actions_success, download)
+        send_notification(
+            NotificationEvent.DOWNLOAD_COMPLETED,
+            'Download completed',
+            download.title
+        )
         return
 
     @classmethod
@@ -360,6 +366,11 @@ class PostProcessor:
             f'Postprocessing of permanently failed download: {download.id}'
         )
         cls._run_actions(cls.actions_perm_failed, download)
+        send_notification(
+            NotificationEvent.IMPORT_FAILED,
+            'Import failed',
+            download.title
+        )
         return
 
 

@@ -653,6 +653,29 @@ class ExternalClientDownloading(KapowarrException):
         }
 
 
+# region Notifications
+class NotificationServiceNotFound(KapowarrException):
+    "Notification service with given ID not found"
+
+    def __init__(self, notification_service_id: int) -> None:
+        self.notification_service_id = notification_service_id
+        LOGGER.warning(
+            "Notification service with given ID not found: "
+            f"{notification_service_id}"
+        )
+        return
+
+    @property
+    def api_response(self) -> ApiResponse:
+        return {
+            "code": 404,
+            "error": self.__class__.__name__,
+            "result": {
+                "notification_service_id": self.notification_service_id
+            }
+        }
+
+
 # region ComicVine
 class CVRateLimitReached(KapowarrException):
     "ComicVine API rate limit reached"

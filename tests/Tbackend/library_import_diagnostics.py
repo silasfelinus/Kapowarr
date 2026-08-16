@@ -40,12 +40,12 @@ class library_import_review_diagnostics(unittest.TestCase):
         }
 
     @staticmethod
-    def _group():
+    def _group(year=2020, volume_number=3):
         return {
             '/library/Batman/Batman 001.cbz': {
                 'series': 'Batman',
-                'year': 2020,
-                'volume_number': 3,
+                'year': year,
+                'volume_number': volume_number,
                 'issue_number': 1.0,
                 'special_version': SpecialVersion.NORMAL,
                 'annual': False
@@ -77,8 +77,14 @@ class library_import_review_diagnostics(unittest.TestCase):
         self.assertEqual(diagnostics['decision']['viable_candidate_count'], 2)
 
         viable = diagnostics['viable_candidates']
-        self.assertEqual([candidate['comicvine_id'] for candidate in viable], [101, 102])
-        self.assertEqual([candidate['score'] for candidate in viable], [4, 4])
+        self.assertEqual(
+            [candidate['comicvine_id'] for candidate in viable],
+            [101, 102]
+        )
+        self.assertEqual(
+            [candidate['score'] for candidate in viable],
+            [4, 4]
+        )
 
         raw_by_id = {
             candidate['comicvine_id']: candidate
@@ -90,6 +96,41 @@ class library_import_review_diagnostics(unittest.TestCase):
 
         parsed = diagnostics['files'][0]['parsed']
         self.assertIsNone(parsed['special_version'])
+
+    def test_weak_score_diagnostics_show_the_best_candidate(self):
+        diagnostics = build_review_diagnostics(
+            self._group(year=None, volume_number=None),
+            [self._candidate(201)],
+            only_english=True,
+            review_reason='weak-score'
+        )
+
+        self.assertEqual(diagnostics['decision']['best_score'], 0)
+        self.assertIsNone(diagnostics['decision']['runner_up_score'])
+        self.assertIsNone(diagnostics['decision']['score_margin'])
+        self.assertEqual(diagnostics['decision']['viable_candidate_count'], 1)
+        self.assertEqual(diagnostics['viable_candidates'][0]['comicvine_id'], 201)
+        self.assertEqual(diagnostics['viable_candidates'][0]['score'], 0)
+
+    def test_no_candidate_keeps_raw_search_results_for_filter_postmortem(self):
+        diagnostics = build_review_diagnostics(
+            self._group(),
+            [self._candidate(301, title='Detective Comics')],
+            only_english=True,
+            review_reason='no-candidate'
+        )
+
+        self.assertIsNone(diagnostics['decision']['best_score'])
+        self.assertEqual(diagnostics['decision']['viable_candidate_count'], 0)
+        self.assertEqual(diagnostics['decision']['raw_result_count'], 1)
+        self.assertEqual(diagnostics['viable_candidates'], [])
+        self.assertEqual(
+            diagnostics['raw_search_results'][0]['comicvine_id'],
+            301
+        )
+        self.assertIsNone(
+            diagnostics['raw_search_results'][0]['viable_score']
+        )
 
     def test_jsonl_postmortem_is_stable_and_machine_readable(self):
         diagnostics = build_review_diagnostics(

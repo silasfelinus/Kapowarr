@@ -57,7 +57,7 @@ def create_groups(
         Dict[int, Dict[str, FilenameData]]: A mapping from the group number
             (which doesn't cary any meaning except for identifying the group)
             to the files that are in the group, where the files are in the form
-            of a mapping from the filename to their filename data.
+            of a mapping from their filename to their filename data.
     """
     group_mapping: Dict[int, FilenameData] = {}
     groups: Dict[int, Dict[str, FilenameData]] = {}
@@ -175,6 +175,9 @@ async def _match_file_groups(
     untouched for human review instead of being imported unattended. A shared
     request clock lets continuous mode count work time toward the minimum gap
     between ComicVine search starts instead of adding an extra fixed sleep.
+    When continuous mode holds a match, its historical best guess is retained as
+    review_candidate so the user can inspect the already-fetched result without
+    spending another ComicVine request.
     """
     titles_to_groups: Dict[str, List[int]] = {}
     for group_number, file_group in file_groups.items():
@@ -217,12 +220,19 @@ async def _match_file_groups(
     for title, group_numbers in titles_to_groups.items():
         for group_number in group_numbers:
             review_reason = None
+            review_result = None
             if require_confident_match:
                 result, review_reason = select_auto_import_volume_result(
                     file_groups[group_number],
                     cache[title],
                     only_english=only_english
                 )
+                if result is None:
+                    review_result = select_best_volume_result_for_file(
+                        file_groups[group_number],
+                        cache[title],
+                        only_english=only_english
+                    )
             else:
                 result = select_best_volume_result_for_file(
                     file_groups[group_number],
@@ -231,6 +241,18 @@ async def _match_file_groups(
                 )
 
             if result is None:
+                review_candidate = None
+                if review_result is not None:
+                    review_candidate = {
+                        'id': review_result['comicvine_id'],
+                        'title': (
+                            f"{review_result['title']} "
+                            f"({review_result['year']})"
+                        ),
+                        'issue_count': review_result['issue_count'],
+                        'link': review_result['site_url']
+                    }
+
                 matches[group_number] = {
                     'id': None,
                     'title': None,
@@ -238,7 +260,8 @@ async def _match_file_groups(
                     'link': None,
                     'review_reason': (
                         review_reason or REVIEW_REASON_NO_CANDIDATE
-                    )
+                    ),
+                    'review_candidate': review_candidate
                 }
             else:
                 matches[group_number] = {
@@ -497,10 +520,60 @@ class ContinuousLibraryImport(Task):
         return None
 
     def __init__(self) -> None:
+        self.stop_requested = False
         self.review_folders: Set[str] = set()
         self.review_reasons: Dict[str, int] = {}
+        self.review_items: List[Dict[str, Any]] = []
+        self.review_group_counter = 0
         self.search_cache: Dict[str, List[Any]] = {}
         self.cv_request_clock: Dict[str, float] = {}
+        return
+
+    def request_stop(self) -> None:
+        """Ask the importer to stop after its current folder boundary."""
+        self.stop_requested = True
+        return
+
+    def get_task_details(self) -> Dict[str, Any]:
+        """Return review rows only when the single-task API asks for details."""
+        return {
+            'review_items': list(self.review_items),
+            'stop_requested': self.stop_requested
+        }
+
+    def _add_review_group(
+        self,
+        folder: str,
+        files: Dict[str, FilenameData],
+        cv_match: Dict[str, Any]
+    ) -> None:
+        """Preserve a held group's best guess for immediate manual review."""
+        self.review_group_counter += 1
+        review_group = f'continuous-review-{self.review_group_counter}'
+        review_candidate = cv_match.get('review_candidate') or {
+            'id': None,
+            'title': None,
+            'issue_count': None,
+            'link': None
+        }
+        review_reason = cv_match.get(
+            'review_reason',
+            REVIEW_REASON_NO_CANDIDATE
+        )
+
+        for filepath in files:
+            self.review_items.append({
+                'filepath': filepath,
+                'file_title': (
+                    splitext(basename(filepath))[0]
+                    if isfile(filepath) else
+                    basename(filepath)
+                ),
+                'cv': dict(review_candidate),
+                'group_number': review_group,
+                'folder': folder,
+                'review_reason': review_reason
+            })
         return
 
     def _emit_status(
@@ -544,6 +617,7 @@ class ContinuousLibraryImport(Task):
         stay untouched for review and cannot jam later folders in this run.
         The shared request clock enforces the minimum interval between ComicVine
         search starts while letting API and import work consume that interval.
+        A cooperative stop finishes the current folder boundary before exiting.
         """
         all_files, file_to_folder = _collect_unimported_files()
         folder_to_files: Dict[str, Dict[str, FilenameData]] = {}
@@ -558,10 +632,10 @@ class ContinuousLibraryImport(Task):
         self._emit_status(checked, total, imported, 'starting')
 
         for folder, folder_files in folder_to_files.items():
-            if self.stop:
+            if self.stop_requested:
                 break
 
-            while not self.stop:
+            while not self.stop_requested:
                 try:
                     group_to_files = create_groups(folder_files)
                     group_to_cv = run(_match_file_groups(
@@ -580,10 +654,16 @@ class ContinuousLibraryImport(Task):
                         cv_match = group_to_cv[group_number]
                         if cv_match['id'] is None:
                             folder_needs_review = True
-                            folder_review_reasons.add(cv_match.get(
+                            review_reason = cv_match.get(
                                 'review_reason',
                                 REVIEW_REASON_NO_CANDIDATE
-                            ))
+                            )
+                            folder_review_reasons.add(review_reason)
+                            self._add_review_group(
+                                folder,
+                                files,
+                                cv_match
+                            )
                             continue
 
                         matches.extend(
@@ -624,9 +704,14 @@ class ContinuousLibraryImport(Task):
                         imported,
                         'ComicVine rate limit reached; cooling down for 15 minutes'
                     )
-                    sleep(CONTINUOUS_IMPORT_RATE_LIMIT_BACKOFF)
+                    for _ in range(CONTINUOUS_IMPORT_RATE_LIMIT_BACKOFF):
+                        if self.stop_requested:
+                            break
+                        sleep(1)
 
-        if not self.stop:
+        if self.stop_requested:
+            self._emit_status(checked, total, imported, 'stopped by user')
+        else:
             self._emit_status(checked, total, imported, 'complete')
         return
 

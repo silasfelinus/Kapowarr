@@ -13,7 +13,7 @@ from asyncio import run as asyncio_run
 from glob import escape as glob_escape
 from os.path import basename, isfile, splitext
 from time import sleep
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from backend.base.custom_exceptions import CVRateLimitReached
 from backend.base.definitions import CVFileMapping, FilenameData
@@ -37,7 +37,6 @@ from backend.features.library_import_state import (
     get_job_summary,
     get_paused_job,
     get_pending_folders,
-    get_review_items,
     get_running_job,
     mark_folder_pending,
     mark_folder_processing,
@@ -59,7 +58,9 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
         return
 
     @classmethod
-    def restore_running_job(cls) -> Optional['PersistentContinuousLibraryImport']:
+    def restore_running_job(
+        cls
+    ) -> Optional['PersistentContinuousLibraryImport']:
         """Return the unfinished job that should auto-resume after app restart."""
         job = get_running_job()
         if job is None:
@@ -185,11 +186,11 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
 
     def _start_or_resume_job(
         self
-    ) -> Dict[str, Dict[str, FilenameData]]:
-        """Resolve the durable job and return an optional first-run file cache."""
+    ) -> Tuple[Dict[str, Dict[str, FilenameData]], bool]:
+        """Resolve the durable job and report whether it is being resumed."""
         if self.job_id is not None:
             mark_job_running(self.job_id)
-            return {}
+            return {}, True
 
         # A user-paused job does not auto-resume at application startup, but the
         # next explicit Continuous Auto-Import click continues it rather than
@@ -198,7 +199,7 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
         if paused_job is not None:
             self.job_id = int(paused_job['id'])
             mark_job_running(self.job_id)
-            return {}
+            return {}, True
 
         all_files, file_to_folder = _collect_unimported_files()
         folder_to_files: Dict[str, Dict[str, FilenameData]] = {}
@@ -208,7 +209,7 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
             )[filepath] = file_data
 
         self.job_id = create_job(folder_to_files.keys())
-        return folder_to_files
+        return folder_to_files, False
 
     def run(self) -> None:
         """Continue a persistent folder snapshot until complete, paused, or exit.
@@ -222,13 +223,12 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
         current_folder: Optional[str] = None
 
         try:
-            had_job = self.job_id is not None
-            initial_folder_files = self._start_or_resume_job()
+            initial_folder_files, resumed = self._start_or_resume_job()
             if self.job_id is None:
                 return
 
             self._emit_persistent_status(
-                'resuming saved job' if had_job or not initial_folder_files else 'starting'
+                'resuming saved job' if resumed else 'starting'
             )
 
             for folder_position, folder in get_pending_folders(self.job_id):
@@ -341,7 +341,9 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
 
             if self.stop_requested:
                 mark_job_paused(self.job_id)
-                self._emit_persistent_status('paused by user; safe to resume later')
+                self._emit_persistent_status(
+                    'paused by user; safe to resume later'
+                )
 
             elif self.stop:
                 # Application/container shutdown is not a user pause. Reset an

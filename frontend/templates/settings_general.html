@@ -41,18 +41,6 @@
 						<p>For reverse proxy support (default is empty).</p>
 					</td>
 				</tr>
-				<tr>
-					<th><label for="app-title-input">Application Title</label></th>
-					<td>
-						<input type="text" id="app-title-input" spellcheck="false">
-						<p>
-							Custom title shown in the browser tab and on the login screen
-							(default is 'Kapowarr'). Leave empty to use the default. This does
-							not remove Kapowarr credit — the original project name, version,
-							and links stay visible on the System Status page.
-						</p>
-					</td>
-				</tr>
 			</table>
 			<h2>Security</h2>
 			<table class="fold-table">
@@ -160,6 +148,18 @@
 			</table>
 			<h2>UI</h2>
 			<table class="fold-table">
+				<tr>
+					<th><label for="app-title-input">Application Name</label></th>
+					<td>
+						<input type="text" id="app-title-input" spellcheck="false" placeholder="Acrocat Comics">
+						<p>
+							Give this installation its own name, such as 'Acrocat Comics'. It is
+							shown in the app header, browser tab, login screen, and installed-app
+							metadata. Leave empty to use 'Kapowarr'. Original Kapowarr credit,
+							version, and project links remain on System Status.
+						</p>
+					</td>
+				</tr>
 				<tr>
 					<th><label for="theme-input">Theme</label></th>
 					<td>

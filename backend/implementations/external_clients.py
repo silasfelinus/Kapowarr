@@ -3,18 +3,19 @@
 from concurrent.futures import (ThreadPoolExecutor,
                                 TimeoutError as FutureTimeoutError)
 from sqlite3 import IntegrityError
-from typing import Any, Dict, List, Mapping, Type, Union
+from typing import Any, Callable, Dict, List, Mapping, Type, Union
 
 from backend.base.custom_exceptions import (ClientNotWorking,
                                             CredentialInvalid,
                                             ExternalClientDownloading,
                                             ExternalClientNotFound,
                                             InvalidKeyValue, KeyNotFound)
-from backend.base.definitions import (ClientTestResult, DownloadType,
-                                      ExternalDownloadClient)
+from backend.base.definitions import (BrokenClientReason, ClientTestResult,
+                                      DownloadType, ExternalDownloadClient)
 from backend.base.helpers import get_subclasses, normalise_base_url
 from backend.base.logging import LOGGER
 from backend.internals.db import get_db
+from backend.internals.server import Server
 
 # Deliberately shorter than a Session's full retry cycle (several retries
 # with exponential backoff -- see Constants.TOTAL_RETRIES/
@@ -24,6 +25,63 @@ from backend.internals.db import get_db
 # out the full retry cycle (observed to take 90+ seconds live against a
 # non-responding host in testing).
 EXTERNAL_CLIENT_TEST_TIMEOUT = 10.0 # seconds
+
+
+def _test_client_bounded(
+    test_func: Callable[
+        [str, Union[str, None], Union[str, None], Union[str, None]],
+        None
+    ],
+    base_url: str,
+    username: Union[str, None],
+    password: Union[str, None],
+    api_token: Union[str, None]
+) -> None:
+    """Run a client's `test` classmethod bounded by
+    EXTERNAL_CLIENT_TEST_TIMEOUT, for callers that need the original
+    exception on failure rather than a ClientTestResult -- namely
+    ExternalClients.add() and BaseExternalClient.update_client(), which
+    otherwise inherited the full, unbounded Session retry/backoff cycle
+    (90+ seconds against an unreachable host) that ExternalClients.test()
+    already bounds for the interactive "Test" button.
+
+    Not a `with ThreadPoolExecutor(...) as executor:` block, for the same
+    reason as ExternalClients.test(): its __exit__ calls
+    shutdown(wait=True), which would block returning a result until the
+    thread finishes even after we've already given up on it via
+    future.result's timeout.
+
+    Raises:
+        ClientNotWorking: Can't connect to client (including a bounded
+        timeout, reported as a connection error).
+        CredentialInvalid: Credentials are invalid.
+    """
+    def _run_in_context() -> None:
+        # The executor's worker thread doesn't inherit the caller's Flask
+        # app context, and a client's test() can need one (e.g. it reads
+        # settings via Settings(), which reads the database via `g`) --
+        # same gap notifications.py's _raw_post() already hit and fixed
+        # for send_notification()'s worker threads.
+        with Server().app.app_context():
+            test_func(base_url, username, password, api_token)
+        return
+
+    executor = ThreadPoolExecutor(max_workers=1)
+    try:
+        future = executor.submit(_run_in_context)
+        future.result(timeout=EXTERNAL_CLIENT_TEST_TIMEOUT)
+
+    except FutureTimeoutError:
+        LOGGER.warning(
+            "External client test didn't finish within %ss",
+            EXTERNAL_CLIENT_TEST_TIMEOUT
+        )
+        raise ClientNotWorking(BrokenClientReason.CONNECTION_ERROR)
+
+    finally:
+        executor.shutdown(wait=False)
+
+    return
 
 
 # =====================
@@ -121,8 +179,11 @@ class BaseExternalClient(ExternalDownloadClient):
             # Username given but not password
             raise InvalidKeyValue('password', filtered_data['password'])
 
-        # Raises exception on fail
-        self.test(
+        # Raises exception on fail. Bounded the same way
+        # ExternalClients.test() bounds the interactive "Test" button --
+        # see _test_client_bounded().
+        _test_client_bounded(
+            self.test,
             filtered_data['base_url'],
             filtered_data['username'],
             filtered_data['password'],
@@ -328,7 +389,10 @@ class ExternalClients:
         except KeyError:
             raise InvalidKeyValue('type', client_type)
 
-        ExternalClients.get_client_types()[client_type].test(
+        # Bounded the same way ExternalClients.test() bounds the
+        # interactive "Test" button -- see _test_client_bounded().
+        _test_client_bounded(
+            ClientClass.test,
             normalise_base_url(base_url),
             username,
             password,

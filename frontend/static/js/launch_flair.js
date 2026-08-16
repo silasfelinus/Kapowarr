@@ -2,16 +2,15 @@
 // Database-driven launch flair
 //
 // Personal-fork QoL touch, sibling to loading_lines.js: on each page load,
-// shows one playful line in the header built from a random comic title
-// already in the local library -- e.g. "Currently rereading Saga..." -- or
-// a generic fallback line when the library is empty or the title couldn't
-// be fetched. Centralized here (one template array + one pure build
-// function) so the personality-layer copy stays in one place next to its
-// static-line sibling.
+// shows the installation name plus one playful line built from a random comic
+// title already in the local library -- e.g. "Acrocat Comics · Meanwhile, in
+// Saga..." -- or a generic fallback line when the library is empty or the title
+// couldn't be fetched. Centralized here so the personality-layer copy stays in
+// one place next to its static-line sibling.
 //
 // Kept pure and dependency-free on purpose: buildLaunchFlair() takes the
-// title, templates, fallback lines, and random function as explicit
-// arguments, so it's unit-testable without the DOM or a real fetch.
+// title, templates, fallback lines, and random function as explicit arguments,
+// so it's unit-testable without the DOM or a real fetch.
 //
 
 const LAUNCH_FLAIR_TEMPLATES = [
@@ -20,16 +19,46 @@ const LAUNCH_FLAIR_TEMPLATES = [
 	"Fresh off the shelf: {title}.",
 	"Tonight's pick: {title}.",
 	"Keeping an eye on {title}...",
+	"Meanwhile, in {title}...",
+	"Previously, in {title}...",
+	"Pulling {title} from the longbox...",
+	"Opening carefully to {title}...",
+	"Checking the continuity in {title}...",
+	"No spoilers. Probably. {title} is up next.",
+	"Saving a spot on the spinner rack for {title}.",
+	"Putting {title} back in reading order...",
+	"A dramatic caption box points toward {title}.",
+	"The pull list insists on {title}.",
+	"Bagged, boarded, and thinking about {title}.",
+	"One more issue of {title} couldn't hurt...",
+	"Consulting the back-issue oracle about {title}...",
+	"Somewhere, an editor is explaining {title}.",
+	"Checking whether {title} survived the last reboot...",
+	"Reshelving {title} by vibes instead of chronology...",
+	"Holding {title} by the edges...",
+	"Adding an unnecessary dramatic pause before {title}...",
+	"The longbox has chosen {title}.",
+	"Tracking down the variant cover for {title}...",
+	"Checking the indicia on {title}...",
+	"Trying to remember which universe {title} is in...",
+	"Making room for {title} between two crossovers...",
+	"Rechecking the issue numbers on {title}...",
+	"Pretending the timeline for {title} is perfectly straightforward...",
+	"Pulling the next chapter of {title} into the light...",
+	"Asking the sidekick where we left {title}...",
 ];
 
-// Shown when the library is empty or the title couldn't be fetched --
-// deterministic, no randomness, so an empty/failed state never looks broken.
+// Shown when the library is empty or the title couldn't be fetched.
 const DEFAULT_FLAIR_LINES = [
 	"Ready for your first longbox.",
-	"No comics yet -- add a volume to get started.",
+	"The spinner rack is suspiciously tidy.",
+	"Waiting for the pull list to get interesting.",
+	"Plenty of shelf space. For now.",
+	"No continuity errors detected. There is also no continuity yet.",
 ];
 
 const MAX_TITLE_LENGTH = 80;
+const DEFAULT_APP_TITLE = "Kapowarr";
 
 // Strips control characters and truncates. The result is always written via
 // textContent (never innerHTML) by applyLaunchFlair(), so this is a display
@@ -75,8 +104,14 @@ async function applyLaunchFlair() {
 		const api_key = await usingApiKey(false);
 		if (!api_key) return;
 
-		const response = await fetchAPI('/system/launchflair', api_key);
-		el.textContent = buildLaunchFlair(response.result.title);
+		const [flairResponse, settingsResponse] = await Promise.all([
+			fetchAPI('/system/launchflair', api_key),
+			fetchAPI('/settings', api_key),
+		]);
+
+		const appTitle = sanitizeTitle(settingsResponse.result.app_title) || DEFAULT_APP_TITLE;
+		const flair = buildLaunchFlair(flairResponse.result.title);
+		el.textContent = `${appTitle} · ${flair}`;
 	} catch (e) {
 		// Any failure here leaves the header exactly as it was rendered
 		// (empty) -- never throw past this, never leave a half-built line.

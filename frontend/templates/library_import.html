@@ -20,6 +20,7 @@
 		<a href="" target="_blank"></a>
 	</td>
 	<td class="issue-count"></td>
+	<td class="review-reason"></td>
 	<td>
 		<button title="Change match">
 			<img src="{{ url_for('static', filename='img/edit.svg') }}" alt="">
@@ -66,9 +67,10 @@
 		<p>A few notes:</p>
 		<ul>
 			<li><strong>Review Scan</strong> is the familiar workflow: scan a batch, check Kapowarr's ComicVine matches, then confirm the import yourself.</li>
-			<li><strong>Continuous Auto-Import</strong> checks all root folders in the background, one folder at a time. It accepts Kapowarr's existing best match without confirmation, leaves folders with no match untouched for later review, and does not rename files.</li>
-			<li>Continuous mode deliberately waits between folders to stay below ComicVine's documented request ceiling. It is supposed to be slow; you can leave this page while the server-side task keeps working.</li>
-			<li>Manual review batches can still reach ComicVine's rate limit. Kapowarr now reports that condition instead of silently turning it into a missing match.</li>
+			<li><strong>Continuous Auto-Import</strong> checks all root folders in the background, one folder at a time. Strong ComicVine winners import automatically; tied, weak, or missing matches are held untouched for manual review.</li>
+			<li>While Continuous Auto-Import is running, you can open its accumulated review holds without stopping it, or request a safe stop after the current folder boundary.</li>
+			<li>Continuous mode deliberately spaces ComicVine search starts to stay below the documented request ceiling. You can leave this page while the server-side task keeps working.</li>
+			<li>Manual review batches can still reach ComicVine's rate limit. Kapowarr reports that condition instead of silently turning it into a missing match.</li>
 			<li>Files are not allowed to be directly in the root folder. They have to be in a sub-folder.</li>
 			<li>If each issue has a separate sub-folder, enable 'Apply limit to parent folder' for Review Scan so that the limit is correctly applied.</li>
 		</ul>
@@ -169,10 +171,15 @@
 				</tr>
 			</tbody>
 		</table>
-		<p>The import task runs on the Kapowarr server, so you may leave this page and come back later to see its current progress.</p>
-		<button id="continuous-back-button">Run in Background</button>
+		<p>The import task runs on the Kapowarr server. Review Holds uses the ComicVine results the importer already fetched, so opening it does not restart those searches.</p>
+		<div class="action-container">
+			<button id="continuous-review-button" disabled>Review Holds (0)</button>
+			<button id="continuous-stop-button">Stop Import</button>
+			<button id="continuous-back-button">Run in Background</button>
+		</div>
 	</div>
 	<div id="list-window" class="hidden">
+		<p id="continuous-review-note" class="continuous-note hidden">These rows were held by Continuous Auto-Import. The conveyor can keep running while you review and import them; editing a match is the only action here that performs a new ComicVine search.</p>
 		<div class="action-container">
 			<button class="cancel-button">Cancel</button>
 			<button
@@ -193,6 +200,7 @@
 					<th>File</th>
 					<th>Match</th>
 					<th>Issues in match</th>
+					<th>Why held</th>
 					<th>Action</th>
 				</thead>
 				<tbody class="proposal-list"></tbody>

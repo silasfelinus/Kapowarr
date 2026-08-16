@@ -671,16 +671,14 @@ class TaskHandler(metaclass=Singleton):
 
         return
 
-    def __format_entry(self, task: dict) -> dict:
-        """Format a queue entry for API response
+    def __format_entry(self, task: dict, include_details: bool = False) -> dict:
+        """Format a queue entry for API response.
 
-        Args:
-            t (dict): The queue entry
-
-        Returns:
-            dict: The formatted queue entry
+        Detailed task state is opt-in so the lightweight queue poll does not
+        repeatedly ship large task-specific payloads. GET on a single task can
+        include details exposed by that task through get_task_details().
         """
-        return {
+        result = {
             'id': task['id'],
             'action': task['task'].action,
             'display_title': task['task'].display_title,
@@ -689,6 +687,13 @@ class TaskHandler(metaclass=Singleton):
             'volume_id': task['task'].volume_id,
             'issue_id': task['task'].issue_id
         }
+
+        if include_details:
+            detail_getter = getattr(task['task'], 'get_task_details', None)
+            if callable(detail_getter):
+                result['details'] = detail_getter()
+
+        return result
 
     def get_all(self) -> List[dict]:
         """Get all tasks in the queue
@@ -712,7 +717,10 @@ class TaskHandler(metaclass=Singleton):
             dict: The info of the task in the queue.
                 Formatted using `self.__format_entry()`.
         """
-        return self.__format_entry(self.__get_raw_entry(task_id))
+        return self.__format_entry(
+            self.__get_raw_entry(task_id),
+            include_details=True
+        )
 
     def __get_raw_entry(self, task_id: int) -> dict:
         """Get the raw entry from the queue based on it's id
@@ -732,27 +740,30 @@ class TaskHandler(metaclass=Singleton):
         raise TaskNotFound(task_id)
 
     def remove(self, task_id: int) -> None:
-        """Remove a task from the queue
+        """Remove a queued task or cooperatively stop a running task.
 
-        Args:
-            task_id (int): The id of the task to delete from the queue
-
-        Raises:
-            TaskNotDeletable: The task is not allowed to be deleted from the queue
-            TaskNotFound: The id doesn't map to any task in the queue
+        Running tasks remain non-deletable unless they explicitly expose a
+        request_stop() method. That keeps the existing safety behavior for tasks
+        that cannot be interrupted cleanly while letting long-running tasks opt
+        into a safe stop boundary.
         """
-        # Get task and check if id exists
-        # Raises TaskNotFound if the id isn't found
         task = self.__get_raw_entry(task_id)
 
-        # Check if task is allowed to be deleted
         if self.queue[0] == task:
-            raise TaskNotDeletable(task_id)
+            request_stop = getattr(task['task'], 'request_stop', None)
+            if not callable(request_stop):
+                raise TaskNotDeletable(task_id)
 
-        task['task'].stop = True
-        task['thread'].join()
+            request_stop()
+            LOGGER.info(
+                f'Stop requested: {task["task"].display_title} ({task_id})'
+            )
+            return
+
+        # A non-running queue entry has never started, so joining its thread
+        # would raise RuntimeError. Removing it directly is the clean cancel.
         self.queue.remove(task)
-        LOGGER.info(f'Removed task: {task["task"].display_name} ({task_id})')
+        LOGGER.info(f'Removed task: {task["task"].display_title} ({task_id})')
         WebSocket().emit(TaskEndedEvent(task['task']))
         return
 

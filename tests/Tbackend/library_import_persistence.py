@@ -93,10 +93,10 @@ class durable_library_import_state(unittest.TestCase):
             ('/library/Batman/Batman 001.cbz',)
         )
         self.connection.commit()
-        self.assertEqual(state.get_review_items(job_id), [])
-        summary = state.get_job_summary(job_id)
-        self.assertEqual(summary['review_folders'], 0)
-        self.assertEqual(summary['checked_folders'], 1)
+        details = state.get_job_details(job_id)
+        self.assertEqual(details['review_items'], [])
+        self.assertEqual(details['review_folders'], 0)
+        self.assertEqual(details['checked_folders'], 1)
 
         state.mark_folder_processing(job_id, '/library/Superman')
         state.mark_folder_result(
@@ -140,11 +140,60 @@ class durable_continuous_import_task(unittest.TestCase):
         ), patch(
             'backend.features.library_import_persistent.mark_job_running'
         ) as mark_running:
-            first_run_cache = task._start_or_resume_job()
+            first_run_cache, resumed = task._start_or_resume_job()
 
         self.assertEqual(first_run_cache, {})
+        self.assertTrue(resumed)
         self.assertEqual(task.job_id, 52)
         mark_running.assert_called_once_with(52)
+
+    def test_user_stop_persists_as_paused(self):
+        task = PersistentContinuousLibraryImport(job_id=61)
+        task.stop_requested = True
+
+        with patch(
+            'backend.features.library_import_persistent.mark_job_running'
+        ) as mark_running, patch(
+            'backend.features.library_import_persistent.get_pending_folders',
+            return_value=[]
+        ), patch.object(
+            task,
+            '_emit_persistent_status'
+        ), patch(
+            'backend.features.library_import_persistent.mark_job_paused'
+        ) as mark_paused, patch(
+            'backend.features.library_import_persistent.mark_job_complete'
+        ) as mark_complete:
+            task.run()
+
+        mark_running.assert_called_once_with(61)
+        mark_paused.assert_called_once_with(61)
+        mark_complete.assert_not_called()
+
+    def test_process_shutdown_keeps_job_auto_resumable(self):
+        task = PersistentContinuousLibraryImport(job_id=62)
+        task.stop = True
+
+        with patch(
+            'backend.features.library_import_persistent.mark_job_running'
+        ) as mark_running, patch(
+            'backend.features.library_import_persistent.get_pending_folders',
+            return_value=[]
+        ), patch.object(
+            task,
+            '_emit_persistent_status'
+        ), patch(
+            'backend.features.library_import_persistent.mark_job_paused'
+        ) as mark_paused, patch(
+            'backend.features.library_import_persistent.mark_job_complete'
+        ) as mark_complete:
+            task.run()
+
+        self.assertEqual(mark_running.call_count, 2)
+        self.assertEqual(mark_running.call_args_list[0].args, (62,))
+        self.assertEqual(mark_running.call_args_list[1].args, (62,))
+        mark_paused.assert_not_called()
+        mark_complete.assert_not_called()
 
 
 if __name__ == '__main__':

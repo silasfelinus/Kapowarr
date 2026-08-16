@@ -482,69 +482,77 @@ class ContinuousLibraryImport(Task):
         WebSocket().emit(TaskStatusEvent(self.message))
 
     def run(self) -> None:
-        """Import one folder at a time, pacing ComicVine and skipping ambiguity.
+        """Import a stable folder snapshot, pacing ComicVine between folders.
 
         Existing imported files are Kapowarr's checkpoint. Closing the browser
         does not stop this task, and restarting it later naturally ignores work
-        that already made it into the library. Ambiguous folders stay untouched
-        and are skipped for the remainder of this run so they cannot jam the
-        conveyor.
+        that already made it into the library. Folders with no match stay
+        untouched and cannot jam later folders in this run.
         """
-        total = count_library_import_folders()
+        all_files, file_to_folder = _collect_unimported_files()
+        folder_to_files: Dict[str, Dict[str, FilenameData]] = {}
+        for filepath, file_data in all_files.items():
+            folder_to_files.setdefault(
+                file_to_folder[filepath], {}
+            )[filepath] = file_data
+
+        total = len(folder_to_files)
         checked = 0
         imported = 0
         self._emit_status(checked, total, imported, 'starting')
 
-        while not self.stop and checked < total:
-            try:
-                proposals = propose_library_import(
-                    limit=1,
-                    only_english=True,
-                    excluded_folders=self.review_folders,
-                    request_delay=CONTINUOUS_IMPORT_CV_DELAY,
-                    search_cache=self.search_cache
-                )
+        for folder, folder_files in folder_to_files.items():
+            if self.stop:
+                break
 
-                if not proposals:
+            while not self.stop:
+                try:
+                    group_to_files = create_groups(folder_files)
+                    group_to_cv = run(_match_file_groups(
+                        group_to_files,
+                        only_english=True,
+                        request_delay=CONTINUOUS_IMPORT_CV_DELAY,
+                        search_cache=self.search_cache
+                    ))
+
+                    matches: List[CVFileMapping] = []
+                    folder_needs_review = False
+                    for group_number, files in group_to_files.items():
+                        cv_match = group_to_cv[group_number]
+                        if cv_match['id'] is None:
+                            folder_needs_review = True
+                            continue
+
+                        matches.extend(
+                            {
+                                'filepath': filepath,
+                                'id': cv_match['id']
+                            }
+                            for filepath in files
+                        )
+
+                    if matches:
+                        import_library(matches, rename_files=False)
+                        imported += len({match['id'] for match in matches})
+
+                    if folder_needs_review:
+                        self.review_folders.add(folder)
+
+                    checked += 1
+                    self._emit_status(checked, total, imported)
+
+                    if not self.stop and checked < total:
+                        sleep(CONTINUOUS_IMPORT_CV_DELAY)
                     break
 
-                batch_folders = {
-                    proposal['folder']
-                    for proposal in proposals
-                }
-                unmatched_folders = {
-                    proposal['folder']
-                    for proposal in proposals
-                    if proposal['cv']['id'] is None
-                }
-                matches: List[CVFileMapping] = [
-                    {
-                        'filepath': proposal['filepath'],
-                        'id': proposal['cv']['id']
-                    }
-                    for proposal in proposals
-                    if proposal['cv']['id'] is not None
-                ]
-
-                if matches:
-                    import_library(matches, rename_files=False)
-                    imported += len({match['id'] for match in matches})
-
-                self.review_folders.update(unmatched_folders)
-                checked += len(batch_folders)
-                self._emit_status(checked, total, imported)
-
-                if not self.stop and checked < total:
-                    sleep(CONTINUOUS_IMPORT_CV_DELAY)
-
-            except CVRateLimitReached:
-                self._emit_status(
-                    checked,
-                    total,
-                    imported,
-                    'ComicVine rate limit reached; cooling down for 15 minutes'
-                )
-                sleep(CONTINUOUS_IMPORT_RATE_LIMIT_BACKOFF)
+                except CVRateLimitReached:
+                    self._emit_status(
+                        checked,
+                        total,
+                        imported,
+                        'ComicVine rate limit reached; cooling down for 15 minutes'
+                    )
+                    sleep(CONTINUOUS_IMPORT_RATE_LIMIT_BACKOFF)
 
         if not self.stop:
             self._emit_status(checked, total, imported, 'complete')

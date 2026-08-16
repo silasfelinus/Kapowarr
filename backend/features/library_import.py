@@ -4,7 +4,7 @@ from asyncio import run, sleep as async_sleep
 from glob import glob
 from itertools import chain
 from os.path import abspath, basename, dirname, isfile, join, splitext
-from time import sleep
+from time import monotonic, sleep
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from backend.base.custom_exceptions import (CVRateLimitReached,
@@ -20,12 +20,13 @@ from backend.base.files import (change_basefolder, common_folder,
                                 list_files, rename_file)
 from backend.base.helpers import force_suffix
 from backend.base.logging import LOGGER
+from backend.features.library_import_policy import (
+    REVIEW_REASON_NO_CANDIDATE, REVIEW_REASON_TIE, REVIEW_REASON_WEAK_SCORE,
+    select_auto_import_volume_result)
 from backend.features.tasks import Task, task_library
 from backend.implementations.comicvine import ComicVine
 from backend.implementations.file_matching import scan_files
-from backend.implementations.matching import (
-    select_best_volume_result_for_file,
-    select_confident_volume_result_for_file)
+from backend.implementations.matching import select_best_volume_result_for_file
 from backend.implementations.naming import mass_rename
 from backend.implementations.root_folders import RootFolders
 from backend.implementations.volumes import Library
@@ -35,8 +36,10 @@ from backend.internals.server import TaskStatusEvent, WebSocket
 
 
 # ComicVine currently documents 200 requests per resource per hour. Continuous
-# import deliberately stays below that ceiling and avoids request bursts. The
-# normal review importer keeps the existing short brake between searches.
+# import spaces search starts by 20 seconds (at most 180/hour) and counts API /
+# import processing time toward that interval instead of sleeping a full 20
+# seconds after the work is already finished. The normal review importer keeps
+# the existing short brake between searches.
 CONTINUOUS_IMPORT_CV_DELAY = 20.0
 CONTINUOUS_IMPORT_RATE_LIMIT_BACKOFF = 15 * 60
 
@@ -156,7 +159,8 @@ async def _match_file_groups(
     only_english: bool,
     request_delay: float = Constants.CV_BRAKE_TIME,
     search_cache: Optional[Dict[str, List[Any]]] = None,
-    require_confident_match: bool = False
+    require_confident_match: bool = False,
+    request_clock: Optional[Dict[str, float]] = None
 ) -> Dict[int, Dict[str, Any]]:
     """Match filename groups to ComicVine without swallowing rate limits.
 
@@ -167,8 +171,10 @@ async def _match_file_groups(
     sequentially here and CVRateLimitReached is allowed to reach the caller.
 
     Review scans keep the historical best-match suggestion. Continuous import
-    asks for confident matches so weak or ambiguous winners are left untouched
-    for human review instead of being imported unattended.
+    asks for calibrated auto-import matches so weak or tied winners are left
+    untouched for human review instead of being imported unattended. A shared
+    request clock lets continuous mode count work time toward the minimum gap
+    between ComicVine search starts instead of adding an extra fixed sleep.
     """
     titles_to_groups: Dict[str, List[int]] = {}
     for group_number, file_group in file_groups.items():
@@ -183,7 +189,21 @@ async def _match_file_groups(
         if title in cache:
             continue
 
-        if searches_made:
+        if request_clock is not None:
+            last_started = request_clock.get('last_started')
+            if last_started is not None:
+                elapsed = monotonic() - last_started
+                remaining_delay = max(request_delay - elapsed, 0.0)
+                if remaining_delay:
+                    LOGGER.debug(
+                        "Waiting %.2fs before the next ComicVine import search",
+                        remaining_delay
+                    )
+                    await async_sleep(remaining_delay)
+
+            request_clock['last_started'] = monotonic()
+
+        elif searches_made:
             LOGGER.debug(
                 "Waiting %ss before the next ComicVine import search",
                 request_delay
@@ -193,27 +213,32 @@ async def _match_file_groups(
         cache[title] = await comicvine.search_volumes(title)
         searches_made += 1
 
-    selector = (
-        select_confident_volume_result_for_file
-        if require_confident_match else
-        select_best_volume_result_for_file
-    )
-
     matches: Dict[int, Dict[str, Any]] = {}
     for title, group_numbers in titles_to_groups.items():
         for group_number in group_numbers:
-            result = selector(
-                file_groups[group_number],
-                cache[title],
-                only_english=only_english
-            )
+            review_reason = None
+            if require_confident_match:
+                result, review_reason = select_auto_import_volume_result(
+                    file_groups[group_number],
+                    cache[title],
+                    only_english=only_english
+                )
+            else:
+                result = select_best_volume_result_for_file(
+                    file_groups[group_number],
+                    cache[title],
+                    only_english=only_english
+                )
 
             if result is None:
                 matches[group_number] = {
                     'id': None,
                     'title': None,
                     'issue_count': None,
-                    'link': None
+                    'link': None,
+                    'review_reason': (
+                        review_reason or REVIEW_REASON_NO_CANDIDATE
+                    )
                 }
             else:
                 matches[group_number] = {
@@ -473,7 +498,9 @@ class ContinuousLibraryImport(Task):
 
     def __init__(self) -> None:
         self.review_folders: Set[str] = set()
+        self.review_reasons: Dict[str, int] = {}
         self.search_cache: Dict[str, List[Any]] = {}
+        self.cv_request_clock: Dict[str, float] = {}
         return
 
     def _emit_status(
@@ -490,17 +517,33 @@ class ContinuousLibraryImport(Task):
             f'{len(self.review_folders)} need review · '
             f'{remaining} left'
         )
+
+        review_labels = (
+            (REVIEW_REASON_TIE, 'tied'),
+            (REVIEW_REASON_WEAK_SCORE, 'weak'),
+            (REVIEW_REASON_NO_CANDIDATE, 'no candidate')
+        )
+        review_breakdown = ' · '.join(
+            f'{self.review_reasons[reason]} {label}'
+            for reason, label in review_labels
+            if self.review_reasons.get(reason)
+        )
+        if review_breakdown:
+            self.message += f' · review holds: {review_breakdown}'
+
         if detail:
             self.message += f' · {detail}'
         WebSocket().emit(TaskStatusEvent(self.message))
 
     def run(self) -> None:
-        """Import a stable folder snapshot, pacing ComicVine between folders.
+        """Import a stable folder snapshot while pacing ComicVine searches.
 
         Existing imported files are Kapowarr's checkpoint. Closing the browser
         does not stop this task, and restarting it later naturally ignores work
         that already made it into the library. Folders with no confident match
         stay untouched for review and cannot jam later folders in this run.
+        The shared request clock enforces the minimum interval between ComicVine
+        search starts while letting API and import work consume that interval.
         """
         all_files, file_to_folder = _collect_unimported_files()
         folder_to_files: Dict[str, Dict[str, FilenameData]] = {}
@@ -526,15 +569,21 @@ class ContinuousLibraryImport(Task):
                         only_english=True,
                         request_delay=CONTINUOUS_IMPORT_CV_DELAY,
                         search_cache=self.search_cache,
-                        require_confident_match=True
+                        require_confident_match=True,
+                        request_clock=self.cv_request_clock
                     ))
 
                     matches: List[CVFileMapping] = []
                     folder_needs_review = False
+                    folder_review_reasons: Set[str] = set()
                     for group_number, files in group_to_files.items():
                         cv_match = group_to_cv[group_number]
                         if cv_match['id'] is None:
                             folder_needs_review = True
+                            folder_review_reasons.add(cv_match.get(
+                                'review_reason',
+                                REVIEW_REASON_NO_CANDIDATE
+                            ))
                             continue
 
                         matches.extend(
@@ -551,12 +600,21 @@ class ContinuousLibraryImport(Task):
 
                     if folder_needs_review:
                         self.review_folders.add(folder)
+                        primary_reason = next((
+                            reason
+                            for reason in (
+                                REVIEW_REASON_NO_CANDIDATE,
+                                REVIEW_REASON_WEAK_SCORE,
+                                REVIEW_REASON_TIE
+                            )
+                            if reason in folder_review_reasons
+                        ), REVIEW_REASON_NO_CANDIDATE)
+                        self.review_reasons[primary_reason] = (
+                            self.review_reasons.get(primary_reason, 0) + 1
+                        )
 
                     checked += 1
                     self._emit_status(checked, total, imported)
-
-                    if not self.stop and checked < total:
-                        sleep(CONTINUOUS_IMPORT_CV_DELAY)
                     break
 
                 except CVRateLimitReached:

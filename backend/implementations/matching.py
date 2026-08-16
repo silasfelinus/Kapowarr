@@ -507,27 +507,19 @@ If a volume is one of these types, it can only match to search results
 with one issue.
 """
 
+# Continuous auto-import is intentionally stricter than the review scan. A
+# candidate needs strong filename evidence and, when another viable candidate
+# exists, a decisive lead over the runner-up before unattended import is safe.
+AUTO_IMPORT_MIN_MATCH_SCORE = 4
+AUTO_IMPORT_MIN_SCORE_MARGIN = 2
 
-def select_best_volume_result_for_file(
+
+def _rank_volume_results_for_file(
     group: Dict[str, FilenameData],
     search_results: List[VolumeMetadata],
     only_english: bool
-) -> Union[VolumeMetadata, None]:
-    """Out of the search results for the group of files, choose the volume that
-    matches best (if any).
-
-    Args:
-        group (Dict[str, FilenameData]): The group of files that the volume is
-            matched against. The value is a mapping from the filenames in the
-            group to their filename data.
-        search_results (List[VolumeMetadata]): The list of search results from
-            which can be chosen.
-        only_english (bool): Only match to English volumes.
-
-    Returns:
-        Union[VolumeMetadata, None]: The match, or `None` if nothing could
-            possibly match.
-    """
+) -> List[Tuple[VolumeMetadata, int]]:
+    """Return viable ComicVine matches ranked by filename evidence."""
     first_file = next(iter(group.values()))
     series = first_file['series']
     volume_number = first_file['volume_number']
@@ -615,9 +607,6 @@ def select_best_volume_result_for_file(
         # Search result passed the filters
         filtered_results.append(result)
 
-    if not filtered_results:
-        return None
-
     def rate_search_result(search_result: VolumeMetadata) -> int:
         rating = 0
 
@@ -651,6 +640,58 @@ def select_best_volume_result_for_file(
 
         return rating
 
-    filtered_results.sort(key=rate_search_result, reverse=True)
+    ranked_results = [
+        (result, rate_search_result(result))
+        for result in filtered_results
+    ]
+    ranked_results.sort(key=lambda item: item[1], reverse=True)
+    return ranked_results
 
-    return filtered_results[0]
+
+def select_best_volume_result_for_file(
+    group: Dict[str, FilenameData],
+    search_results: List[VolumeMetadata],
+    only_english: bool
+) -> Union[VolumeMetadata, None]:
+    """Choose the best viable volume match for an interactive review scan."""
+    ranked_results = _rank_volume_results_for_file(
+        group,
+        search_results,
+        only_english
+    )
+    if not ranked_results:
+        return None
+
+    return ranked_results[0][0]
+
+
+def select_confident_volume_result_for_file(
+    group: Dict[str, FilenameData],
+    search_results: List[VolumeMetadata],
+    only_english: bool
+) -> Union[VolumeMetadata, None]:
+    """Choose a match only when unattended import has strong evidence.
+
+    The best viable result must score at least 4 on the existing 0-5 filename
+    evidence scale. When a runner-up exists, the winner must also lead it by at
+    least two points. Ambiguous or weak matches return ``None`` so continuous
+    import leaves the folder untouched for human review.
+    """
+    ranked_results = _rank_volume_results_for_file(
+        group,
+        search_results,
+        only_english
+    )
+    if not ranked_results:
+        return None
+
+    best_result, best_score = ranked_results[0]
+    if best_score < AUTO_IMPORT_MIN_MATCH_SCORE:
+        return None
+
+    if len(ranked_results) > 1:
+        runner_up_score = ranked_results[1][1]
+        if best_score - runner_up_score < AUTO_IMPORT_MIN_SCORE_MARGIN:
+            return None
+
+    return best_result

@@ -23,7 +23,9 @@ from backend.base.logging import LOGGER
 from backend.features.tasks import Task, task_library
 from backend.implementations.comicvine import ComicVine
 from backend.implementations.file_matching import scan_files
-from backend.implementations.matching import select_best_volume_result_for_file
+from backend.implementations.matching import (
+    select_best_volume_result_for_file,
+    select_confident_volume_result_for_file)
 from backend.implementations.naming import mass_rename
 from backend.implementations.root_folders import RootFolders
 from backend.implementations.volumes import Library
@@ -153,7 +155,8 @@ async def _match_file_groups(
     file_groups: Dict[int, Dict[str, FilenameData]],
     only_english: bool,
     request_delay: float = Constants.CV_BRAKE_TIME,
-    search_cache: Optional[Dict[str, List[Any]]] = None
+    search_cache: Optional[Dict[str, List[Any]]] = None,
+    require_confident_match: bool = False
 ) -> Dict[int, Dict[str, Any]]:
     """Match filename groups to ComicVine without swallowing rate limits.
 
@@ -162,6 +165,10 @@ async def _match_file_groups(
     some best-effort callers, but disastrous for an importer because a failed
     request becomes indistinguishable from "no match". Import matching is paced
     sequentially here and CVRateLimitReached is allowed to reach the caller.
+
+    Review scans keep the historical best-match suggestion. Continuous import
+    asks for confident matches so weak or ambiguous winners are left untouched
+    for human review instead of being imported unattended.
     """
     titles_to_groups: Dict[str, List[int]] = {}
     for group_number, file_group in file_groups.items():
@@ -186,10 +193,16 @@ async def _match_file_groups(
         cache[title] = await comicvine.search_volumes(title)
         searches_made += 1
 
+    selector = (
+        select_confident_volume_result_for_file
+        if require_confident_match else
+        select_best_volume_result_for_file
+    )
+
     matches: Dict[int, Dict[str, Any]] = {}
     for title, group_numbers in titles_to_groups.items():
         for group_number in group_numbers:
-            result = select_best_volume_result_for_file(
+            result = selector(
                 file_groups[group_number],
                 cache[title],
                 only_english=only_english
@@ -486,8 +499,8 @@ class ContinuousLibraryImport(Task):
 
         Existing imported files are Kapowarr's checkpoint. Closing the browser
         does not stop this task, and restarting it later naturally ignores work
-        that already made it into the library. Folders with no match stay
-        untouched and cannot jam later folders in this run.
+        that already made it into the library. Folders with no confident match
+        stay untouched for review and cannot jam later folders in this run.
         """
         all_files, file_to_folder = _collect_unimported_files()
         folder_to_files: Dict[str, Dict[str, FilenameData]] = {}
@@ -512,7 +525,8 @@ class ContinuousLibraryImport(Task):
                         group_to_files,
                         only_english=True,
                         request_delay=CONTINUOUS_IMPORT_CV_DELAY,
-                        search_cache=self.search_cache
+                        search_cache=self.search_cache,
+                        require_confident_match=True
                     ))
 
                     matches: List[CVFileMapping] = []

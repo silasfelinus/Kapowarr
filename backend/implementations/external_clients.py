@@ -27,6 +27,17 @@ from backend.internals.server import Server
 EXTERNAL_CLIENT_TEST_TIMEOUT = 10.0 # seconds
 
 
+class _ClientTestTimeout(Exception):
+    """Internal marker: a client's `test()` call didn't finish within
+    EXTERNAL_CLIENT_TEST_TIMEOUT. Each `_test_client_bounded()` caller
+    converts this into whatever it needs to raise/return -- callers that
+    need to keep raising (ExternalClients.add(),
+    BaseExternalClient.update_client()) convert it to `ClientNotWorking`;
+    ExternalClients.test() converts it to a `ClientTestResult` with a more
+    specific "timed out" description than a plain connection failure.
+    """
+
+
 def _test_client_bounded(
     test_func: Callable[
         [str, Union[str, None], Union[str, None], Union[str, None]],
@@ -38,23 +49,23 @@ def _test_client_bounded(
     api_token: Union[str, None]
 ) -> None:
     """Run a client's `test` classmethod bounded by
-    EXTERNAL_CLIENT_TEST_TIMEOUT, for callers that need the original
-    exception on failure rather than a ClientTestResult -- namely
-    ExternalClients.add() and BaseExternalClient.update_client(), which
-    otherwise inherited the full, unbounded Session retry/backoff cycle
-    (90+ seconds against an unreachable host) that ExternalClients.test()
-    already bounds for the interactive "Test" button.
+    EXTERNAL_CLIENT_TEST_TIMEOUT, letting the original exception on
+    failure (ClientNotWorking, CredentialInvalid) propagate to the
+    caller -- shared by ExternalClients.test() (the interactive "Test"
+    button) and ExternalClients.add()/BaseExternalClient.update_client()
+    (the add/edit write paths), which otherwise inherited the full,
+    unbounded Session retry/backoff cycle (90+ seconds against an
+    unreachable host) the Test button already had bounded.
 
-    Not a `with ThreadPoolExecutor(...) as executor:` block, for the same
-    reason as ExternalClients.test(): its __exit__ calls
-    shutdown(wait=True), which would block returning a result until the
-    thread finishes even after we've already given up on it via
-    future.result's timeout.
+    Not a `with ThreadPoolExecutor(...) as executor:` block: its
+    __exit__ calls shutdown(wait=True), which would block returning a
+    result until the thread finishes even after we've already given up
+    on it via future.result's timeout.
 
     Raises:
-        ClientNotWorking: Can't connect to client (including a bounded
-        timeout, reported as a connection error).
+        ClientNotWorking: Can't connect to client.
         CredentialInvalid: Credentials are invalid.
+        _ClientTestTimeout: Didn't finish within EXTERNAL_CLIENT_TEST_TIMEOUT.
     """
     def _run_in_context() -> None:
         # The executor's worker thread doesn't inherit the caller's Flask
@@ -76,11 +87,39 @@ def _test_client_bounded(
             "External client test didn't finish within %ss",
             EXTERNAL_CLIENT_TEST_TIMEOUT
         )
-        raise ClientNotWorking(BrokenClientReason.CONNECTION_ERROR)
+        raise _ClientTestTimeout()
 
     finally:
         executor.shutdown(wait=False)
 
+    return
+
+
+def _test_client_bounded_raising(
+    test_func: Callable[
+        [str, Union[str, None], Union[str, None], Union[str, None]],
+        None
+    ],
+    base_url: str,
+    username: Union[str, None],
+    password: Union[str, None],
+    api_token: Union[str, None]
+) -> None:
+    """`_test_client_bounded()` for callers that need a timeout reported
+    the same way as any other connection failure -- ExternalClients.add()
+    and BaseExternalClient.update_client(), which both document
+    "Raises ClientNotWorking: Can't connect to client" and have no
+    separate "timed out" outcome to report.
+
+    Raises:
+        ClientNotWorking: Can't connect to client (including a bounded
+        timeout, reported as a connection error).
+        CredentialInvalid: Credentials are invalid.
+    """
+    try:
+        _test_client_bounded(test_func, base_url, username, password, api_token)
+    except _ClientTestTimeout:
+        raise ClientNotWorking(BrokenClientReason.CONNECTION_ERROR)
     return
 
 
@@ -181,8 +220,8 @@ class BaseExternalClient(ExternalDownloadClient):
 
         # Raises exception on fail. Bounded the same way
         # ExternalClients.test() bounds the interactive "Test" button --
-        # see _test_client_bounded().
-        _test_client_bounded(
+        # see _test_client_bounded_raising().
+        _test_client_bounded_raising(
             self.test,
             filtered_data['base_url'],
             filtered_data['username'],
@@ -286,28 +325,16 @@ class ExternalClients:
         except KeyError:
             raise InvalidKeyValue('type', client_type)
 
-        # Bounded the same way health.py bounds its own client checks --
-        # see EXTERNAL_CLIENT_TEST_TIMEOUT above. Not a `with
-        # ThreadPoolExecutor(...) as executor:` block for the same reason
-        # as health.py: its __exit__ calls shutdown(wait=True), which
-        # would block returning a result until the thread finishes even
-        # after we've already given up on it via future.result's timeout.
-        executor = ThreadPoolExecutor(max_workers=1)
         try:
-            future = executor.submit(
+            _test_client_bounded(
                 client_class.test,
                 normalise_base_url(base_url),
                 username,
                 password,
                 api_token
             )
-            future.result(timeout=EXTERNAL_CLIENT_TEST_TIMEOUT)
 
-        except FutureTimeoutError:
-            LOGGER.warning(
-                "External client test for %s didn't finish within %ss",
-                client_type, EXTERNAL_CLIENT_TEST_TIMEOUT
-            )
+        except _ClientTestTimeout:
             return ClientTestResult({
                 'success': False,
                 'description':
@@ -332,9 +359,6 @@ class ExternalClients:
                 'success': True,
                 'description': None
             })
-
-        finally:
-            executor.shutdown(wait=False)
 
     @staticmethod
     def add(
@@ -390,8 +414,8 @@ class ExternalClients:
             raise InvalidKeyValue('type', client_type)
 
         # Bounded the same way ExternalClients.test() bounds the
-        # interactive "Test" button -- see _test_client_bounded().
-        _test_client_bounded(
+        # interactive "Test" button -- see _test_client_bounded_raising().
+        _test_client_bounded_raising(
             ClientClass.test,
             normalise_base_url(base_url),
             username,

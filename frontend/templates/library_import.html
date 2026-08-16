@@ -65,10 +65,12 @@
 		<h2>Import an existing organized library to add volumes to Kapowarr</h2>
 		<p>A few notes:</p>
 		<ul>
-			<li>Check if Kapowarr matched correctly! Comicvine has separate releases for normal volumes, TPB's, one shots, hard covers, etc. So even though the name and year match, it could still be a wrong match.</li>
-			<li>Importing a lot of volumes in one go will quickly make Kapowarr reach the rate limit of ComicVine. Import volumes in batches to avoid this. It's advised to not go above 50 volumes at a time.</li>
+			<li><strong>Review Scan</strong> is the familiar workflow: scan a batch, check Kapowarr's ComicVine matches, then confirm the import yourself.</li>
+			<li><strong>Continuous Auto-Import</strong> checks all root folders in the background, one folder at a time. It accepts Kapowarr's existing best match without confirmation, leaves folders with no match untouched for later review, and does not rename files.</li>
+			<li>Continuous mode deliberately waits between folders to stay below ComicVine's documented request ceiling. It is supposed to be slow; you can leave this page while the server-side task keeps working.</li>
+			<li>Manual review batches can still reach ComicVine's rate limit. Kapowarr now reports that condition instead of silently turning it into a missing match.</li>
 			<li>Files are not allowed to be directly in the root folder. They have to be in a sub-folder.</li>
-			<li>If each issue has a separate sub-folder, enable 'Apply limit to parent folder' so that the limit is correctly applied.</li>
+			<li>If each issue has a separate sub-folder, enable 'Apply limit to parent folder' for Review Scan so that the limit is correctly applied.</li>
 		</ul>
 		<table class="fold-table">
 			<tbody>
@@ -120,7 +122,11 @@
 				</tr>
 			</tbody>
 		</table>
-		<button id="run-import-button">Scan</button>
+		<div class="action-container import-mode-actions">
+			<button id="run-import-button">Review Scan</button>
+			<button id="continuous-import-button">Continuous Auto-Import</button>
+		</div>
+		<p class="continuous-note">Continuous Auto-Import always scans all configured root folders, matches English volumes, and keeps existing filenames/folders. The controls above apply to Review Scan.</p>
 	</div>
 	<div id="loading-window" class="hidden">
 		<h2 data-loading-line>Loading...</h2>
@@ -133,6 +139,38 @@
 		<h2>Set ComicVine API Key first in the settings</h2>
 		<button class="cancel-button">Go Back</button>
 		<a href="{{url_base}}/settings/general#cv-input">Go to settings</a>
+	</div>
+	<div id="import-error-window" class="hidden">
+		<h2>Import paused</h2>
+		<p id="import-error-message">The import failed. Check the Kapowarr logs for details.</p>
+		<button class="cancel-button">Go Back</button>
+	</div>
+	<div id="continuous-window" class="hidden">
+		<h2>Continuous Library Import</h2>
+		<p id="continuous-status">Starting the longbox conveyor...</p>
+		<progress id="continuous-progress" value="0" max="1"></progress>
+		<table class="fold-table continuous-stats">
+			<tbody>
+				<tr>
+					<td>Folders checked</td>
+					<td id="continuous-checked">0 / ?</td>
+				</tr>
+				<tr>
+					<td>Volumes imported</td>
+					<td id="continuous-imported">0</td>
+				</tr>
+				<tr>
+					<td>Need manual review</td>
+					<td id="continuous-review">0</td>
+				</tr>
+				<tr>
+					<td>Folders left</td>
+					<td id="continuous-remaining">?</td>
+				</tr>
+			</tbody>
+		</table>
+		<p>The import task runs on the Kapowarr server, so you may leave this page and come back later to see its current progress.</p>
+		<button id="continuous-back-button">Run in Background</button>
 	</div>
 	<div id="list-window" class="hidden">
 		<div class="action-container">

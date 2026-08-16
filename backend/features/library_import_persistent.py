@@ -26,6 +26,11 @@ from backend.features.library_import import (
     create_groups,
     import_library,
 )
+from backend.features.library_import_diagnostics import (
+    append_review_postmortem,
+    build_review_diagnostics,
+    get_postmortem_path,
+)
 from backend.features.library_import_policy import (
     REVIEW_REASON_NO_CANDIDATE,
     REVIEW_REASON_TIE,
@@ -75,6 +80,7 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
         details = get_job_details(self.job_id)
         return {
             'review_items': details['review_items'],
+            'review_postmortem_file': get_postmortem_path(),
             'stop_requested': self.stop_requested,
             'job': {
                 key: value
@@ -283,6 +289,24 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
                                     REVIEW_REASON_NO_CANDIDATE
                                 )
                                 folder_review_reasons.add(review_reason)
+
+                                search_query = next(
+                                    iter(files.values())
+                                )['series'].lower()
+                                diagnostics = build_review_diagnostics(
+                                    files,
+                                    self.search_cache.get(search_query, []),
+                                    only_english=True,
+                                    review_reason=review_reason
+                                )
+                                append_review_postmortem(
+                                    self.job_id,
+                                    folder,
+                                    folder_position,
+                                    group_number,
+                                    diagnostics
+                                )
+
                                 review_items.extend(self._build_review_group(
                                     folder,
                                     folder_position,

@@ -1,0 +1,52 @@
+name: Branch janitor
+
+# On-demand escape hatch for clearing stale claude/* and worker/* branches:
+# auto-deletes branches fully merged into main, and force-deletes any branches
+# named explicitly (for confirmed-superseded branches that aren't a strict
+# git ancestor of main, e.g. squash-merged content). Runs with GITHUB_TOKEN,
+# which can delete refs — agent session credentials 403 on ref deletion here,
+# so this workflow_dispatch is the only reliable path.
+#
+# Minimal port of conductor's own .github/workflows/branch-janitor.yml, scoped
+# down to what Kapowarr needs: workflow_dispatch only, no scheduled cron and no
+# STRANDED-tier age-based judgment — see scripts/branch_janitor.py for details.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Plan only — delete nothing"
+        type: boolean
+        default: false
+      force_delete_branches:
+        description: "Comma-separated branch names to delete regardless of merge state"
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: branch-janitor
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Prune merged / superseded branches (report unmerged)
+        run: |
+          python scripts/branch_janitor.py \
+            ${{ (github.event.inputs.dry_run == 'true') && '--dry-run' || '' }} \
+            --force-delete "${{ github.event.inputs.force_delete_branches }}" \
+            | tee -a "$GITHUB_STEP_SUMMARY"

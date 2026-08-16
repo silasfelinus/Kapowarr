@@ -199,7 +199,7 @@ def _run_sub_process(
             Defaults to `StartType.STARTUP`.
 
     Returns:
-        int: The return code of the sub-process.
+        int: The return code from the sub-process.
     """
     env = {
         **environ,
@@ -246,8 +246,7 @@ if __name__ == "__main__":
     if environ.get("KAPOWARR_RUN_MAIN") == "1":
 
         parser = ArgumentParser(
-            description="Kapowarr is a software to build and manage a comic book library, fitting in the *arr suite of software."
-        )
+            description="Kapowarr is a software to build and manage a comic book library, fitting in the *arr suite of software.")
 
         fs = parser.add_argument_group(title="Folders and files")
         fs.add_argument(

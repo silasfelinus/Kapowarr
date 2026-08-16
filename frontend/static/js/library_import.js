@@ -47,12 +47,24 @@ let continuousWasRunning = false;
 function showImportError(error) {
 	const message = document.querySelector('#import-error-message');
 	let text = 'The import failed. Check the Kapowarr logs for details.';
+	const all_work_views = [
+		LIEls.views.loading,
+		LIEls.views.list,
+		LIEls.views.start,
+		LIEls.views.continuous
+	];
+
+	if (!error || typeof error.json !== 'function') {
+		message.innerText = text;
+		hide(all_work_views, [LIEls.views.error]);
+		return Promise.resolve();
+	};
 
 	return error.json()
 	.then(json => {
 		if (json.error === 'InvalidComicVineApiKey') {
 			hide(
-				[LIEls.views.loading, LIEls.views.error],
+				[...all_work_views, LIEls.views.error],
 				[LIEls.views.no_cv]
 			);
 			return;
@@ -60,7 +72,7 @@ function showImportError(error) {
 
 		if (json.error === 'InvalidKeyValue') {
 			hide(
-				[LIEls.views.loading, LIEls.views.error],
+				[...all_work_views, LIEls.views.error],
 				[LIEls.views.start, document.querySelector('#folder-filter-error')]
 			);
 			return;
@@ -72,17 +84,11 @@ function showImportError(error) {
 			text = `Import failed: ${json.error}`;
 
 		message.innerText = text;
-		hide(
-			[LIEls.views.loading, LIEls.views.list, LIEls.views.start],
-			[LIEls.views.error]
-		);
+		hide(all_work_views, [LIEls.views.error]);
 	})
 	.catch(() => {
 		message.innerText = text;
-		hide(
-			[LIEls.views.loading, LIEls.views.list, LIEls.views.start],
-			[LIEls.views.error]
-		);
+		hide(all_work_views, [LIEls.views.error]);
 	});
 };
 
@@ -309,12 +315,12 @@ function pollContinuousTask(api_key) {
 			continuousTaskId = null;
 			continuousWasRunning = false;
 			LIEls.continuous.status.innerText =
-				'Continuous import finished. Any folders Kapowarr could not confidently match were left untouched for review.';
+				'Continuous import finished. Any folders Kapowarr could not match were left untouched for review.';
 		};
 	});
 
 	refresh();
-	continuousPoll = setInterval(refresh, 2000);
+	continuousPoll = setInterval(refresh, 1000);
 };
 
 function startContinuousImport(api_key) {

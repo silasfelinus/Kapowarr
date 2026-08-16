@@ -1,17 +1,16 @@
 name: Branch janitor
 
-# On-demand escape hatch for clearing stale claude/* and worker/* branches:
-# auto-deletes branches fully merged into main, and force-deletes any branches
-# named explicitly (for confirmed-superseded branches that aren't a strict
-# git ancestor of main, e.g. squash-merged content). Runs with GITHUB_TOKEN,
-# which can delete refs — agent session credentials 403 on ref deletion here,
-# so this workflow_dispatch is the only reliable path.
-#
-# Minimal port of conductor's own .github/workflows/branch-janitor.yml, scoped
-# down to what Kapowarr needs: workflow_dispatch only, no scheduled cron and no
-# STRANDED-tier age-based judgment — see scripts/branch_janitor.py for details.
+# Automatically removes the head branch after a same-repository PR is merged.
+# Also keeps the on-demand escape hatch for clearing older stale claude/* and
+# worker/* branches: auto-deletes branches fully merged into main, and
+# force-deletes any branches named explicitly (for confirmed-superseded branches
+# that aren't a strict git ancestor of main, e.g. squash-merged content).
+# Runs with GITHUB_TOKEN, which can delete refs even when agent session
+# credentials cannot.
 
 on:
+  pull_request:
+    types: [closed]
   workflow_dispatch:
     inputs:
       dry_run:
@@ -32,6 +31,10 @@ concurrency:
 
 jobs:
   prune:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true &&
+       github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     steps:
       - name: Check out full history
@@ -48,5 +51,5 @@ jobs:
         run: |
           python scripts/branch_janitor.py \
             ${{ (github.event.inputs.dry_run == 'true') && '--dry-run' || '' }} \
-            --force-delete "${{ github.event.inputs.force_delete_branches }}" \
+            --force-delete "${{ github.event_name == 'pull_request' && github.head_ref || github.event.inputs.force_delete_branches }}" \
             | tee -a "$GITHUB_STEP_SUMMARY"

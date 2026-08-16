@@ -203,7 +203,7 @@ class MassConvertIssue(Task):
 
     def run(self) -> None:
         volume = Volume(self._volume_id)
-        volume_title = volume.get_issue(self._issue_id).get_data().issue_number
+        volume_title = volume.vd.title
         issue_number = volume.get_issue(self._issue_id).get_data().issue_number
         self.message = f'Converting files for {volume_title} #{issue_number}'
         WebSocket().emit(TaskStatusEvent(self.message))

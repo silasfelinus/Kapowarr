@@ -68,6 +68,9 @@ def _main(
                                       check_min_python_version)
     from backend.base.logging import LOGGER, setup_logging
     from backend.features.download_queue import DownloadHandler
+    from backend.features.library_import_persistent import (
+        PersistentContinuousLibraryImport,
+    )
     from backend.features.tasks import TaskHandler
     from backend.internals.db import set_db_location, setup_db
     from backend.internals.server import Server, StartTypeHandlers
@@ -129,6 +132,14 @@ def _main(
         download_handler = DownloadHandler()
         download_handler.load_downloads()
         task_handler = TaskHandler()
+
+        resumable_import = (
+            PersistentContinuousLibraryImport.restore_running_job()
+        )
+        if resumable_import is not None:
+            LOGGER.info('Resuming interrupted Continuous Library Import')
+            task_handler.add(resumable_import)
+
         task_handler.handle_intervals()
 
     restart_type = None
@@ -188,7 +199,7 @@ def _run_sub_process(
             Defaults to `StartType.STARTUP`.
 
     Returns:
-        int: The return code from the sub-process.
+        int: The return code of the sub-process.
     """
     env = {
         **environ,
@@ -235,7 +246,8 @@ if __name__ == "__main__":
     if environ.get("KAPOWARR_RUN_MAIN") == "1":
 
         parser = ArgumentParser(
-            description="Kapowarr is a software to build and manage a comic book library, fitting in the *arr suite of software.")
+            description="Kapowarr is a software to build and manage a comic book library, fitting in the *arr suite of software."
+        )
 
         fs = parser.add_argument_group(title="Folders and files")
         fs.add_argument(

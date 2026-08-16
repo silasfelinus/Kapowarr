@@ -406,11 +406,9 @@ def get_review_items(job_id: int, prune_resolved: bool = True) -> List[Dict[str,
 
 
 def get_job_details(job_id: int) -> Dict[str, Any]:
+    review_items = get_review_items(job_id)
+    # Review reconciliation can change any subset of held folders, so aggregate
+    # counters are intentionally read after pruning rather than conditionally.
     result = get_job_summary(job_id)
-    result['review_items'] = get_review_items(job_id)
-    # Pruning can turn the final held folder into a normal completed folder.
-    # Re-read the aggregate counters so the UI sees the reconciled numbers.
-    if result['review_folders'] and not result['review_items']:
-        result = get_job_summary(job_id)
-        result['review_items'] = []
+    result['review_items'] = review_items
     return result

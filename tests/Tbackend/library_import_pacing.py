@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from backend.features.library_import import _match_file_groups
 
@@ -20,8 +20,15 @@ class continuous_import_pacing(unittest.IsolatedAsyncioTestCase):
             }
         }
 
+    @staticmethod
+    def _comicvine_stub():
+        comicvine = Mock()
+        comicvine.search_volumes = AsyncMock(return_value=[])
+        return comicvine
+
     async def test_shared_clock_waits_only_remaining_interval(self):
         clock = {'last_started': 100.0}
+        comicvine = self._comicvine_stub()
 
         with patch(
             'backend.features.library_import.monotonic',
@@ -30,10 +37,9 @@ class continuous_import_pacing(unittest.IsolatedAsyncioTestCase):
             'backend.features.library_import.async_sleep',
             new_callable=AsyncMock
         ) as sleep_mock, patch(
-            'backend.features.library_import.ComicVine.search_volumes',
-            new_callable=AsyncMock,
-            return_value=[]
-        ) as search_mock:
+            'backend.features.library_import.ComicVine',
+            return_value=comicvine
+        ):
             await _match_file_groups(
                 self._group(),
                 only_english=True,
@@ -43,11 +49,12 @@ class continuous_import_pacing(unittest.IsolatedAsyncioTestCase):
             )
 
         sleep_mock.assert_awaited_once_with(8.0)
-        search_mock.assert_awaited_once_with('batman')
+        comicvine.search_volumes.assert_awaited_once_with('batman')
         self.assertEqual(clock['last_started'], 120.0)
 
     async def test_first_search_does_not_sleep(self):
         clock = {}
+        comicvine = self._comicvine_stub()
 
         with patch(
             'backend.features.library_import.monotonic',
@@ -56,9 +63,8 @@ class continuous_import_pacing(unittest.IsolatedAsyncioTestCase):
             'backend.features.library_import.async_sleep',
             new_callable=AsyncMock
         ) as sleep_mock, patch(
-            'backend.features.library_import.ComicVine.search_volumes',
-            new_callable=AsyncMock,
-            return_value=[]
+            'backend.features.library_import.ComicVine',
+            return_value=comicvine
         ):
             await _match_file_groups(
                 self._group(),
@@ -69,6 +75,7 @@ class continuous_import_pacing(unittest.IsolatedAsyncioTestCase):
             )
 
         sleep_mock.assert_not_awaited()
+        comicvine.search_volumes.assert_awaited_once_with('batman')
         self.assertEqual(clock['last_started'], 50.0)
 
 

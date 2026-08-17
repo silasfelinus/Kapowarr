@@ -101,11 +101,13 @@ def api_reader_document(issue_id: int):
         return return_api({}, 'ReaderDocumentNotFound', 404)
 
     try:
+        # Do not wrap this response in ``(..., 200)``. ``conditional=True``
+        # must be allowed to preserve 206 Partial Content for PDF range requests.
         return send_file(
             pdf['filepath'],
             mimetype='application/pdf',
             as_attachment=False,
             conditional=True
-        ), 200
+        )
     except (FileNotFoundError, OSError):
         return return_api({}, 'ReaderDocumentUnavailable', 404)

@@ -31,6 +31,11 @@ from backend.features.library_import_diagnostics import (
     build_review_diagnostics,
     get_postmortem_path,
 )
+from backend.features.library_import_metadata import (
+    filter_library_import_files,
+    is_library_import_artifact,
+    select_local_series_metadata,
+)
 from backend.features.library_import_policy import (
     REVIEW_REASON_NO_CANDIDATE,
     REVIEW_REASON_TIE,
@@ -172,11 +177,11 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
         all_files, file_to_folder = _collect_unimported_files(
             folder_filter=glob_escape(folder)
         )
-        return {
+        return filter_library_import_files({
             filepath: file_data
             for filepath, file_data in all_files.items()
             if file_to_folder.get(filepath) == folder
-        }
+        })
 
     @staticmethod
     def _primary_review_reason(reasons: Set[str]) -> str:
@@ -210,12 +215,41 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
         all_files, file_to_folder = _collect_unimported_files()
         folder_to_files: Dict[str, Dict[str, FilenameData]] = {}
         for filepath, file_data in all_files.items():
+            if is_library_import_artifact(filepath):
+                continue
             folder_to_files.setdefault(
                 file_to_folder[filepath], {}
             )[filepath] = file_data
 
         self.job_id = create_job(folder_to_files.keys())
         return folder_to_files, False
+
+    @staticmethod
+    def _match_groups_with_local_metadata(
+        folder: str,
+        group_to_files: Dict[int, Dict[str, FilenameData]]
+    ) -> Tuple[Dict[int, Dict[str, Any]], Dict[int, Dict[str, FilenameData]]]:
+        """Resolve safe exact sidecar matches before spending search requests."""
+        local_matches: Dict[int, Dict[str, Any]] = {}
+        search_groups: Dict[int, Dict[str, FilenameData]] = {}
+
+        for group_number, files in group_to_files.items():
+            metadata = select_local_series_metadata(folder, files)
+            if metadata is None:
+                search_groups[group_number] = files
+                continue
+
+            year = metadata.get('year')
+            title = metadata['name']
+            local_matches[group_number] = {
+                'id': metadata['comicvine_id'],
+                'title': f"{title} ({year})" if year is not None else title,
+                'issue_count': metadata.get('issue_count'),
+                'link': None,
+                'local_metadata': metadata.get('source')
+            }
+
+        return local_matches, search_groups
 
     def run(self) -> None:
         """Continue a persistent folder snapshot until complete, paused, or exit.
@@ -246,9 +280,12 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
                 folder_files = initial_folder_files.get(folder)
                 if folder_files is None:
                     folder_files = self._load_folder_files(folder)
+                else:
+                    folder_files = filter_library_import_files(folder_files)
 
-                # A folder can disappear, move, or become fully imported while a
-                # job is paused. That is a completed checkpoint, not an error.
+                # A folder can disappear, move, become fully imported, or turn
+                # out to contain only artwork/cache files while a job is paused.
+                # Those are completed checkpoints, not errors or review holds.
                 if not folder_files:
                     mark_folder_result(
                         self.job_id,
@@ -268,14 +305,21 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
 
                     try:
                         group_to_files = create_groups(folder_files)
-                        group_to_cv = asyncio_run(_match_file_groups(
-                            group_to_files,
-                            only_english=True,
-                            request_delay=CONTINUOUS_IMPORT_CV_DELAY,
-                            search_cache=self.search_cache,
-                            require_confident_match=True,
-                            request_clock=self.cv_request_clock
-                        ))
+                        group_to_cv, search_groups = (
+                            self._match_groups_with_local_metadata(
+                                folder,
+                                group_to_files
+                            )
+                        )
+                        if search_groups:
+                            group_to_cv.update(asyncio_run(_match_file_groups(
+                                search_groups,
+                                only_english=True,
+                                request_delay=CONTINUOUS_IMPORT_CV_DELAY,
+                                search_cache=self.search_cache,
+                                require_confident_match=True,
+                                request_clock=self.cv_request_clock
+                            )))
 
                         matches: List[CVFileMapping] = []
                         review_items: List[Dict[str, Any]] = []

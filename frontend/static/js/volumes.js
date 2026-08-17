@@ -46,8 +46,19 @@ const pre_build_els = {
 	table_entry: document.querySelector('.pre-build-els .table-entry')
 };
 
+const LIBRARY_RENDER_BATCH_SIZE = 50;
+let library_render_generation = 0;
+
 function showLibraryPage(el) {
 	hide(Object.values(library_els.pages), [el]);
+};
+
+function scheduleLibraryRender(callback) {
+	if (typeof window.requestIdleCallback === 'function') {
+		window.requestIdleCallback(callback, {timeout: 100});
+	} else {
+		setTimeout(callback, 0);
+	};
 };
 
 class LibraryEntry {
@@ -121,87 +132,119 @@ class LibraryEntry {
 	};
 };
 
-function populateLibrary(volumes, api_key) {
+function buildLibraryEntry(volume, api_key, list_fragment, table_fragment) {
+	const list_entry = pre_build_els.list_entry.cloneNode(true),
+		table_entry = pre_build_els.table_entry.cloneNode(true);
+
+	// Label
+	list_entry.ariaLabel = table_entry.ariaLabel =
+		`View the volume ${volume.title} (${volume.year}) Volume ${volume.volume_number}`;
+
+	// ID
+	list_entry.classList.add(`vol-${volume.id}`);
+	table_entry.classList.add(`vol-${volume.id}`);
+	table_entry.dataset.id = volume.id;
+
+	// Link
+	list_entry.href =
+	table_entry.querySelector('.table-link').href =
+		`${url_base}/volumes/${volume.id}`;
+
+	// Cover
+	list_entry.querySelector('.list-img').src =
+		`${url_base}/api/volumes/${volume.id}/cover?api_key=${api_key}`;
+
+	// Title
+	const list_title = list_entry.querySelector('.list-title');
+	list_title.innerText =
+	list_title.title =
+		`${volume.title} (${volume.year})`;
+	table_entry.querySelector('.table-link').innerText =
+		volume.title;
+
+	// Year
+	table_entry.querySelector('.table-year').innerText =
+		volume.year;
+
+	// Volume Number
+	list_entry.querySelector('.list-volume').innerText =
+	table_entry.querySelector('.table-volume').innerText =
+		`Volume ${volume.volume_number}`;
+
+	// Monitored
+	const library_entry = new LibraryEntry(volume.id, api_key);
+	library_entry.list_entry = list_entry;
+	library_entry.table_entry = table_entry;
+
+	const monitored_button = table_entry.querySelector('.table-monitored');
+	monitored_button.onclick = e => library_entry
+		.setMonitored(!volume.monitored);
+	if (volume.monitored) {
+		list_entry.setAttribute('monitored', '');
+		setIcon(monitored_button, icons.monitored, 'Monitored');
+	} else
+		setIcon(monitored_button, icons.unmonitored, 'Unmonitored');
+
+	// Progress Bar
+	library_entry.setProgressBar(
+		volume.issues_downloaded_monitored,
+		volume.issue_count_monitored
+	);
+
+	// Add to view
+	list_fragment.appendChild(list_entry);
+	table_fragment.appendChild(table_entry);
+};
+
+function populateLibrary(volumes, api_key, generation, on_first_batch) {
 	library_els.views.list.querySelectorAll('.list-entry').forEach(
 		e => e.remove()
 	);
 	library_els.views.table.innerHTML = '';
 	const space_taker = document.querySelector('.space-taker');
+	let offset = 0;
+	let first_batch = true;
 
-	const list_fragment = document.createDocumentFragment(),
-		table_fragment = document.createDocumentFragment();
+	function renderBatch() {
+		if (generation !== library_render_generation)
+			return;
 
-	volumes.forEach(volume => {
-		const list_entry = pre_build_els.list_entry.cloneNode(true),
-			table_entry = pre_build_els.table_entry.cloneNode(true);
+		const list_fragment = document.createDocumentFragment(),
+			table_fragment = document.createDocumentFragment(),
+			end = Math.min(offset + LIBRARY_RENDER_BATCH_SIZE, volumes.length);
 
-		// Label
-		list_entry.ariaLabel = table_entry.ariaLabel =
-			`View the volume ${volume.title} (${volume.year}) Volume ${volume.volume_number}`;
+		for (; offset < end; offset++) {
+			buildLibraryEntry(
+				volumes[offset],
+				api_key,
+				list_fragment,
+				table_fragment
+			);
+		};
 
-		// ID
-		list_entry.classList.add(`vol-${volume.id}`);
-		table_entry.classList.add(`vol-${volume.id}`);
-		table_entry.dataset.id = volume.id;
+		library_els.views.list.insertBefore(list_fragment, space_taker);
+		library_els.views.table.appendChild(table_fragment);
 
-		// Link
-		list_entry.href =
-		table_entry.querySelector('.table-link').href =
-			`${url_base}/volumes/${volume.id}`;
+		if (first_batch) {
+			first_batch = false;
+			on_first_batch();
+		};
 
-		// Cover
-		list_entry.querySelector('.list-img').src =
-			`${url_base}/api/volumes/${volume.id}/cover?api_key=${api_key}`;
+		if (offset < volumes.length) {
+			scheduleLibraryRender(renderBatch);
+		} else {
+			library_els.mass_edit.button.disabled = false;
+		};
+	};
 
-		// Title
-		const list_title = list_entry.querySelector('.list-title');
-		list_title.innerText =
-		list_title.title =
-			`${volume.title} (${volume.year})`;
-		table_entry.querySelector('.table-link').innerText =
-			volume.title;
-
-		// Year
-		table_entry.querySelector('.table-year').innerText =
-			volume.year;
-
-		// Volume Number
-		list_entry.querySelector('.list-volume').innerText =
-		table_entry.querySelector('.table-volume').innerText =
-			`Volume ${volume.volume_number}`;
-
-		// Monitored
-		const library_entry = new LibraryEntry(volume.id, api_key);
-		library_entry.list_entry = list_entry;
-		library_entry.table_entry = table_entry;
-
-		const monitored_button = table_entry.querySelector('.table-monitored');
-		monitored_button.onclick = e => library_entry
-			.setMonitored(!volume.monitored);
-		if (volume.monitored) {
-			list_entry.setAttribute('monitored', '');
-			setIcon(monitored_button, icons.monitored, 'Monitored');
-		} else
-			setIcon(monitored_button, icons.unmonitored, 'Unmonitored');
-
-		// Progress Bar
-		library_entry.setProgressBar(
-			volume.issues_downloaded_monitored,
-			volume.issue_count_monitored
-		);
-
-		// Add to view
-		list_fragment.appendChild(list_entry)
-		table_fragment.appendChild(table_entry);
-	});
-
-	library_els.views.list.insertBefore(list_fragment, space_taker);
-	library_els.views.table.appendChild(table_fragment);
+	renderBatch();
 };
 
 function fetchLibrary(api_key) {
 	library_els.mass_edit.progress.innerText = '';
+	library_els.mass_edit.button.disabled = true;
 	showLibraryPage(library_els.pages.loading);
+	const generation = ++library_render_generation;
 
 	const params = {
 		sort: library_els.view_options.sort.value,
@@ -213,11 +256,19 @@ function fetchLibrary(api_key) {
 
 	fetchAPI('/volumes', api_key, params)
 	.then(json => {
+		if (generation !== library_render_generation)
+			return;
+
 		if (json.result.length === 0) {
+			library_els.mass_edit.button.disabled = false;
 			showLibraryPage(library_els.pages.empty);
 		} else {
-			populateLibrary(json.result, api_key);
-			showLibraryPage(library_els.pages.view);
+			populateLibrary(
+				json.result,
+				api_key,
+				generation,
+				() => showLibraryPage(library_els.pages.view)
+			);
 		};
 	});
 };

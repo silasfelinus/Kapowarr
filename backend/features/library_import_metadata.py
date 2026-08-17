@@ -168,8 +168,11 @@ def _load_cvinfo_metadata(folder: str) -> Optional[Dict[str, Any]]:
         if comicvine_id is None:
             continue
 
+        # Use a filename Kapowarr already recognises as metadata so filename
+        # parsing deliberately falls back to this folder's label. ``cvinfo`` has
+        # no extension and would otherwise be mistaken for the series title.
         folder_data = extract_filename_data(
-            path,
+            join(folder, 'series.json'),
             assume_volume_number=False,
             prefer_folder_year=True,
         )

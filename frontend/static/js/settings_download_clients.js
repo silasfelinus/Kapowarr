@@ -49,13 +49,13 @@ function createApiTokenInput(id) {
 	return token_row;
 };
 
-function loadEditTorrent(api_key, id) {
-	const form = document.querySelector('#edit-torrent-form tbody');
+function loadEditClient(api_key, id) {
+	const form = document.querySelector('#edit-client-form tbody');
 	form.dataset.id = id;
 	form.querySelectorAll(
 		'tr:not(:has(input#edit-title-input, input#edit-baseurl-input))'
 	).forEach(el => el.remove());
-	document.querySelector('#test-torrent-edit').classList.remove(
+	document.querySelector('#test-client-edit').classList.remove(
 		'show-success', 'show-fail'
 	)
 	hide([document.querySelector('#edit-error')]);
@@ -95,19 +95,19 @@ function loadEditTorrent(api_key, id) {
 				form.appendChild(token_input);
 			};
 
-			showWindow('edit-torrent-window');
+			showWindow('edit-client-window');
 		});
 	});
 };
 
-function saveEditTorrent() {
+function saveEditClient() {
 	usingApiKey()
 	.then(api_key => {
-		testEditTorrent(api_key).then(result => {
+		testEditClient(api_key).then(result => {
 			if (!result)
 				return;
 
-			const form = document.querySelector('#edit-torrent-form tbody');
+			const form = document.querySelector('#edit-client-form tbody');
 			const id = form.dataset.id;
 			const data = {
 				title: form.querySelector('#edit-title-input').value,
@@ -118,7 +118,7 @@ function saveEditTorrent() {
 			};
 			sendAPI('PUT', `/externalclients/${id}`, api_key, {}, data)
 			.then(response => {
-				loadTorrentClients(api_key);
+				loadExternalClients(api_key);
 				closeWindow();
 			})
 			.catch(e => {
@@ -142,11 +142,11 @@ function saveEditTorrent() {
 	});
 };
 
-async function testEditTorrent(api_key) {
+async function testEditClient(api_key) {
 	const error = document.querySelector('#edit-error');
 	hide([error]);
-	const form = document.querySelector('#edit-torrent-form tbody');
-	const test_button = document.querySelector('#test-torrent-edit');
+	const form = document.querySelector('#edit-client-form tbody');
+	const test_button = document.querySelector('#test-client-edit');
 	test_button.classList.remove('show-success', 'show-fail');
 	const data = {
 		client_type: form.dataset.type,
@@ -171,11 +171,11 @@ async function testEditTorrent(api_key) {
 	});
 };
 
-function deleteTorrent(api_key) {
-	const id = document.querySelector('#edit-torrent-form tbody').dataset.id;
+function deleteClient(api_key) {
+	const id = document.querySelector('#edit-client-form tbody').dataset.id;
 	sendAPI('DELETE', `/externalclients/${id}`, api_key)
 	.then(response => {
-		loadTorrentClients(api_key);
+		loadExternalClients(api_key);
 		fillRemoteMappings(api_key);
 		closeWindow();
 	})
@@ -189,8 +189,8 @@ function deleteTorrent(api_key) {
 	});
 };
 
-function loadTorrentList(api_key) {
-	const table = document.querySelector('#choose-torrent-list');
+function loadClientList(api_key) {
+	const table = document.querySelector('#choose-client-list');
 	table.innerHTML = '';
 
 	fetchAPI('/externalclients/options', api_key)
@@ -198,20 +198,20 @@ function loadTorrentList(api_key) {
 		Object.keys(json.result).forEach(c => {
 			const entry = document.createElement('button');
 			entry.innerText = c;
-			entry.onclick = e => loadAddTorrent(api_key, c);
+			entry.onclick = e => loadAddClient(api_key, c);
 			table.appendChild(entry);
 		});
-		showWindow('choose-torrent-window');
+		showWindow('choose-client-window');
 	});
 };
 
-function loadAddTorrent(api_key, client_type) {
-	const form = document.querySelector('#add-torrent-form tbody');
+function loadAddClient(api_key, client_type) {
+	const form = document.querySelector('#add-client-form tbody');
 	form.dataset.type = client_type;
 	form.querySelectorAll(
 		'tr:not(:has(input#add-title-input, input#add-baseurl-input))'
 	).forEach(el => el.remove());
-	document.querySelector('#test-torrent-add').classList.remove(
+	document.querySelector('#test-client-add').classList.remove(
 		'show-success', 'show-fail'
 	)
 	form.querySelectorAll(
@@ -231,18 +231,18 @@ function loadAddTorrent(api_key, client_type) {
 		if (client_options.includes('api_token'))
 			form.appendChild(createApiTokenInput('add-token-input'));
 
-		showWindow('add-torrent-window');
+		showWindow('add-client-window');
 	});
 };
 
-function saveAddTorrent() {
+function saveAddClient() {
 	usingApiKey()
 	.then(api_key => {
-		testAddTorrent(api_key).then(result => {
+		testAddClient(api_key).then(result => {
 			if (!result)
 				return;
 
-			const form = document.querySelector('#add-torrent-form tbody');
+			const form = document.querySelector('#add-client-form tbody');
 			const data = {
 				client_type: form.dataset.type,
 				title: form.querySelector('#add-title-input').value,
@@ -253,7 +253,7 @@ function saveAddTorrent() {
 			};
 			sendAPI('POST', '/externalclients', api_key, {}, data)
 			.then(response => {
-				loadTorrentClients(api_key);
+				loadExternalClients(api_key);
 				closeWindow();
 			})
 			.catch(e => {
@@ -272,11 +272,11 @@ function saveAddTorrent() {
 	});
 };
 
-async function testAddTorrent(api_key) {
+async function testAddClient(api_key) {
 	const error = document.querySelector('#add-error');
 	hide([error]);
-	const form = document.querySelector('#add-torrent-form tbody');
-	const test_button = document.querySelector('#test-torrent-add');
+	const form = document.querySelector('#add-client-form tbody');
+	const test_button = document.querySelector('#test-client-add');
 	test_button.classList.remove('show-success', 'show-fail');
 	const data = {
 		client_type: form.dataset.type,
@@ -300,21 +300,21 @@ async function testAddTorrent(api_key) {
 	});
 };
 
-function loadTorrentClients(api_key) {
+function loadExternalClients(api_key) {
 	fetchAPI('/externalclients', api_key)
 	.then(json => {
-		const table = document.querySelector('#torrent-client-list'),
+		const table = document.querySelector('#external-client-list'),
 			add_mapping_select = document.querySelector('#add-mapping-client-input'),
 			edit_mapping_select = document.querySelector('#edit-mapping-client-input');
 
-		document.querySelectorAll('#torrent-client-list > :not(:first-child)')
+		document.querySelectorAll('#external-client-list > :not(:first-child)')
 			.forEach(el => el.remove());
 		add_mapping_select.innerHTML = ''
 		edit_mapping_select.innerHTML = ''
 
 		json.result.forEach(client => {
 			const entry = document.createElement('button');
-			entry.onclick = (e) => loadEditTorrent(api_key, client.id);
+			entry.onclick = (e) => loadEditClient(api_key, client.id);
 			entry.innerText = client.title;
 			table.appendChild(entry);
 
@@ -501,16 +501,16 @@ async function deleteRemoteMapping(id) {
 usingApiKey()
 .then(api_key => {
 	fillCredentials(api_key);
-	loadTorrentClients(api_key);
+	loadExternalClients(api_key);
 	fillRemoteMappings(api_key);
-	document.querySelector('#delete-torrent-edit').onclick = e => deleteTorrent(api_key);
-	document.querySelector('#test-torrent-edit').onclick = e => testEditTorrent(api_key);
-	document.querySelector('#test-torrent-add').onclick = e => testAddTorrent(api_key);
-	document.querySelector('#add-torrent-client').onclick = e => loadTorrentList(api_key);
+	document.querySelector('#delete-client-edit').onclick = e => deleteClient(api_key);
+	document.querySelector('#test-client-edit').onclick = e => testEditClient(api_key);
+	document.querySelector('#test-client-add').onclick = e => testAddClient(api_key);
+	document.querySelector('#add-external-client').onclick = e => loadClientList(api_key);
 });
 
-document.querySelector('#edit-torrent-form').action = 'javascript:saveEditTorrent()';
-document.querySelector('#add-torrent-form').action = 'javascript:saveAddTorrent()';
+document.querySelector('#edit-client-form').action = 'javascript:saveEditClient()';
+document.querySelector('#add-client-form').action = 'javascript:saveAddClient()';
 document.querySelectorAll('#cred-container > form').forEach(
 	f => f.action = 'javascript:addCredential();'
 );

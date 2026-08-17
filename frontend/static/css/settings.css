@@ -373,18 +373,18 @@
 	left: 20%;
 }
 
-#choose-torrent-window > div:nth-child(2) {
+#choose-client-window > div:nth-child(2) {
 	justify-content: flex-start;
 }
 
-#choose-torrent-list {
+#choose-client-list {
 	display: flex;
 	justify-content: center;
 	gap: 1rem;
 	flex-wrap: wrap;
 }
 
-#choose-torrent-list > button {
+#choose-client-list > button {
 	width: 10rem;
 	height: 4rem;
 

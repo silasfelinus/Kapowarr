@@ -14,6 +14,7 @@ from json import dumps, loads
 from time import time
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from backend.features.library_import_metadata import is_library_import_artifact
 from backend.internals.db import commit, get_db
 
 
@@ -332,11 +333,13 @@ def _decode_review_items(raw: str) -> List[Dict[str, Any]]:
 
 
 def get_review_items(job_id: int, prune_resolved: bool = True) -> List[Dict[str, Any]]:
-    """Return durable review rows, optionally dropping files already imported.
+    """Return durable review rows, pruning resolved files and decoration.
 
     Manual review uses the normal import endpoint, not a special persistent-job
     mutation. Looking at the review queue therefore reconciles it against the
-    canonical ``files`` table and removes rows that have since been resolved.
+    canonical ``files`` table. Artwork/cache paths that should never have been
+    volume-discovery candidates are pruned by the same classifier used by the
+    continuous importer.
     """
     cursor = get_db()
     rows = cursor.execute(
@@ -365,7 +368,12 @@ def get_review_items(job_id: int, prune_resolved: bool = True) -> List[Dict[str,
             filtered = [
                 item
                 for item in items
-                if item.get('filepath') not in imported_paths
+                if (
+                    item.get('filepath') not in imported_paths
+                    and not is_library_import_artifact(
+                        str(item.get('filepath') or '')
+                    )
+                )
             ]
             if len(filtered) != len(items):
                 changed = True

@@ -16,7 +16,11 @@ from typing import Any, Dict, Hashable, List, Optional, Tuple
 
 from backend.base.definitions import FilenameData, VolumeMetadata
 from backend.base.helpers import check_overlapping_issues, force_range
-from backend.features.library_import_policy import select_auto_import_volume_result
+from backend.features.library_import_policy import (
+    AUTO_IMPORT_MIN_MATCH_SCORE,
+    AUTO_IMPORT_MIN_SCORE_MARGIN,
+)
+from backend.implementations.matching import _rank_volume_results_for_file
 
 
 GroupMap = Dict[int, Dict[str, FilenameData]]
@@ -83,6 +87,58 @@ def _combined_files(groups: List[Dict[str, FilenameData]]) -> Dict[str, Filename
     return result
 
 
+def _highest_issue_number(files: Dict[str, FilenameData]) -> Optional[float]:
+    values = [
+        float(force_range(file_data['issue_number'])[-1])
+        for file_data in files.values()
+        if file_data.get('issue_number') is not None
+    ]
+    return max(values, default=None)
+
+
+def _select_series_run_winner(
+    files: Dict[str, FilenameData],
+    search_results: List[VolumeMetadata],
+    only_english: bool,
+) -> Optional[VolumeMetadata]:
+    """Choose a whole-run winner with one extra run-boundary evidence point.
+
+    The reusable matcher already scores title, volume number, start year and
+    covered issue count. Folder context adds one narrowly scoped signal: if the
+    highest known issue number exactly equals a candidate's total issue count,
+    that candidate gets one point. This handles incomplete libraries such as a
+    #1-33 run with four missing issues without pretending there are 33 files.
+    """
+    ranked = _rank_volume_results_for_file(files, search_results, only_english)
+    if not ranked:
+        return None
+
+    highest_issue = _highest_issue_number(files)
+    context_ranked: List[Tuple[VolumeMetadata, int]] = []
+    for candidate, base_score in ranked:
+        boundary_bonus = 0
+        if (
+            highest_issue is not None
+            and highest_issue > 0
+            and highest_issue.is_integer()
+            and candidate['issue_count'] == int(highest_issue)
+        ):
+            boundary_bonus = 1
+        context_ranked.append((candidate, base_score + boundary_bonus))
+
+    context_ranked.sort(key=lambda item: item[1], reverse=True)
+    winner, best_score = context_ranked[0]
+    if best_score < AUTO_IMPORT_MIN_MATCH_SCORE:
+        return None
+
+    if len(context_ranked) > 1:
+        runner_up_score = context_ranked[1][1]
+        if best_score - runner_up_score < AUTO_IMPORT_MIN_SCORE_MARGIN:
+            return None
+
+    return winner
+
+
 def _format_context_match(result: VolumeMetadata) -> Dict[str, Any]:
     year = result.get('year')
     title = result['title']
@@ -106,8 +162,8 @@ def apply_series_run_context(
     The same cached ComicVine search response is reused, so this adds no API
     traffic. A whole-run winner replaces subgroup suggestions only when the
     files themselves form one conservative, non-overlapping issue sequence and
-    the existing continuous-import confidence policy accepts the combined
-    evidence.
+    the normal continuous-import thresholds accept the combined evidence plus
+    the run-boundary signal.
     """
     clusters: Dict[Tuple[Hashable, ...], List[int]] = defaultdict(list)
     for group_number, files in file_groups.items():
@@ -129,7 +185,7 @@ def apply_series_run_context(
         if not search_results:
             continue
 
-        winner, _ = select_auto_import_volume_result(
+        winner = _select_series_run_winner(
             _combined_files(groups),
             search_results,
             only_english=only_english,

@@ -140,3 +140,8 @@ def ui_metadata():
 @ui.route('/settings/general', methods=methods)
 def ui_general():
     return render('settings_general.html')
+
+
+# Reader routes decorate the existing ui/api blueprints and therefore must load
+# after this module has created ``ui`` and ``render``.
+import frontend.reader  # noqa: E402,F401  # isort: skip

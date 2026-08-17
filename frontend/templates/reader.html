@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+	<meta id="url_base" data-value="{{url_base}}">
+	<link rel="shortcut icon" href="{{ url_for('static', filename='img/favicon.svg') }}" type="image/x-icon">
+	<link rel="stylesheet" href="{{ url_for('static', filename='css/reader.css') }}">
+	<script src="{{ url_for('static', filename='js/reader.js') }}" defer></script>
+	<title>Reader - {{ app_title }}</title>
+</head>
+<body data-issue-id="{{ issue_id }}">
+	<header class="reader-toolbar">
+		<button id="reader-back" type="button" aria-label="Back to volume">← Back</button>
+		<div class="reader-title-wrap">
+			<strong id="reader-title">Loading comic…</strong>
+			<span id="reader-page-count"></span>
+		</div>
+		<label class="reader-fit-label" for="reader-fit">
+			Fit
+			<select id="reader-fit">
+				<option value="page">Page</option>
+				<option value="width">Width</option>
+			</select>
+		</label>
+	</header>
+
+	<main id="reader-stage" class="fit-page" aria-live="polite">
+		<button id="reader-prev" class="reader-nav reader-prev" type="button" aria-label="Previous page">‹</button>
+		<div class="reader-page-wrap">
+			<p id="reader-status">Opening the longbox…</p>
+			<img id="reader-page" class="hidden" alt="Comic page">
+		</div>
+		<button id="reader-next" class="reader-nav reader-next" type="button" aria-label="Next page">›</button>
+	</main>
+</body>
+</html>

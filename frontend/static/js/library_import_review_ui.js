@@ -1,5 +1,6 @@
 (() => {
 	let matchedOnly = false;
+	let recheckInProgress = false;
 	const originalRenderProposalResults = window.renderProposalResults;
 
 	if (typeof originalRenderProposalResults !== 'function')
@@ -33,10 +34,13 @@
 				padding: 0 1rem;
 				color: var(--text-color);
 			}
-			.review-volume-controls label {
+			.review-volume-controls label,
+			.review-volume-actions {
 				display: inline-flex;
 				align-items: center;
 				gap: .5rem;
+			}
+			.review-volume-controls label {
 				cursor: pointer;
 			}
 			.volume-file-details > summary {
@@ -64,33 +68,135 @@
 		document.head.appendChild(style);
 	};
 
-	function ensureControls() {
-		let controls = document.querySelector('#review-volume-controls');
-		if (controls)
-			return controls;
+	function waitForTaskCompletion(apiKey, taskId) {
+		return new Promise((resolve, reject) => {
+			const poll = () => fetchAPI('/system/tasks', apiKey)
+			.then(json => {
+				const task = json.result.find(entry => entry.id === taskId);
+				if (!task) {
+					resolve();
+					return;
+				};
 
-		const tableContainer = document.querySelector('#list-window .table-container');
-		if (!tableContainer)
-			return null;
+				if (LIEls?.continuous?.status)
+					LIEls.continuous.status.innerText = task.message
+						|| 'Rebuilding the import snapshot from the current library...';
+				setTimeout(poll, 500);
+			})
+			.catch(reject);
+			poll();
+		});
+	};
 
-		controls = document.createElement('div');
-		controls.id = 'review-volume-controls';
-		controls.className = 'review-volume-controls';
-		controls.innerHTML = `
-			<label>
-				<input type="checkbox" id="matched-only-input">
-				Show matched only
-			</label>
-			<span id="review-volume-summary"></span>
-		`;
-		tableContainer.before(controls);
+	function resetAndRecheckContinuousReview() {
+		if (recheckInProgress)
+			return;
 
-		const filter = controls.querySelector('#matched-only-input');
-		filter.checked = matchedOnly;
-		filter.onchange = () => {
-			matchedOnly = filter.checked;
-			applyMatchFilter();
+		const confirmed = window.confirm(
+			'Discard the current Review Holds and scan the library again with the latest matching logic? Already imported files will stay imported. Moved or renamed unimported folders will be rediscovered.'
+		);
+		if (!confirmed)
+			return;
+
+		recheckInProgress = true;
+		const button = document.querySelector('#recheck-review-holds-button');
+		if (button) {
+			button.disabled = true;
+			button.innerText = 'Resetting...';
 		};
+
+		usingApiKey()
+		.then(apiKey => {
+			if (continuousPoll !== null) {
+				clearInterval(continuousPoll);
+				continuousPoll = null;
+			};
+
+			continuousReviewOpen = false;
+			continuousPanelDismissed = false;
+			hide([LIEls.views.list], [LIEls.views.continuous]);
+			LIEls.continuous.status.innerText = continuousTaskId === null
+				? 'Rebuilding the import snapshot from the current library...'
+				: 'Stopping at the current folder boundary, then rebuilding the import snapshot...';
+
+			const stopCurrent = continuousTaskId === null
+				? Promise.resolve()
+				: sendAPI(
+					'DELETE',
+					`/system/tasks/${continuousTaskId}`,
+					apiKey
+				);
+
+			return stopCurrent
+			.then(() => sendAPI(
+				'POST',
+				'/system/tasks',
+				apiKey,
+				{},
+				{cmd: 'recheck_continuous_library_import'}
+			))
+			.then(response => response.json())
+			.then(json => waitForTaskCompletion(apiKey, json.result.id))
+			.then(() => {
+				continuousTaskId = null;
+				continuousWasRunning = false;
+				continuousStopRequested = false;
+				continuousReviewCache = [];
+				continuousReviewFolderCount = 0;
+				continuousLastSnapshotAt = 0;
+				LIEls.buttons.continuous_review.innerText = 'Review Holds (0)';
+				LIEls.buttons.continuous_review.disabled = true;
+				startContinuousImport(apiKey);
+			});
+		})
+		.catch(error => showImportError(error))
+		.finally(() => {
+			recheckInProgress = false;
+			if (button) {
+				button.disabled = false;
+				button.innerText = 'Reset & Re-evaluate All Holds';
+			};
+		});
+	};
+
+	function ensureControls(fromContinuous=false) {
+		let controls = document.querySelector('#review-volume-controls');
+		if (!controls) {
+			const tableContainer = document.querySelector('#list-window .table-container');
+			if (!tableContainer)
+				return null;
+
+			controls = document.createElement('div');
+			controls.id = 'review-volume-controls';
+			controls.className = 'review-volume-controls';
+			controls.innerHTML = `
+				<div class="review-volume-actions">
+					<label>
+						<input type="checkbox" id="matched-only-input">
+						Show matched only
+					</label>
+					<button type="button" id="recheck-review-holds-button">
+						Reset & Re-evaluate All Holds
+					</button>
+				</div>
+				<span id="review-volume-summary"></span>
+			`;
+			tableContainer.before(controls);
+
+			const filter = controls.querySelector('#matched-only-input');
+			filter.checked = matchedOnly;
+			filter.onchange = () => {
+				matchedOnly = filter.checked;
+				applyMatchFilter();
+			};
+
+			controls.querySelector('#recheck-review-holds-button').onclick =
+				resetAndRecheckContinuousReview;
+		};
+
+		const recheck = controls.querySelector('#recheck-review-holds-button');
+		if (recheck)
+			recheck.hidden = !fromContinuous;
 		return controls;
 	};
 
@@ -172,9 +278,9 @@
 		applyMatchFilter();
 	};
 
-	function collapseRenderedRows() {
+	function collapseRenderedRows(fromContinuous=false) {
 		installStyles();
-		ensureControls();
+		ensureControls(fromContinuous);
 
 		const groups = new Map();
 		getProposalRows().forEach(row => {
@@ -258,7 +364,7 @@
 
 	window.renderProposalResults = function(results, fromContinuous=false) {
 		originalRenderProposalResults(results, fromContinuous);
-		collapseRenderedRows();
+		collapseRenderedRows(fromContinuous);
 	};
 
 	// The collapsed UI represents a whole group, so the group-wide selector is

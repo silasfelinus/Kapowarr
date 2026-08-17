@@ -1,13 +1,15 @@
 const reader = {
 	stage: document.querySelector('#reader-stage'),
 	page: document.querySelector('#reader-page'),
+	document: document.querySelector('#reader-document'),
 	status: document.querySelector('#reader-status'),
 	title: document.querySelector('#reader-title'),
 	page_count: document.querySelector('#reader-page-count'),
 	back: document.querySelector('#reader-back'),
 	previous: document.querySelector('#reader-prev'),
 	next: document.querySelector('#reader-next'),
-	fit: document.querySelector('#reader-fit')
+	fit: document.querySelector('#reader-fit'),
+	fit_label: document.querySelector('.reader-fit-label')
 };
 
 const url_base = document.querySelector('#url_base').dataset.value;
@@ -61,25 +63,47 @@ function readerPageUrl(index) {
 	return `${url_base}/api/reader/issues/${issue_id}/pages/${index}?api_key=${encodeURIComponent(api_key)}`;
 };
 
+function readerDocumentUrl() {
+	return `${url_base}/api/reader/issues/${issue_id}/document?api_key=${encodeURIComponent(api_key)}`;
+};
+
 function updateControls() {
-	reader.previous.disabled = page_index <= 0;
-	reader.next.disabled = !manifest || page_index >= manifest.page_count - 1;
-	reader.page_count.innerText = manifest
-		? `${page_index + 1} / ${manifest.page_count}`
-		: '';
+	const pages_mode = manifest && manifest.reader_mode === 'pages';
+	reader.previous.disabled = !pages_mode || page_index <= 0;
+	reader.next.disabled = !pages_mode || page_index >= manifest.page_count - 1;
+	reader.page_count.innerText = !manifest
+		? ''
+		: manifest.reader_mode === 'pdf'
+			? 'PDF'
+			: manifest.page_count
+				? `${page_index + 1} / ${manifest.page_count}`
+				: '';
 };
 
 function preloadNextPage() {
-	if (!manifest || page_index >= manifest.page_count - 1)
+	if (
+		!manifest
+		|| manifest.reader_mode !== 'pages'
+		|| page_index >= manifest.page_count - 1
+	)
 		return;
 	const preload = new Image();
 	preload.src = readerPageUrl(page_index + 1);
 };
 
 function showPage(index) {
-	if (!manifest || manifest.page_count === 0)
+	if (
+		!manifest
+		|| manifest.reader_mode !== 'pages'
+		|| manifest.page_count === 0
+	)
 		return;
 	page_index = Math.max(0, Math.min(index, manifest.page_count - 1));
+	reader.stage.classList.remove('pdf-mode');
+	reader.document.classList.add('hidden');
+	reader.fit_label.classList.remove('hidden');
+	reader.previous.classList.remove('hidden');
+	reader.next.classList.remove('hidden');
 	reader.status.innerText = 'Turning the page…';
 	reader.status.classList.remove('hidden');
 	reader.page.classList.add('hidden');
@@ -98,13 +122,29 @@ function showPage(index) {
 	reader.page.src = readerPageUrl(page_index);
 };
 
+function showPdf() {
+	reader.stage.classList.add('pdf-mode');
+	reader.page.classList.add('hidden');
+	reader.status.classList.add('hidden');
+	reader.previous.classList.add('hidden');
+	reader.next.classList.add('hidden');
+	reader.fit_label.classList.add('hidden');
+	reader.document.classList.remove('hidden');
+	reader.document.src = readerDocumentUrl();
+	updateControls();
+};
+
 function previousPage() {
-	if (page_index > 0)
+	if (manifest && manifest.reader_mode === 'pages' && page_index > 0)
 		showPage(page_index - 1);
 };
 
 function nextPage() {
-	if (manifest && page_index < manifest.page_count - 1)
+	if (
+		manifest
+		&& manifest.reader_mode === 'pages'
+		&& page_index < manifest.page_count - 1
+	)
 		showPage(page_index + 1);
 };
 
@@ -134,9 +174,14 @@ async function loadReader() {
 
 		if (!manifest.readable) {
 			reader.status.innerText =
-				'This issue has no pages the built-in reader can open yet. '
-				+ 'CBZ/ZIP and loose images are supported; CBR/RAR and PDF are next.';
+				'This issue has no content the built-in reader can open yet. '
+				+ 'CBZ/ZIP, loose images, and PDF are supported; CBR/RAR is next.';
 			updateControls();
+			return;
+		};
+
+		if (manifest.reader_mode === 'pdf') {
+			showPdf();
 			return;
 		};
 

@@ -136,6 +136,14 @@ class Constants:
     TORRENT_TAG = "kapowarr"
     "The tag to give to downloads at external clients"
 
+    USENET_CATEGORY = "kapowarr"
+    """
+    The SABnzbd category downloads are submitted under. SABnzbd has no
+    per-job "download to this path" parameter (unlike the torrent
+    clients' `target_folder`), so this category's folder must be mapped,
+    in SABnzbd's own Config > Categories, to Kapowarr's download folder.
+    """
+
 
 class FileConstants:
     IMAGE_EXTENSIONS = (
@@ -461,6 +469,7 @@ class DownloadType(BaseEnum):
 
     DIRECT = 1
     TORRENT = 2
+    USENET = 3
 
 
 class GCDownloadSource(BaseEnum):

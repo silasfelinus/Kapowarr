@@ -1,7 +1,12 @@
 (() => {
 	let matchedOnly = false;
 	let recheckInProgress = false;
+	let manualReviewScanInFlight = false;
+	let manualReviewScanDismissed = false;
+
 	const originalRenderProposalResults = window.renderProposalResults;
+	const originalShowImportError = window.showImportError;
+	const originalLoadProposal = window.loadProposal;
 
 	if (typeof originalRenderProposalResults !== 'function')
 		return;
@@ -17,6 +22,10 @@
 	const rowHasMatch = row => Boolean(
 		row.querySelector('a')?.innerText.trim()
 	);
+
+	const getRecheckButtons = () => [
+		...document.querySelectorAll('[data-recheck-review-holds]')
+	];
 
 	function installStyles() {
 		if (document.querySelector('#library-import-review-ui-style'))
@@ -64,8 +73,32 @@
 			.search-results td:nth-child(3) {
 				display: none;
 			}
+			#import-background-controls {
+				max-width: 50rem;
+				width: min(50rem, 100%);
+				text-align: center;
+			}
+			#import-background-controls > p {
+				margin: .25rem 0;
+			}
+			#review-scan-escape {
+				text-align: center;
+			}
+			#review-scan-escape p {
+				max-width: 42rem;
+				margin: 0 auto .5rem;
+				font-size: .9rem;
+			}
 		`;
 		document.head.appendChild(style);
+	};
+
+	function setRecheckButtonsState(disabled, label=null) {
+		getRecheckButtons().forEach(button => {
+			button.disabled = disabled;
+			if (label !== null)
+				button.innerText = label;
+		});
 	};
 
 	function waitForTaskCompletion(apiKey, taskId) {
@@ -88,8 +121,15 @@
 		});
 	};
 
+	function findActiveContinuousTask(apiKey) {
+		return fetchAPI('/system/tasks', apiKey)
+		.then(json => json.result.find(
+			task => task.action === 'continuous_library_import'
+		) || null);
+	};
+
 	function resetAndRecheckContinuousReview() {
-		if (recheckInProgress)
+		if (recheckInProgress || manualReviewScanInFlight)
 			return;
 
 		const confirmed = window.confirm(
@@ -99,11 +139,7 @@
 			return;
 
 		recheckInProgress = true;
-		const button = document.querySelector('#recheck-review-holds-button');
-		if (button) {
-			button.disabled = true;
-			button.innerText = 'Resetting...';
-		};
+		setRecheckButtonsState(true, 'Resetting...');
 
 		usingApiKey()
 		.then(apiKey => {
@@ -114,20 +150,34 @@
 
 			continuousReviewOpen = false;
 			continuousPanelDismissed = false;
-			hide([LIEls.views.list], [LIEls.views.continuous]);
-			LIEls.continuous.status.innerText = continuousTaskId === null
-				? 'Rebuilding the import snapshot from the current library...'
-				: 'Stopping at the current folder boundary, then rebuilding the import snapshot...';
+			hide(
+				[
+					LIEls.views.start,
+					LIEls.views.list,
+					LIEls.views.loading,
+					LIEls.views.error,
+					LIEls.views.no_result,
+					LIEls.views.no_cv
+				],
+				[LIEls.views.continuous]
+			);
+			LIEls.continuous.status.innerText =
+				'Rebuilding the import snapshot from the current library...';
 
-			const stopCurrent = continuousTaskId === null
-				? Promise.resolve()
-				: sendAPI(
-					'DELETE',
-					`/system/tasks/${continuousTaskId}`,
-					apiKey
-				);
-
-			return stopCurrent
+			return findActiveContinuousTask(apiKey)
+			.then(activeTask => {
+				if (activeTask !== null) {
+					continuousTaskId = activeTask.id;
+					LIEls.continuous.status.innerText =
+						'Stopping at the current folder boundary, then rebuilding the import snapshot...';
+					return sendAPI(
+						'DELETE',
+						`/system/tasks/${activeTask.id}`,
+						apiKey
+					);
+				};
+				return null;
+			})
 			.then(() => sendAPI(
 				'POST',
 				'/system/tasks',
@@ -152,11 +202,115 @@
 		.catch(error => showImportError(error))
 		.finally(() => {
 			recheckInProgress = false;
-			if (button) {
-				button.disabled = false;
-				button.innerText = 'Reset & Re-evaluate All Holds';
-			};
+			setRecheckButtonsState(false, 'Reset & Re-evaluate All Holds');
+			updatePrimaryControls();
 		});
+	};
+
+	function ensurePrimaryControls() {
+		installStyles();
+		const start = document.querySelector('#start-window');
+		const actions = document.querySelector('#start-window .import-mode-actions');
+		if (!start || !actions)
+			return;
+
+		if (!document.querySelector('#recheck-review-holds-start-button')) {
+			const reset = document.createElement('button');
+			reset.type = 'button';
+			reset.id = 'recheck-review-holds-start-button';
+			reset.dataset.recheckReviewHolds = 'true';
+			reset.innerText = 'Reset & Re-evaluate All Holds';
+			reset.title = 'Discard stale review decisions, rescan current unimported paths, and restart Continuous Auto-Import with the latest matcher.';
+			reset.onclick = resetAndRecheckContinuousReview;
+			actions.appendChild(reset);
+		};
+
+		if (!document.querySelector('#import-reset-note')) {
+			const note = document.createElement('p');
+			note.id = 'import-reset-note';
+			note.className = 'continuous-note';
+			note.innerText = 'Reset & Re-evaluate is for stale Review Holds after matcher improvements or filesystem moves. Imported comics stay imported.';
+			actions.after(note);
+		};
+
+		if (!document.querySelector('#import-background-controls')) {
+			const dock = document.createElement('div');
+			dock.id = 'import-background-controls';
+			dock.hidden = true;
+			dock.innerHTML = `
+				<p><strong>Continuous Auto-Import is running in the background.</strong></p>
+				<p id="import-background-status"></p>
+				<div class="action-container">
+					<button type="button" id="background-view-progress">View Progress</button>
+					<button type="button" id="background-review-holds">Review Holds</button>
+					<button type="button" id="background-stop-import">Stop Import</button>
+					<button type="button" data-recheck-review-holds>Reset & Re-evaluate All Holds</button>
+				</div>
+			`;
+			start.appendChild(dock);
+
+			dock.querySelector('#background-view-progress').onclick = () => {
+				continuousPanelDismissed = false;
+				continuousReviewOpen = false;
+				hide([LIEls.views.start, LIEls.views.loading, LIEls.views.list], [LIEls.views.continuous]);
+			};
+			dock.querySelector('#background-review-holds').onclick = () => {
+				usingApiKey().then(apiKey => openContinuousReview(apiKey));
+			};
+			dock.querySelector('#background-stop-import').onclick = () => {
+				usingApiKey().then(apiKey => stopContinuousImport(apiKey));
+			};
+			dock.querySelector('[data-recheck-review-holds]').onclick =
+				resetAndRecheckContinuousReview;
+		};
+
+		const loading = document.querySelector('#loading-window');
+		if (loading && !document.querySelector('#review-scan-escape')) {
+			const escape = document.createElement('div');
+			escape.id = 'review-scan-escape';
+			escape.hidden = true;
+			escape.innerHTML = `
+				<p>Review Scan is the older synchronous mode. You can return to the import options while it finishes, but starting another scan is held until this request settles.</p>
+				<button type="button">Back to Import Options</button>
+			`;
+			escape.querySelector('button').onclick = () => {
+				manualReviewScanDismissed = true;
+				hide([LIEls.views.loading], [LIEls.views.start]);
+				updatePrimaryControls();
+			};
+			loading.appendChild(escape);
+		};
+	};
+
+	function updatePrimaryControls() {
+		ensurePrimaryControls();
+		const startReset = document.querySelector('#recheck-review-holds-start-button');
+		const continuousStart = document.querySelector('#continuous-import-button');
+		const reviewStart = document.querySelector('#run-import-button');
+		const escape = document.querySelector('#review-scan-escape');
+		const dock = document.querySelector('#import-background-controls');
+		const dockStatus = document.querySelector('#import-background-status');
+
+		if (startReset)
+			startReset.disabled = recheckInProgress || manualReviewScanInFlight;
+		if (continuousStart)
+			continuousStart.disabled = manualReviewScanInFlight || recheckInProgress;
+		if (reviewStart)
+			reviewStart.disabled = manualReviewScanInFlight || recheckInProgress;
+		if (escape)
+			escape.hidden = !manualReviewScanInFlight;
+
+		if (dock) {
+			const showDock = continuousTaskId !== null && continuousPanelDismissed;
+			dock.hidden = !showDock;
+			if (showDock && dockStatus)
+				dockStatus.innerText = LIEls.continuous.status.innerText || 'Working through the longboxes...';
+			const review = dock.querySelector('#background-review-holds');
+			if (review) {
+				review.disabled = continuousReviewFolderCount === 0;
+				review.innerText = `Review Holds (${continuousReviewFolderCount})`;
+			};
+		};
 	};
 
 	function ensureControls(fromContinuous=false) {
@@ -175,7 +329,7 @@
 						<input type="checkbox" id="matched-only-input">
 						Show matched only
 					</label>
-					<button type="button" id="recheck-review-holds-button">
+					<button type="button" id="recheck-review-holds-button" data-recheck-review-holds>
 						Reset & Re-evaluate All Holds
 					</button>
 				</div>
@@ -363,13 +517,33 @@
 	};
 
 	window.renderProposalResults = function(results, fromContinuous=false) {
+		if (!fromContinuous && manualReviewScanInFlight) {
+			manualReviewScanInFlight = false;
+			const dismissed = manualReviewScanDismissed;
+			manualReviewScanDismissed = false;
+			updatePrimaryControls();
+			if (dismissed) {
+				hide([LIEls.views.loading], [LIEls.views.start]);
+				return;
+			};
+		};
+
 		originalRenderProposalResults(results, fromContinuous);
 		collapseRenderedRows(fromContinuous);
 	};
 
-	// The collapsed UI represents a whole group, so the group-wide selector is
-	// the only meaningful search action. Keep the existing callback, just make
-	// it look like the normal Select button.
+	window.showImportError = function(error) {
+		if (manualReviewScanInFlight) {
+			manualReviewScanInFlight = false;
+			const dismissed = manualReviewScanDismissed;
+			manualReviewScanDismissed = false;
+			updatePrimaryControls();
+			if (dismissed)
+				return Promise.resolve();
+		};
+		return originalShowImportError(error);
+	};
+
 	const searchResults = document.querySelector('.search-results');
 	if (searchResults) {
 		const relabelGroupSelect = () => {
@@ -383,9 +557,6 @@
 		);
 	};
 
-	// After a manual search selects a candidate for a previously unmatched
-	// group, make that group importable and selected without requiring a second
-	// checkbox click.
 	document.addEventListener('click', event => {
 		const groupSelect = event.target.closest('.search-results td:nth-child(4) button');
 		if (!groupSelect)
@@ -401,4 +572,17 @@
 
 		setTimeout(() => refreshGroupMatchState(groupNumber, true), 0);
 	}, true);
+
+	ensurePrimaryControls();
+	usingApiKey().then(apiKey => {
+		if (typeof originalLoadProposal === 'function')
+			LIEls.buttons.run.onclick = () => {
+				manualReviewScanInFlight = true;
+				manualReviewScanDismissed = false;
+				updatePrimaryControls();
+				originalLoadProposal(apiKey);
+			};
+	});
+	setInterval(updatePrimaryControls, 1000);
+	updatePrimaryControls();
 })();

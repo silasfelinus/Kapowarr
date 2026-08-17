@@ -10,7 +10,7 @@
 
 # Kapowarr
 
-> **Personal fork:** This repository is Silas Felinus's fork of [Casvt/Kapowarr](https://github.com/Casvt/Kapowarr). It keeps the upstream GPL-3.0 license and attribution while adding optional personality/quality-of-life changes and planned Usenet/NZB support. Fork container builds are published as `ghcr.io/silasfelinus/kapowarr:latest`; upstream remains the original project and maintainer.
+> **Personal fork:** This repository is Silas Felinus's fork of [Casvt/Kapowarr](https://github.com/Casvt/Kapowarr). It keeps the upstream GPL-3.0 license and attribution while adding optional personality/quality-of-life changes and planned Usenet/NZB support. Fork container builds are published as `ghcr.io/silasfelinus/kapowarr:latest`; upstream remains the original project and maintainer. See [`FORK_MAINTENANCE.md`](./FORK_MAINTENANCE.md) for how this fork tracks upstream.
 
 Kapowarr is a software to build and manage a comic book library, fitting in the *arr suite of software.
 

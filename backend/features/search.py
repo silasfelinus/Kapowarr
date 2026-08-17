@@ -12,6 +12,7 @@ from backend.base.helpers import (AsyncSession, check_overlapping_issues,
                                   get_subclasses, normalise_query_string)
 from backend.base.logging import LOGGER
 from backend.implementations.getcomics import search_getcomics
+from backend.implementations.indexers import Indexers, search_indexer
 from backend.implementations.matching import check_search_result_match
 from backend.implementations.volumes import Volume
 
@@ -138,6 +139,19 @@ def _rank_search_result(
 class SearchGetComics(SearchSource):
     async def search(self, session: AsyncSession) -> List[SearchResultData]:
         return await search_getcomics(session, self.query)
+
+
+class SearchIndexers(SearchSource):
+    async def search(self, session: AsyncSession) -> List[SearchResultData]:
+        indexers = Indexers.get_enabled()
+        if not indexers:
+            return []
+
+        responses = await gather(*(
+            search_indexer(session, indexer, self.query)
+            for indexer in indexers
+        ))
+        return [result for response in responses for result in response]
 
 
 async def search_multiple_queries(*queries: str) -> List[SearchResultData]:

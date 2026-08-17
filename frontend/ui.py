@@ -127,6 +127,11 @@ def ui_notifications():
     return render('settings_notifications.html')
 
 
+@ui.route('/settings/indexers', methods=methods)
+def ui_indexers():
+    return render('settings_indexers.html')
+
+
 @ui.route('/settings/metadata', methods=methods)
 def ui_metadata():
     return render('settings_metadata.html')

@@ -517,6 +517,8 @@ class DownloadSource(BaseEnum):
     "A direct download link straight from their own servers"
     GETCOMICS_TORRENT = "GetComics (torrent)"
     "A torrent magnet link directly on the webpage"
+    USENET_INDEXER = "Usenet indexer"
+    "An NZB release found on a configured Newznab-compatible indexer"
 
 
 class DownloadState(BaseEnum):

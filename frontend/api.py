@@ -39,6 +39,7 @@ from backend.implementations.credentials import Credentials
 from backend.implementations.external_clients import ExternalClients
 from backend.implementations.file_matching import (get_file_matching,
                                                    set_file_matching)
+from backend.implementations.indexers import Indexers
 from backend.implementations.naming import (generate_volume_folder_name,
                                             preview_mass_rename)
 from backend.implementations.notifications import Notifications
@@ -1466,6 +1467,60 @@ def api_notification(id: int):
 
     elif request.method == 'DELETE':
         service.delete()
+        return return_api({})
+
+
+# =====================
+# Indexers
+# =====================
+@api.route('/indexers', methods=['GET', 'POST'])
+@error_handler
+@auth
+def api_indexers():
+    if request.method == 'GET':
+        result = Indexers.get_all()
+        return return_api(result)
+
+    elif request.method == 'POST':
+        data: dict = request.get_json()
+        result = Indexers.add(
+            data.get('title'),
+            data.get('base_url'),
+            data.get('api_key'),
+            data.get('enabled', True)
+        ).get_data()
+        return return_api(result, code=201)
+
+
+@api.route('/indexers/test', methods=['POST'])
+@error_handler
+@auth
+def api_indexers_test():
+    data: dict = request.get_json()
+    result = Indexers.test(
+        data.get('base_url'),
+        data.get('api_key')
+    )
+    return return_api({'success': result})
+
+
+@api.route('/indexers/<int:id>', methods=['GET', 'PUT', 'DELETE'])
+@error_handler
+@auth
+def api_indexer(id: int):
+    indexer = Indexers.get_one(id)
+
+    if request.method == 'GET':
+        result = indexer.get_data()
+        return return_api(result)
+
+    elif request.method == 'PUT':
+        data: dict = request.get_json()
+        indexer.update(data)
+        return return_api(indexer.get_data())
+
+    elif request.method == 'DELETE':
+        indexer.delete()
         return return_api({})
 
 

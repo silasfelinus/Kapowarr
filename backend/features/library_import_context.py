@@ -28,13 +28,15 @@ MatchMap = Dict[int, Dict[str, Any]]
 
 
 def _series_run_key(files: Dict[str, FilenameData]) -> Optional[Tuple[Hashable, ...]]:
-    """Return the filename dimensions that must agree for one issue run."""
+    """Return the filename dimensions that must agree for one regular issue run."""
     if not files:
         return None
 
     first = next(iter(files.values()))
-    if first.get('special_version') is not None:
+    if first.get('special_version') is not None or first.get('annual'):
         # Run context is intentionally limited to ordinary numbered issues.
+        # Annuals can legitimately live beside the main run but have their own
+        # numbering and ComicVine volume; leave them on the normal matcher path.
         return None
 
     series = str(first.get('series') or '').strip().lower()
@@ -44,7 +46,6 @@ def _series_run_key(files: Dict[str, FilenameData]) -> Optional[Tuple[Hashable, 
     return (
         series,
         first.get('volume_number'),
-        first.get('annual'),
     )
 
 
@@ -161,9 +162,9 @@ def apply_series_run_context(
 
     The same cached ComicVine search response is reused, so this adds no API
     traffic. A whole-run winner replaces subgroup suggestions only when the
-    files themselves form one conservative, non-overlapping issue sequence and
-    the normal continuous-import thresholds accept the combined evidence plus
-    the run-boundary signal.
+    files themselves form one conservative, non-overlapping regular issue
+    sequence and the normal continuous-import thresholds accept the combined
+    evidence plus the run-boundary signal. Annuals are deliberately excluded.
     """
     clusters: Dict[Tuple[Hashable, ...], List[int]] = defaultdict(list)
     for group_number, files in file_groups.items():

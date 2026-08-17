@@ -7,6 +7,7 @@
 	const originalRenderProposalResults = window.renderProposalResults;
 	const originalShowImportError = window.showImportError;
 	const originalLoadProposal = window.loadProposal;
+	const originalStartContinuousImport = window.startContinuousImport;
 
 	if (typeof originalRenderProposalResults !== 'function')
 		return;
@@ -128,6 +129,39 @@
 		) || null);
 	};
 
+	function restartContinuousAfterReset(apiKey) {
+		if (typeof originalStartContinuousImport !== 'function')
+			return Promise.reject(new Error(
+				'Continuous Library Import could not be restarted.'
+			));
+
+		originalStartContinuousImport(apiKey);
+		const startedAt = Date.now();
+		const timeoutMs = 15000;
+
+		return new Promise((resolve, reject) => {
+			const poll = () => findActiveContinuousTask(apiKey)
+			.then(task => {
+				if (task !== null) {
+					showContinuousTask(task);
+					pollContinuousTask(apiKey);
+					resolve(task);
+					return;
+				};
+
+				if (Date.now() - startedAt >= timeoutMs) {
+					reject(new Error(
+						'Continuous Library Import did not restart after the reset.'
+					));
+					return;
+				};
+				setTimeout(poll, 250);
+			})
+			.catch(reject);
+			poll();
+		});
+	};
+
 	function resetAndRecheckContinuousReview() {
 		if (recheckInProgress || manualReviewScanInFlight)
 			return;
@@ -163,6 +197,9 @@
 			);
 			LIEls.continuous.status.innerText =
 				'Rebuilding the import snapshot from the current library...';
+			LIEls.buttons.continuous_stop.disabled = true;
+			LIEls.buttons.continuous_review.disabled = true;
+			LIEls.buttons.continuous_back.disabled = true;
 
 			return findActiveContinuousTask(apiKey)
 			.then(activeTask => {
@@ -178,13 +215,18 @@
 				};
 				return null;
 			})
-			.then(() => sendAPI(
-				'POST',
-				'/system/tasks',
-				apiKey,
-				{},
-				{cmd: 'recheck_continuous_library_import'}
-			))
+			.then(() => {
+				continuousTaskId = null;
+				continuousWasRunning = false;
+				continuousStopRequested = false;
+				return sendAPI(
+					'POST',
+					'/system/tasks',
+					apiKey,
+					{},
+					{cmd: 'recheck_continuous_library_import'}
+				);
+			})
 			.then(response => response.json())
 			.then(json => waitForTaskCompletion(apiKey, json.result.id))
 			.then(() => {
@@ -196,12 +238,15 @@
 				continuousLastSnapshotAt = 0;
 				LIEls.buttons.continuous_review.innerText = 'Review Holds (0)';
 				LIEls.buttons.continuous_review.disabled = true;
-				startContinuousImport(apiKey);
+				LIEls.continuous.status.innerText =
+					'Reset complete. Restarting Continuous Auto-Import...';
+				return restartContinuousAfterReset(apiKey);
 			});
 		})
 		.catch(error => showImportError(error))
 		.finally(() => {
 			recheckInProgress = false;
+			LIEls.buttons.continuous_back.disabled = false;
 			setRecheckButtonsState(false, 'Reset & Re-evaluate All Holds');
 			updatePrimaryControls();
 		});

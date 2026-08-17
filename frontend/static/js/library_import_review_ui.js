@@ -291,12 +291,13 @@
 		const dock = document.querySelector('#import-background-controls');
 		const dockStatus = document.querySelector('#import-background-status');
 
+		const continuousActive = continuousTaskId !== null;
 		if (startReset)
 			startReset.disabled = recheckInProgress || manualReviewScanInFlight;
 		if (continuousStart)
-			continuousStart.disabled = manualReviewScanInFlight || recheckInProgress;
+			continuousStart.disabled = continuousActive || manualReviewScanInFlight || recheckInProgress;
 		if (reviewStart)
-			reviewStart.disabled = manualReviewScanInFlight || recheckInProgress;
+			reviewStart.disabled = continuousActive || manualReviewScanInFlight || recheckInProgress;
 		if (escape)
 			escape.hidden = !manualReviewScanInFlight;
 

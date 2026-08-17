@@ -5,6 +5,7 @@ from zipfile import ZipFile
 
 from backend.features.comic_reader import (
     build_pages_for_files,
+    find_pdf_file,
     is_reader_supported_file,
     list_archive_pages,
     natural_sort_key,
@@ -23,8 +24,9 @@ class ComicReaderTest(unittest.TestCase):
         self.assertTrue(is_reader_supported_file('/library/Issue 1.cbz'))
         self.assertTrue(is_reader_supported_file('/library/Issue 1.ZIP'))
         self.assertTrue(is_reader_supported_file('/library/001.webp'))
+        self.assertTrue(is_reader_supported_file('/library/Issue 1.pdf'))
+        self.assertTrue(is_reader_supported_file('/library/Issue 1.PDF'))
         self.assertFalse(is_reader_supported_file('/library/Issue 1.cbr'))
-        self.assertFalse(is_reader_supported_file('/library/Issue 1.pdf'))
 
     def test_archive_pages_ignore_metadata_and_sort_images(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -63,6 +65,26 @@ class ComicReaderTest(unittest.TestCase):
                 [page['member'] for page in pages[1:]],
                 ['001.jpg', '002.jpg']
             )
+
+    def test_pdf_is_document_not_image_page(self):
+        pages = build_pages_for_files([
+            {'id': 1, 'filepath': '/library/Issue 1.pdf', 'size': 50}
+        ])
+        self.assertEqual(pages, [])
+
+    def test_find_pdf_file_uses_natural_order_and_ignores_other_formats(self):
+        pdf = find_pdf_file([
+            {'id': 4, 'filepath': '/library/Issue 10.pdf', 'size': 10},
+            {'id': 3, 'filepath': '/library/Issue 2.PDF', 'size': 10},
+            {'id': 2, 'filepath': '/library/Issue 1.cbr', 'size': 10}
+        ])
+        self.assertIsNotNone(pdf)
+        self.assertEqual(pdf['id'], 3)
+
+    def test_find_pdf_file_returns_none_without_pdf(self):
+        self.assertIsNone(find_pdf_file([
+            {'id': 1, 'filepath': '/library/Issue 1.cbz', 'size': 10}
+        ]))
 
     def test_bad_zip_produces_no_pages(self):
         with tempfile.TemporaryDirectory() as tmp:

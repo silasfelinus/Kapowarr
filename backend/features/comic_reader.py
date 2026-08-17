@@ -16,7 +16,7 @@ from re import split
 from typing import Any, Dict, List
 from zipfile import BadZipFile, ZipFile
 
-from backend.base.definitions import FileConstants
+from backend.base.definitions import FileConstants, FileData
 from backend.base.logging import LOGGER
 from backend.internals.db_models import FilesDB
 
@@ -65,7 +65,7 @@ def list_archive_pages(filepath: str) -> List[str]:
     return pages
 
 
-def build_pages_for_files(files: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def build_pages_for_files(files: List[FileData]) -> List[Dict[str, Any]]:
     """Build ordered page descriptors for issue-linked files.
 
     Loose images become one page each. ZIP/CBZ files contribute each contained

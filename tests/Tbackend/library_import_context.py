@@ -1,25 +1,27 @@
 import unittest
+from unittest.mock import patch
 
 from backend.features.library_import_context import apply_series_run_context
+from backend.features.library_import_persistent import PersistentContinuousLibraryImport
 
 
 class series_run_import_context(unittest.TestCase):
     @staticmethod
-    def _file_data(year, issue_number):
+    def _file_data(year, issue_number, annual=False):
         return {
             'series': 'Penthouse Comix',
             'year': year,
             'volume_number': 1,
             'special_version': None,
-            'issue_number': float(issue_number),
-            'annual': False,
+            'issue_number': float(issue_number) if issue_number is not None else None,
+            'annual': annual,
         }
 
     @classmethod
-    def _group(cls, year, issues):
+    def _group(cls, year, issues, annual=False):
         return {
-            f'/library/Penthouse Comix ({year or 1994})/Penthouse Comix {issue:03d}.cbr':
-                cls._file_data(year, issue)
+            f'/library/Penthouse Comix/Penthouse Comix {issue:03d}.cbr':
+                cls._file_data(year, issue, annual=annual)
             for issue in issues
         }
 
@@ -131,7 +133,7 @@ class series_run_import_context(unittest.TestCase):
         }
 
         # Both candidates have the same title/year/volume and neither has the
-        # exact three-issue run size, so the combined evidence remains tied.
+        # exact three-issue run boundary, so the combined evidence remains tied.
         matches = apply_series_run_context(
             groups,
             original_matches,
@@ -145,6 +147,47 @@ class series_run_import_context(unittest.TestCase):
         )
 
         self.assertEqual(matches, original_matches)
+
+    def test_annuals_in_same_folder_never_use_regular_run_context(self):
+        groups = {
+            1: self._group(1994, (1, 2, 3)),
+            2: self._group(1995, (1, 2, 3), annual=True),
+            3: self._group(1996, (4, 5, 6)),
+        }
+        original_matches = {
+            1: {'id': None, 'review_reason': 'weak-score'},
+            2: {'id': 999, 'title': 'Penthouse Comix Annual', 'issue_count': 3, 'link': None},
+            3: {'id': None, 'review_reason': 'weak-score'},
+        }
+
+        matches = apply_series_run_context(
+            groups,
+            original_matches,
+            {'penthouse comix': [self._candidate(19793, 1994, 6, 'Penthouse Comics')]},
+            only_english=True,
+        )
+
+        self.assertEqual(matches[2], original_matches[2])
+
+
+class continuous_import_folder_scope(unittest.TestCase):
+    def test_parent_folder_processing_excludes_child_volume_files(self):
+        parent = '/library/Series'
+        parent_file = f'{parent}/Series 001.cbz'
+        child_file = f'{parent}/Volume 2/Series 001.cbz'
+        parent_data = series_run_import_context._file_data(1994, 1)
+        child_data = series_run_import_context._file_data(1997, 1)
+
+        with patch(
+            'backend.features.library_import_persistent._collect_unimported_files',
+            return_value=(
+                {parent_file: parent_data, child_file: child_data},
+                {parent_file: parent, child_file: f'{parent}/Volume 2'},
+            ),
+        ):
+            files = PersistentContinuousLibraryImport._load_folder_files(parent)
+
+        self.assertEqual(list(files), [parent_file])
 
 
 if __name__ == '__main__':

@@ -56,7 +56,7 @@ from backend.features.library_import_state import (
     mark_job_paused,
     mark_job_running,
 )
-from backend.features.tasks import task_library
+from backend.features.tasks import Task, task_library
 from backend.internals.server import TaskStatusEvent, WebSocket
 
 
@@ -452,8 +452,74 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
         return
 
 
+class RecheckContinuousLibraryImport(Task):
+    """Discard stale holds and build a fresh paused snapshot for re-evaluation."""
+
+    stop = False
+    message = ''
+    action = 'recheck_continuous_library_import'
+    display_title = 'Re-evaluate Library Import Holds'
+    category = ''
+
+    @property
+    def volume_id(self) -> None:
+        return None
+
+    @property
+    def issue_id(self) -> None:
+        return None
+
+    def __init__(self) -> None:
+        return
+
+    def run(self) -> None:
+        """Retire saved paused passes, rescan current paths, and stage a new pass.
+
+        This task is intentionally queued behind a running continuous importer.
+        The UI requests a cooperative stop first, then queues this task. By the
+        time it executes, the old job is paused at a folder boundary. Every old
+        paused pass is retired so a reset can never accidentally resume stale
+        review rows if the fresh filesystem scan later fails.
+        """
+        self.message = 'Discarding stale review decisions...'
+        WebSocket().emit(TaskStatusEvent(self.message))
+
+        paused_job = get_paused_job()
+        while paused_job is not None:
+            mark_job_complete(int(paused_job['id']))
+            paused_job = get_paused_job()
+
+        self.message = 'Scanning current unimported folders...'
+        WebSocket().emit(TaskStatusEvent(self.message))
+        all_files, file_to_folder = _collect_unimported_files()
+        folders: List[str] = []
+        seen_folders: Set[str] = set()
+        for filepath in all_files:
+            if is_library_import_artifact(filepath):
+                continue
+            folder = file_to_folder[filepath]
+            if folder in seen_folders:
+                continue
+            seen_folders.add(folder)
+            folders.append(folder)
+
+        job_id = create_job(folders)
+        # A reset should only begin because the user explicitly clicked it. Keep
+        # the new snapshot paused until the UI starts Continuous Auto-Import.
+        mark_job_paused(job_id)
+
+        self.message = (
+            f'Ready to re-evaluate {len(folders)} current unimported folders'
+        )
+        WebSocket().emit(TaskStatusEvent(self.message))
+        return
+
+
 # Replace the in-memory implementation registered by library_import.py. The API
 # continues using the same command/action string and needs no special route.
 task_library[PersistentContinuousLibraryImport.action] = (
     PersistentContinuousLibraryImport
+)
+task_library[RecheckContinuousLibraryImport.action] = (
+    RecheckContinuousLibraryImport
 )

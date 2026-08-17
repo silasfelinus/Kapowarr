@@ -26,6 +26,7 @@ from backend.features.library_import import (
     create_groups,
     import_library,
 )
+from backend.features.library_import_context import apply_series_run_context
 from backend.features.library_import_diagnostics import (
     append_review_postmortem,
     build_review_diagnostics,
@@ -312,14 +313,21 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
                             )
                         )
                         if search_groups:
-                            group_to_cv.update(asyncio_run(_match_file_groups(
+                            searched_matches = asyncio_run(_match_file_groups(
                                 search_groups,
                                 only_english=True,
                                 request_delay=CONTINUOUS_IMPORT_CV_DELAY,
                                 search_cache=self.search_cache,
                                 require_confident_match=True,
                                 request_clock=self.cv_request_clock
-                            )))
+                            ))
+                            searched_matches = apply_series_run_context(
+                                search_groups,
+                                searched_matches,
+                                self.search_cache,
+                                only_english=True,
+                            )
+                            group_to_cv.update(searched_matches)
 
                         matches: List[CVFileMapping] = []
                         review_items: List[Dict[str, Any]] = []

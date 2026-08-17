@@ -536,4 +536,11 @@ CREATE TABLE IF NOT EXISTS notification_services(
     events VARCHAR(255) NOT NULL DEFAULT "",
     enabled BOOL NOT NULL DEFAULT 1
 );
+CREATE TABLE IF NOT EXISTS indexers(
+    id INTEGER PRIMARY KEY,
+    title VARCHAR(255) NOT NULL,
+    base_url TEXT NOT NULL,
+    api_key VARCHAR(255) NOT NULL,
+    enabled BOOL NOT NULL DEFAULT 1
+);
 """

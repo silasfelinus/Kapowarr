@@ -676,6 +676,28 @@ class NotificationServiceNotFound(KapowarrException):
         }
 
 
+# region Indexers
+class IndexerNotFound(KapowarrException):
+    "Indexer with given ID not found"
+
+    def __init__(self, indexer_id: int) -> None:
+        self.indexer_id = indexer_id
+        LOGGER.warning(
+            f"Indexer with given ID not found: {indexer_id}"
+        )
+        return
+
+    @property
+    def api_response(self) -> ApiResponse:
+        return {
+            "code": 404,
+            "error": self.__class__.__name__,
+            "result": {
+                "indexer_id": self.indexer_id
+            }
+        }
+
+
 # region ComicVine
 class CVRateLimitReached(KapowarrException):
     "ComicVine API rate limit reached"

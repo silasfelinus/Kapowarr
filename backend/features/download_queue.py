@@ -33,6 +33,7 @@ from backend.implementations.download_clients import (BaseDirectDownload,
                                                       TorrentDownload)
 from backend.implementations.external_clients import ExternalClients
 from backend.implementations.getcomics import GetComicsPage
+from backend.implementations.indexers import Indexers, create_nzb_download
 from backend.implementations.volumes import Issue
 from backend.internals.db import get_db, iter_commit
 from backend.internals.server import (AddedToQueueEvent, QueueStatusEvent,
@@ -406,6 +407,8 @@ class DownloadHandler(metaclass=Singleton):
         """
         if link.startswith(Constants.GC_SITE_URL):
             return 'gc'
+        if Indexers.find_by_link(link) is not None:
+            return 'nzb'
         return None
 
     def link_in_queue(self, link: str) -> bool:
@@ -518,6 +521,30 @@ class DownloadHandler(metaclass=Singleton):
 
                 LOGGER.warning(
                     f'Unable to extract download links from source; fail_reason="{e.reason.value}"'
+                )
+                return [], e.reason
+
+        elif link_type == 'nzb':
+            try:
+                downloads = [await create_nzb_download(
+                    link, volume_id, issue_id, force_match
+                )]
+
+            except EnqueuingDownloadFailure as e:
+                if e.reason == EnqueuingDownloadFailureReason.LINK_BROKEN:
+                    add_to_blocklist(
+                        web_link=None,
+                        web_title=None,
+                        web_sub_title=None,
+                        download_link=link,
+                        source=None,
+                        volume_id=volume_id,
+                        issue_id=issue_id,
+                        reason=BlocklistReason.LINK_BROKEN
+                    )
+
+                LOGGER.warning(
+                    f'Unable to add indexer download; fail_reason="{e.reason.value}"'
                 )
                 return [], e.reason
 

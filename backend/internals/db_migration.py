@@ -1200,3 +1200,18 @@ def _migrate_add_notification_services():
     """)
 
     return
+
+
+@DatabaseMigrationHandler.register_handler(46)
+def _migrate_add_indexers():
+    get_db().executescript("""
+        CREATE TABLE IF NOT EXISTS indexers(
+            id INTEGER PRIMARY KEY,
+            title VARCHAR(255) NOT NULL,
+            base_url TEXT NOT NULL,
+            api_key VARCHAR(255) NOT NULL,
+            enabled BOOL NOT NULL DEFAULT 1
+        );
+    """)
+
+    return

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-"""Comic reader UI and authenticated page-delivery endpoints.
+"""Comic reader UI and authenticated page/document-delivery endpoints.
 
 Imported at the end of ``frontend.ui`` so these routes attach to Kapowarr's
 existing UI/API blueprints without widening the main API router.
@@ -13,7 +13,7 @@ from zipfile import BadZipFile, ZipFile
 
 from flask import send_file
 
-from backend.features.comic_reader import get_issue_pages
+from backend.features.comic_reader import get_issue_pages, get_issue_pdf
 from backend.implementations.volumes import Library
 from frontend.api import api, auth, error_handler, return_api
 from frontend.ui import render, ui
@@ -29,10 +29,18 @@ def ui_reader(issue_id: int):
 @error_handler
 @auth
 def api_reader_manifest(issue_id: int):
-    """Describe the readable pages linked to an issue."""
+    """Describe the readable content linked to an issue."""
     issue = Library.get_issue(issue_id).get_data()
     volume = Library.get_volume(issue.volume_id).get_data()
     pages = get_issue_pages(issue_id)
+    pdf = get_issue_pdf(issue_id)
+
+    if pages:
+        reader_mode = 'pages'
+    elif pdf:
+        reader_mode = 'pdf'
+    else:
+        reader_mode = 'unsupported'
 
     return return_api({
         'issue_id': issue.id,
@@ -41,7 +49,8 @@ def api_reader_manifest(issue_id: int):
         'issue_title': issue.title,
         'volume_title': volume.title,
         'page_count': len(pages),
-        'readable': bool(pages)
+        'reader_mode': reader_mode,
+        'readable': reader_mode != 'unsupported'
     })
 
 
@@ -78,3 +87,25 @@ def api_reader_page(issue_id: int, page_index: int):
 
     except (BadZipFile, FileNotFoundError, KeyError, OSError):
         return return_api({}, 'ReaderPageUnavailable', 404)
+
+
+@api.route('/reader/issues/<int:issue_id>/document', methods=['GET'])
+@error_handler
+@auth
+def api_reader_document(issue_id: int):
+    """Stream an issue-linked PDF through Kapowarr's authenticated reader."""
+    # Validate the issue and derive the filepath only from its database links.
+    Library.get_issue(issue_id)
+    pdf = get_issue_pdf(issue_id)
+    if pdf is None:
+        return return_api({}, 'ReaderDocumentNotFound', 404)
+
+    try:
+        return send_file(
+            pdf['filepath'],
+            mimetype='application/pdf',
+            as_attachment=False,
+            conditional=True
+        ), 200
+    except (FileNotFoundError, OSError):
+        return return_api({}, 'ReaderDocumentUnavailable', 404)

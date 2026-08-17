@@ -1,30 +1,31 @@
 # -*- coding: utf-8 -*-
 
-"""Comic reader UI and authenticated page-delivery endpoints."""
+"""Comic reader UI and authenticated page-delivery endpoints.
+
+Imported at the end of ``frontend.ui`` so these routes attach to Kapowarr's
+existing UI/API blueprints without widening the main API router.
+"""
 
 from __future__ import annotations
 
 from io import BytesIO
 from zipfile import BadZipFile, ZipFile
 
-from flask import Blueprint, send_file
+from flask import send_file
 
 from backend.features.comic_reader import get_issue_pages
 from backend.implementations.volumes import Library
-from frontend.api import auth, error_handler, return_api
-from frontend.ui import render
-
-reader_api = Blueprint('reader_api', __name__)
-reader_ui = Blueprint('reader_ui', __name__)
+from frontend.api import api, auth, error_handler, return_api
+from frontend.ui import render, ui
 
 
-@reader_ui.route('/reader/<int:issue_id>', methods=['GET'])
+@ui.route('/reader/<int:issue_id>', methods=['GET'])
 def ui_reader(issue_id: int):
     """Render the reader shell. Issue/page access remains API-authenticated."""
     return render('reader.html', issue_id=issue_id)
 
 
-@reader_api.route('/reader/issues/<int:issue_id>', methods=['GET'])
+@api.route('/reader/issues/<int:issue_id>', methods=['GET'])
 @error_handler
 @auth
 def api_reader_manifest(issue_id: int):
@@ -44,7 +45,7 @@ def api_reader_manifest(issue_id: int):
     })
 
 
-@reader_api.route(
+@api.route(
     '/reader/issues/<int:issue_id>/pages/<int:page_index>',
     methods=['GET']
 )

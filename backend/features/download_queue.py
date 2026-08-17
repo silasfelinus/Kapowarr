@@ -29,6 +29,7 @@ from backend.features.post_processing import (PostProcessor,
 from backend.implementations.blocklist import add_to_blocklist
 from backend.implementations.download_clients import (BaseDirectDownload,
                                                       MegaDownload,
+                                                      NZBDownload,
                                                       TorrentDownload)
 from backend.implementations.external_clients import ExternalClients
 from backend.implementations.getcomics import GetComicsPage
@@ -106,30 +107,30 @@ class DownloadHandler(metaclass=Singleton):
         self._process_queue()
         return
 
-    def __run_torrent_download(self, download: TorrentDownload) -> None:
-        """Start a torrent download. Intended to be run in a thread.
+    def __run_external_download(
+        self,
+        download: ExternalDownload,
+        post_processer: Type[PostProcessor]
+    ) -> None:
+        """Poll an external (torrent or Usenet) download until it finishes.
+        Intended to be run in a thread. `download.run()` has already been
+        called by the caller-specific wrapper below, which also picks the
+        right `post_processer` for the protocol.
 
         Args:
-            download (TorrentDownload): The torrent download to run.
+            download (ExternalDownload): The external download to run.
                 One of the entries in self.queue.
-        """
-        download.run()
 
+            post_processer (Type[PostProcessor]): The post-processor to
+                apply once the download reaches a terminal/importing state.
+        """
         ws = WebSocket()
         status_event = QueueStatusEvent(download)
-        seeding_handling = self.settings.sv.seeding_handling
 
-        if seeding_handling == SeedingHandling.COMPLETE:
-            post_processer = PostProcessorTorrentsComplete
-
-        elif seeding_handling == SeedingHandling.COPY:
-            post_processer = PostProcessorTorrentsCopy
-
-        else:
-            assert_never(seeding_handling)
-
-        # When seeding_handling is 'copy', keep track of whether we already
-        # copied the files
+        # Only meaningful for a torrent with seeding_handling == 'copy'
+        # (post_processer is PostProcessorTorrentsCopy in that case);
+        # a download whose state never becomes SEEDING_STATE (e.g. Usenet,
+        # which doesn't seed) never touches this branch.
         files_copied = False
 
         while True:
@@ -152,8 +153,7 @@ class DownloadHandler(metaclass=Singleton):
                 break
 
             elif (
-                seeding_handling == SeedingHandling.COPY
-                and download.state == DownloadState.SEEDING_STATE
+                download.state == DownloadState.SEEDING_STATE
                 and not files_copied
             ):
                 files_copied = True
@@ -176,6 +176,46 @@ class DownloadHandler(metaclass=Singleton):
                 )
 
         ws.emit(RemovedFromQueueEvent(download))
+        return
+
+    def __run_torrent_download(self, download: TorrentDownload) -> None:
+        """Start a torrent download. Intended to be run in a thread.
+
+        Args:
+            download (TorrentDownload): The torrent download to run.
+                One of the entries in self.queue.
+        """
+        download.run()
+
+        seeding_handling = self.settings.sv.seeding_handling
+        if seeding_handling == SeedingHandling.COMPLETE:
+            post_processer = PostProcessorTorrentsComplete
+
+        elif seeding_handling == SeedingHandling.COPY:
+            post_processer = PostProcessorTorrentsCopy
+
+        else:
+            assert_never(seeding_handling)
+
+        self.__run_external_download(download, post_processer)
+        return
+
+    def __run_usenet_download(self, download: NZBDownload) -> None:
+        """Start a Usenet (e.g. SABnzbd) download. Intended to be run in a
+        thread.
+
+        Usenet downloads never seed -- there's no `seeding_handling` choice
+        to make here, unlike torrents. `PostProcessorTorrentsComplete`'s
+        success actions (folder extraction + scan, same as a completed
+        torrent) apply unchanged: SABnzbd, like a torrent client, delivers
+        a download as a folder that needs extracting, not a single file.
+
+        Args:
+            download (NZBDownload): The Usenet download to run.
+                One of the entries in self.queue.
+        """
+        download.run()
+        self.__run_external_download(download, PostProcessorTorrentsComplete)
         return
 
     # region Queue Management
@@ -312,6 +352,15 @@ class DownloadHandler(metaclass=Singleton):
                     target=self.__run_torrent_download,
                     args=(download,),
                     name=f'TorrentDownloadThread-{download.id}'
+                )
+                download.download_thread = thread
+                thread.start()
+
+            elif isinstance(download, NZBDownload):
+                thread = Server().get_db_thread(
+                    target=self.__run_usenet_download,
+                    args=(download,),
+                    name=f'UsenetDownloadThread-{download.id}'
                 )
                 download.download_thread = thread
                 thread.start()

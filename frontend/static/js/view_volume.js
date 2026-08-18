@@ -18,6 +18,7 @@ const ViewEls = {
 		title: document.querySelector('.volume-title-monitored > h2'),
 		cover: document.querySelector('.volume-info > img'),
 		tags: document.querySelector('#volume-tags'),
+		download_status: document.querySelector('#volume-download-status'),
 		path: document.querySelector('#volume-path'),
 		description: document.querySelector('#volume-description'),
 		mobile_description: document.querySelector('#volume-description-mobile')
@@ -106,6 +107,23 @@ class IssueEntry {
             this.status.classList.add('error');
 		};
 	};
+};
+
+function setVolumeDownloadStatus() {
+	const element = ViewEls.vol_data.download_status,
+		download_status = getVolumeDownloadStatus(volume_id);
+
+	if (download_status === null) {
+		element.classList.add('hidden');
+		element.innerText = '';
+		delete element.dataset.status;
+		return;
+	};
+
+	element.innerText = download_status.text;
+	element.title = `${download_status.text}. View download queue.`;
+	element.dataset.status = download_status.status;
+	element.classList.remove('hidden');
 };
 
 function fillTable(issues, api_key) {
@@ -951,6 +969,12 @@ usingApiKey()
 	ViewEls.tool_bar.convert.onclick = e => showConvert(api_key);
 	ViewEls.tool_bar.manage.onclick = e => showManageIssues(api_key);
 	ViewEls.tool_bar.edit.onclick = e => showEdit(api_key);
+
+	document.addEventListener(
+		'kapowarr:download-queue-changed',
+		setVolumeDownloadStatus
+	);
+	setVolumeDownloadStatus();
 
 	document.querySelector('#submit-rename').onclick =
 	e => renameVolume(api_key, parseInt(e.target.dataset.issue_id) || null);

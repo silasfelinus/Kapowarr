@@ -31,7 +31,7 @@ function updateModeControls() {
 			'For You ranks recent releases using explainable title and franchise overlap with comics already in your library.';
 	} else {
 		DiscoverEls.mode_description.innerText =
-			'Recent releases from GetComics, cross-referenced against your library.';
+			'Recent releases from GetComics that are not already represented in your library.';
 	};
 };
 
@@ -57,16 +57,22 @@ function fillList(api_key) {
 
 		DiscoverEls.table.innerHTML = '';
 
+		// Discover is for finding things to add. The backend keeps library
+		// matches in the payload because recommendation scoring also uses that
+		// provenance, but the Recent browser should not spend rows telling us
+		// about volumes we already own.
+		const visible_items = json.result.items.filter(obj => obj.volume_id === null);
+
 		DiscoverEls.empty_message.classList.toggle(
-			'hidden', json.result.items.length > 0
+			'hidden', visible_items.length > 0
 		);
-		if (json.result.items.length === 0) {
+		if (visible_items.length === 0) {
 			DiscoverEls.empty_message.innerText = mode === 'for-you'
 				? 'No strong recommendations found in the recent release window yet.'
-				: 'No recent releases found on GetComics right now. Try refreshing, or check back later.';
+				: 'No new-to-your-library releases found on this GetComics page.';
 		};
 
-		json.result.items.forEach(obj => {
+		visible_items.forEach(obj => {
 			const entry = DiscoverEls.entry.cloneNode(true);
 			const series = obj.series || obj.display_title;
 
@@ -96,15 +102,9 @@ function fillList(api_key) {
 			};
 
 			const status_link = entry.querySelector('.status-column a');
-			if (obj.volume_id !== null) {
-				status_link.innerText = 'In Library';
-				status_link.href = `${url_base}/volumes/${obj.volume_id}`;
-				status_link.classList.add('in-library');
-			} else {
-				status_link.innerText = 'Search & Add';
-				status_link.href = `${url_base}/add?q=${encodeURIComponent(series)}`;
-				status_link.classList.add('not-added');
-			};
+			status_link.innerText = 'Search & Add';
+			status_link.href = `${url_base}/add?q=${encodeURIComponent(series)}`;
+			status_link.classList.add('not-added');
 
 			DiscoverEls.table.appendChild(entry);
 		});

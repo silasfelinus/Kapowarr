@@ -220,8 +220,8 @@ class discover_to_library_matching(unittest.TestCase):
         self.assertIsNone(matches[0]['volume_title'])
 
     def test_matches_unmonitored_volumes_too(self):
-        # Unlike the weekly pull list (monitored-only), Discover checks the
-        # whole library -- an unmonitored volume is still "already added".
+        # Discover checks the whole library. Even an unmonitored volume is
+        # already owned and therefore should later be suppressed by the feed.
         items = [_item('Batman')]
         volumes = [{'id': 1, 'title': 'Batman', 'monitored': False}]
 
@@ -267,10 +267,14 @@ class discover_sources_registry(unittest.TestCase):
 # get_discover_feed()
 # =====================
 class discover_feed(unittest.TestCase):
-    def test_combines_fetch_and_library_match(self):
+    def test_suppresses_items_already_in_library(self):
+        items = [
+            _item('Batman', link='http://x/batman'),
+            _item('Something New', link='http://x/new')
+        ]
         with patch.object(
             discover_feature_module, '_fetch_discover_page',
-            new=AsyncMock(return_value=([_item('Batman')], 4))
+            new=AsyncMock(return_value=(items, 4))
         ), patch.object(
             discover_feature_module.Library, 'get_public_volumes',
             return_value=[_volume(1, 'Batman')]
@@ -279,7 +283,8 @@ class discover_feed(unittest.TestCase):
 
         self.assertEqual(max_page, 4)
         self.assertEqual(len(matches), 1)
-        self.assertEqual(matches[0]['volume_id'], 1)
+        self.assertEqual(matches[0]['series'], 'Something New')
+        self.assertIsNone(matches[0]['volume_id'])
 
     def test_empty_fetch_returns_no_matches(self):
         with patch.object(

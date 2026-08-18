@@ -29,6 +29,36 @@ function decorateIndexer(indexer, protocol) {
 	};
 };
 
+function toggleIndexer(api_key, key, button) {
+	const indexer = indexers[key],
+		data = {
+			title: indexer.title,
+			base_url: indexer.base_url,
+			api_key: indexer.api_key,
+			enabled: !indexer.enabled
+		};
+
+	if (indexer.protocol === 'torznab')
+		data.categories = indexer.categories;
+
+	button.disabled = true;
+	sendAPI('PUT', `${indexer.endpoint}/${indexer.id}`, api_key, {}, data)
+	.then(response => response.json())
+	.then(json => {
+		indexers[key] = decorateIndexer(json.result, indexer.protocol);
+		loadIndexers(api_key);
+	})
+	.catch(async response => {
+		button.disabled = false;
+		let message = 'Failed to change indexer status';
+		try {
+			const json = await response.json();
+			message = json.error || message;
+		} catch (e) {};
+		button.title = message;
+	});
+};
+
 function loadIndexers(api_key) {
 	Promise.all([
 		fetchAPI('/indexers', api_key),
@@ -54,11 +84,29 @@ function loadIndexers(api_key) {
 			const key = indexerKey(indexer.protocol, indexer.id);
 			indexers[key] = indexer;
 
-			const entry = document.createElement('button');
-			entry.onclick = e => loadEditIndexer(api_key, key);
+			const entry = document.createElement('div');
+			entry.classList.add('indexer-entry');
+			entry.dataset.enabled = indexer.enabled;
+
+			const edit_button = document.createElement('button');
+			edit_button.classList.add('indexer-edit');
+			edit_button.onclick = e => loadEditIndexer(api_key, key);
 			const protocol = indexer.protocol === 'torznab' ? 'Torznab' : 'Newznab';
-			entry.innerText = `${indexer.title} · ${protocol} · P${indexer.priority}`
-				+ (indexer.enabled ? '' : ' (disabled)');
+			edit_button.innerText =
+				`${indexer.title} · ${protocol} · P${indexer.priority}`;
+			edit_button.title = `Edit ${indexer.title}`;
+
+			const toggle_button = document.createElement('button');
+			toggle_button.classList.add('indexer-toggle');
+			toggle_button.innerText = indexer.enabled ? 'Enabled' : 'Disabled';
+			toggle_button.title = indexer.enabled
+				? `Disable ${indexer.title}`
+				: `Enable ${indexer.title}`;
+			toggle_button.setAttribute('aria-pressed', indexer.enabled);
+			toggle_button.onclick =
+				e => toggleIndexer(api_key, key, toggle_button);
+
+			entry.append(edit_button, toggle_button);
 			table.appendChild(entry);
 		});
 	});

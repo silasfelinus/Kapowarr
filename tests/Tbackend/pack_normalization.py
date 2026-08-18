@@ -7,13 +7,12 @@ from zipfile import ZipFile
 
 from backend.base.definitions import FileConstants
 from backend.base.files import list_files
+from backend.features import post_processing as pp
 from backend.features.pack_normalization import (
     archive_contains_complete_issues,
     issue_number_overlaps_missing,
     normalize_downloaded_range_pack,
 )
-from backend.features.post_processing import PostProcessor, add_file_to_database
-from backend.features.pack_normalization import normalize_downloaded_range_pack as normalize_action
 
 
 class PackNormalizationTest(unittest.TestCase):
@@ -102,12 +101,22 @@ class PackNormalizationTest(unittest.TestCase):
             )
             self.assertTrue(download._normalized_range_pack)
 
-    def test_direct_postprocessor_normalizes_before_scanning(self):
-        actions = PostProcessor.actions_success
-        self.assertLess(
-            actions.index(normalize_action),
-            actions.index(add_file_to_database)
-        )
+    def test_direct_registration_normalizes_before_scanning(self):
+        events = []
+        download = SimpleNamespace(volume_id=8, files=['/library/pack.zip'])
+
+        with patch.object(
+            pp,
+            'normalize_downloaded_range_pack',
+            side_effect=lambda _: events.append('normalize') or False
+        ), patch.object(
+            pp,
+            'scan_files',
+            side_effect=lambda *args, **kwargs: events.append('scan')
+        ):
+            pp.add_file_to_database(download)
+
+        self.assertEqual(events, ['normalize', 'scan'])
 
 
 if __name__ == '__main__':

@@ -5,8 +5,8 @@
 from flask import request
 
 from backend.base.custom_exceptions import InvalidKeyValue
-from backend.features.wanted import (DEFAULT_WANTED_LIMIT, MAX_WANTED_LIMIT,
-                                     get_wanted_issues)
+from backend.features.wanted import (DEFAULT_WANTED_LIMIT,
+                                     MAX_WANTED_LIMIT, get_wanted_issues)
 from frontend.api import api, auth, error_handler, return_api
 from frontend.ui import render, ui
 

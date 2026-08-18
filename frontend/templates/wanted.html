@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% from "base.html" import icon_button, page_turner, window %}
+{% block title %}Wanted{% endblock %}
+{% block css %}
+	<link rel="stylesheet" href="{{ url_for('static', filename='css/window.css') }}">
+	<link rel="stylesheet" href="{{ url_for('static', filename='css/wanted.css') }}">
+{% endblock %}
+{% block js %}
+	<script src="{{ url_for('static', filename='js/window.js') }}" defer></script>
+	<script src="{{ url_for('static', filename='js/wanted.js') }}" defer></script>
+{% endblock %}
+
+{% block pre_build_rows %}
+<tr class="wanted-entry" data-issue_id="" data-volume_id="">
+	<td class="select-column">
+		<input type="checkbox" aria-label="Select issue">
+	</td>
+	<td class="volume-column">
+		<a></a>
+	</td>
+	<td class="issue-column"></td>
+	<td class="title-column"></td>
+	<td class="publisher-column"></td>
+	<td class="date-column"></td>
+	<td class="action-column">
+		<button class="search-entry-button" title="Search for this issue">
+			<img src="{{ url_for('static', filename='img/search.svg') }}" alt="">
+		</button>
+		<button class="import-entry-button" title="Manually import a file for this issue">
+			<img src="{{ url_for('static', filename='img/files.svg') }}" alt="">
+		</button>
+	</td>
+</tr>
+{% endblock %}
+
+{% block windows %}
+	{% set manual_import_content %}
+		<form id="manual-import-form">
+			<table class="fold-table">
+				<tr>
+					<th><label for="mi-volume-input">Volume ID</label></th>
+					<td>
+						<input type="number" id="mi-volume-input" min="1" required>
+					</td>
+				</tr>
+				<tr>
+					<th><label for="mi-issue-input">Issue ID</label></th>
+					<td>
+						<input type="number" id="mi-issue-input" min="1">
+						<p>Optional. Leave empty to match files by filename, like a normal library scan. Set it to force every file below onto that one issue.</p>
+					</td>
+				</tr>
+				<tr>
+					<th><label for="mi-filepaths-input">File(s) to import</label></th>
+					<td>
+						<textarea id="mi-filepaths-input" rows="6" placeholder="/path/to/downloaded/issue.cbz&#10;One absolute filepath per line" required></textarea>
+						<p>Files already reachable by the Kapowarr server (e.g. downloaded outside Kapowarr). They will be moved into the volume's folder and matched the same way library import matches files.</p>
+					</td>
+				</tr>
+			</table>
+			<p id="manual-import-error" class="error hidden"></p>
+			<div id="manual-import-results" class="hidden">
+				<h3>Imported</h3>
+				<ul id="manual-import-imported"></ul>
+				<h3>Skipped</h3>
+				<ul id="manual-import-skipped"></ul>
+			</div>
+		</form>
+	{% endset %}
+
+	{% set manual_import_submit %}
+		<button type="submit" form="manual-import-form" id="manual-import-submit">Import</button>
+	{% endset %}
+
+	{{ window(
+		False,
+		"manual-import-window",
+		"Manual Import",
+		manual_import_content,
+		manual_import_submit
+	) }}
+{% endblock windows %}
+
+{% block main %}
+<main>
+	<section class="tool-bar-container" aria-label="Tool bar">
+		<div class="tool-bar">
+			{{ icon_button("refresh-button", "Refresh the list", "refresh.svg", "Refresh") }}
+			{{ icon_button("bulk-search-button", "Search for all selected issues", "search.svg", "Search Selected") }}
+			{{ icon_button("manual-import-button", "Manually import a file into a volume", "files.svg", "Manual Import") }}
+		</div>
+		<div class="tool-bar">
+			<form id="wanted-search-form" aria-label="Search wanted issues">
+				<input type="text" id="wanted-search-input" placeholder="Search volume, issue or publisher">
+			</form>
+		</div>
+	</section>
+	<div class="main-window">
+		<p id="wanted-selected-count" aria-live="polite"></p>
+		<p id="wanted-empty-message" class="hidden">
+			Nothing wanted. Every monitored issue in a monitored volume
+			already has a file, or nothing is monitored yet.
+		</p>
+		<div id="wanted-page-turner">
+			{{ page_turner() }}
+		</div>
+		<div class="table-container icon-text-color">
+			<table>
+				<thead>
+					<tr>
+						<th class="select-column">
+							<input type="checkbox" id="wanted-selectall-input" aria-label="Select all issues on this page">
+						</th>
+						<th class="volume-column">Volume</th>
+						<th class="issue-column">Issue</th>
+						<th class="title-column">Title</th>
+						<th class="publisher-column">Publisher</th>
+						<th class="date-column">Release Date</th>
+						<th class="action-column">Actions</th>
+					</tr>
+				</thead>
+				<tbody id="wanted-list"></tbody>
+			</table>
+		</div>
+	</div>
+</main>
+{% endblock main %}

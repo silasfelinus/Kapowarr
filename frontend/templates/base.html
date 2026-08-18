@@ -98,6 +98,10 @@
 						class="{% if request.path == '/activity/queue' %}current-nav{% endif %}"
 					>Queue</a>
 					<a
+						href="{{url_base}}/activity/wanted"
+						class="{% if request.path == '/activity/wanted' %}current-nav{% endif %}"
+					>Wanted</a>
+					<a
 						href="{{url_base}}/activity/history"
 						class="{% if request.path == '/activity/history' %}current-nav{% endif %}"
 					>History</a>

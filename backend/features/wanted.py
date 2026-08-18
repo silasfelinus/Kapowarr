@@ -9,6 +9,7 @@ are monitored and no library file is linked to it.
 
 from typing import Any, Dict, Union
 
+from backend.base.definitions import WantedIssuesResponse
 from backend.internals.db import get_db
 
 DEFAULT_WANTED_LIMIT = 100
@@ -19,7 +20,7 @@ def get_wanted_issues(
     query: Union[str, None] = None,
     offset: int = 0,
     limit: int = DEFAULT_WANTED_LIMIT
-) -> Dict[str, Any]:
+) -> WantedIssuesResponse:
     """Return a paged global view of monitored issues missing a file."""
     search = (query or '').strip().lower()
     params: Dict[str, Any] = {

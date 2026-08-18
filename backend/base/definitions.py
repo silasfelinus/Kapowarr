@@ -739,6 +739,48 @@ class CVFileMapping(TypedDict):
     filepath: str
 
 
+class WantedIssueData(TypedDict):
+    """One row of the global Wanted/Missing workbench (see
+    `backend.features.wanted`): a monitored issue, in a monitored volume,
+    that has no library file linked to it yet.
+    """
+    issue_id: int
+    volume_id: int
+    volume_title: str
+    volume_year: Union[int, None]
+    publisher: Union[str, None]
+    issue_number: str
+    calculated_issue_number: float
+    issue_title: Union[str, None]
+    issue_date: Union[str, None]
+
+
+class WantedIssuesResponse(TypedDict):
+    """A paged, optionally-filtered page of `WantedIssueData` rows."""
+    items: List[WantedIssueData]
+    total: int
+    offset: int
+    limit: int
+    query: str
+
+
+class ManualImportFileResult(TypedDict):
+    """The outcome of trying to manually import one file (see
+    `backend.features.manual_import`). `reason` and `moved_to` are `None`
+    unless relevant to `status`.
+    """
+    filepath: str
+    status: str
+    "One of 'imported' or 'skipped'"
+    reason: Union[str, None]
+    moved_to: Union[str, None]
+
+
+class ManualImportResult(TypedDict):
+    imported: List[ManualImportFileResult]
+    skipped: List[ManualImportFileResult]
+
+
 class DownloadGroup(TypedDict):
     web_sub_title: str
     info: FilenameData

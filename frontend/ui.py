@@ -154,4 +154,5 @@ import frontend.torznab  # noqa: E402,F401  # isort: skip
 import frontend.reading_lists  # noqa: E402,F401  # isort: skip
 import frontend.discover  # noqa: E402,F401  # isort: skip
 import frontend.wanted  # noqa: E402,F401  # isort: skip
+import frontend.manual_import  # noqa: E402,F401  # isort: skip
 import frontend.acquisition_preferences  # noqa: E402,F401  # isort: skip

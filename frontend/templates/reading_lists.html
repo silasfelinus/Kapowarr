@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% from "base.html" import icon_button %}
+{% block title %}Reading Lists{% endblock %}
+{% block css %}
+	<link rel="stylesheet" href="{{ url_for('static', filename='css/reading_lists.css') }}">
+{% endblock %}
+{% block js %}
+	<script src="{{ url_for('static', filename='js/reading_lists.js') }}" defer></script>
+{% endblock %}
+
+{% block pre_build_rows %}
+<tr class="reading-entry">
+	<td class="position-column"></td>
+	<td class="comic-column"><a></a></td>
+	<td class="status-column"></td>
+</tr>
+{% endblock %}
+
+{% block main %}
+<main>
+	<section class="tool-bar-container" aria-label="Reading list tools">
+		<div class="tool-bar">
+			{{ icon_button("import-cbl-button", "Import a ComicRack CBL reading list", "files.svg", "Import CBL") }}
+			{{ icon_button("search-missing-button", "Search all resolved missing issues", "search.svg", "Search Missing") }}
+			{{ icon_button("export-cbl-button", "Export the selected list as CBL", "download.svg", "Export CBL") }}
+			{{ icon_button("delete-list-button", "Delete the selected reading list", "delete.svg", "Delete") }}
+			<input id="cbl-file-input" type="file" accept=".cbl,application/xml,text/xml" class="hidden">
+		</div>
+	</section>
+
+	<div class="main-window reading-lists-layout">
+		<aside class="reading-list-picker">
+			<h2>Story Arcs &amp; Reading Lists</h2>
+			<p class="reading-list-hint">CBL order is preserved. Unmatched books stay visible so missing pieces do not vanish.</p>
+			<div id="reading-list-buttons"></div>
+			<p id="reading-list-empty" class="hidden">No reading lists yet. Import a .cbl file to get started.</p>
+		</aside>
+
+		<section class="reading-list-detail">
+			<div id="reading-list-placeholder">
+				<h2>Pick a reading list</h2>
+				<p>Imported arcs can span as many volumes as they please. Comics contain multiverses; the database can cope.</p>
+			</div>
+			<div id="reading-list-content" class="hidden">
+				<h2 id="reading-list-title"></h2>
+				<p id="reading-list-summary"></p>
+				<p id="reading-list-action-message" class="hidden"></p>
+				<div class="table-container icon-text-color">
+					<table>
+						<thead>
+							<tr>
+								<th class="position-column">#</th>
+								<th class="comic-column">Comic</th>
+								<th class="status-column">Status</th>
+							</tr>
+						</thead>
+						<tbody id="reading-list-entries"></tbody>
+					</table>
+				</div>
+			</div>
+		</section>
+	</div>
+</main>
+{% endblock main %}

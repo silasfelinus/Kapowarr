@@ -3,6 +3,7 @@
 from re import IGNORECASE, compile
 from time import time
 from typing import Any, Dict, List, Union
+from urllib.parse import parse_qs, urlsplit
 
 from requests.exceptions import RequestException
 
@@ -56,20 +57,6 @@ class qBittorrent(BaseExternalClient):
         username: Union[str, None],
         password: Union[str, None]
     ) -> Session:
-        """Login into qBittorrent client.
-
-        Args:
-            base_url (str): Base URL of instance.
-            username (Union[str, None]): Username to access client, if set.
-            password (Union[str, None]): Password to access client, if set.
-
-        Raises:
-            ClientNotWorking: Can't connect to client.
-            CredentialInvalid: Credentials are invalid.
-
-        Returns:
-            Session: Request session that is logged in.
-        """
         ssn = Session()
 
         if username or password:
@@ -92,7 +79,6 @@ class qBittorrent(BaseExternalClient):
                 LOGGER.error(
                     f"Can't connect or version too low of qBittorrent instance: {auth_request.text}"
                 )
-                # Should be at least v4.1
                 raise ClientNotWorking(BrokenClientReason.VERSION_NOT_SUPPORTED)
 
             if not auth_request.ok:
@@ -162,7 +148,15 @@ class qBittorrent(BaseExternalClient):
             f'{self.base_url}/api/v2/torrents/add',
             files=files
         )
-        t_hash = download_link.split('urn:btih:')[1].split('&')[0]
+
+        # Torznab-generated magnets may percent-encode the xt value. Parse the
+        # query rather than relying on the literal ``urn:btih:`` substring so
+        # both standard GetComics magnets and normalized Torznab magnets work.
+        xt_values = parse_qs(urlsplit(download_link).query).get('xt') or []
+        if not xt_values or not xt_values[0].lower().startswith('urn:btih:'):
+            raise ClientNotWorking(BrokenClientReason.FAILED_PROCESSING_RESPONSE)
+        t_hash = xt_values[0].split(':')[-1]
+
         self.torrent_hashes[t_hash] = None
         return t_hash
 
@@ -187,7 +181,6 @@ class qBittorrent(BaseExternalClient):
             DownloadState.IMPORTING_STATE
         )
         if result['state'] in ('metaDL', 'stalledDL', 'checkingDL'):
-            # Torrent is failing
             if self.torrent_hashes[download_id] is None:
                 self.torrent_hashes[download_id] = round(time())
                 state = DownloadState.DOWNLOADING_STATE

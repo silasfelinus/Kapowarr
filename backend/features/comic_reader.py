@@ -2,9 +2,9 @@
 
 """Page discovery for Kapowarr's lightweight comic reader.
 
-The reader supports formats that can be served without extracting a comic into
-a public directory: loose browser-readable images, ZIP/CBZ archives, and linked
-PDF documents. CBR/RAR can build on the same reader contract later.
+The reader serves loose browser-readable images, ZIP/CBZ and RAR/CBR archive
+members, plus linked PDF documents without permanently extracting comics into a
+public directory.
 """
 
 from __future__ import annotations
@@ -12,14 +12,21 @@ from __future__ import annotations
 from mimetypes import guess_type
 from os.path import splitext
 from re import split
+from subprocess import run
 from typing import Any, Dict, List, Union
 from zipfile import BadZipFile, ZipFile
 
-from backend.base.definitions import FileConstants, FileData
+from backend.base.definitions import FileConstants, FileData, RAR_EXECUTABLES
+from backend.base.files import folder_path
+from backend.base.helpers import get_os_type, run_rar
 from backend.base.logging import LOGGER
 from backend.internals.db_models import FilesDB
 
-READER_ARCHIVE_EXTENSIONS = ('.cbz', '.zip')
+READER_ZIP_ARCHIVE_EXTENSIONS = ('.cbz', '.zip')
+READER_RAR_ARCHIVE_EXTENSIONS = ('.cbr', '.rar')
+READER_ARCHIVE_EXTENSIONS = (
+    READER_ZIP_ARCHIVE_EXTENSIONS + READER_RAR_ARCHIVE_EXTENSIONS
+)
 READER_PDF_EXTENSIONS = ('.pdf',)
 READER_IMAGE_EXTENSIONS = tuple(
     extension.lower()
@@ -66,13 +73,79 @@ def list_archive_pages(filepath: str) -> List[str]:
     return pages
 
 
+def list_rar_pages(filepath: str) -> List[str]:
+    """Return naturally sorted browser-readable image members from RAR/CBR."""
+    try:
+        result = run_rar([
+            'lb',       # Bare file list, one archive member per line.
+            '-inul',    # Suppress informational output.
+            filepath
+        ])
+    except (KeyError, OSError):
+        LOGGER.warning('Comic reader could not inspect RAR archive: %s', filepath)
+        return []
+
+    if result.returncode != 0:
+        LOGGER.warning('Comic reader could not inspect RAR archive: %s', filepath)
+        return []
+
+    pages = [
+        member.strip()
+        for member in result.stdout.splitlines()
+        if (
+            member.strip()
+            and splitext(member.strip())[1].lower()
+            in READER_IMAGE_EXTENSIONS
+        )
+    ]
+    pages.sort(key=natural_sort_key)
+    return pages
+
+
+def read_rar_member(filepath: str, member: str) -> Union[bytes, None]:
+    """Read one RAR/CBR member into memory without extracting it permanently."""
+    try:
+        exe = folder_path(
+            'backend',
+            'lib',
+            RAR_EXECUTABLES[get_os_type()]
+        )
+        result = run(
+            [
+                exe,
+                'p',       # Print the selected member to stdout.
+                '-inul',
+                filepath,
+                member
+            ],
+            capture_output=True
+        )
+    except (KeyError, OSError):
+        LOGGER.warning(
+            'Comic reader could not read RAR member %s from %s',
+            member,
+            filepath
+        )
+        return None
+
+    if result.returncode != 0:
+        LOGGER.warning(
+            'Comic reader could not read RAR member %s from %s',
+            member,
+            filepath
+        )
+        return None
+
+    return result.stdout
+
+
 def build_pages_for_files(files: List[FileData]) -> List[Dict[str, Any]]:
     """Build ordered image-page descriptors for issue-linked files.
 
-    Loose images become one page each. ZIP/CBZ files contribute each contained
-    image without extracting it to disk. PDF files are deliberately handled as
-    documents by :func:`find_pdf_file` rather than pretending each PDF is one
-    image page.
+    Loose images become one page each. ZIP/CBZ and RAR/CBR files contribute
+    browser-readable image members without permanent extraction. PDF files are
+    deliberately handled as documents by :func:`find_pdf_file` rather than
+    pretending each PDF is one image page.
     """
     pages: List[Dict[str, Any]] = []
 
@@ -88,18 +161,26 @@ def build_pages_for_files(files: List[FileData]) -> List[Dict[str, Any]]:
                 'file_id': file_data['id'],
                 'filepath': filepath,
                 'member': None,
+                'archive_type': None,
                 'mimetype': guess_type(filepath)[0] or 'image/jpeg'
             })
             continue
 
-        if extension not in READER_ARCHIVE_EXTENSIONS:
+        if extension in READER_ZIP_ARCHIVE_EXTENSIONS:
+            archive_type = 'zip'
+            members = list_archive_pages(filepath)
+        elif extension in READER_RAR_ARCHIVE_EXTENSIONS:
+            archive_type = 'rar'
+            members = list_rar_pages(filepath)
+        else:
             continue
 
-        for member in list_archive_pages(filepath):
+        for member in members:
             pages.append({
                 'file_id': file_data['id'],
                 'filepath': filepath,
                 'member': member,
+                'archive_type': archive_type,
                 'mimetype': guess_type(member)[0] or 'image/jpeg'
             })
 

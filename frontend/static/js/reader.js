@@ -175,7 +175,7 @@ async function loadReader() {
 		if (!manifest.readable) {
 			reader.status.innerText =
 				'This issue has no content the built-in reader can open yet. '
-				+ 'CBZ/ZIP, loose images, and PDF are supported; CBR/RAR is next.';
+				+ 'CBZ/ZIP, CBR/RAR, loose images, and PDF are supported.';
 			updateControls();
 			return;
 		};

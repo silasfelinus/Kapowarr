@@ -92,6 +92,68 @@ def issue_number_overlaps_missing(
     return any(start <= number <= end for number in missing_issue_numbers)
 
 
+def _missing_issue_numbers(download) -> Set[float]:
+    volume = Volume(download.volume_id)
+    return {
+        issue.calculated_issue_number
+        for issue in volume.get_issues()
+        if not issue.files
+    }
+
+
+def prune_downloaded_range_files(download) -> int:
+    """Discard clearly already-owned individual issue files from a range.
+
+    This complements outer-pack extraction. Torrent/NZB releases often arrive
+    as a directory containing issue CBZ/CBR/PDF files directly, without a
+    ``1-100.zip`` wrapper. For a download whose search metadata is a range,
+    remove individual containers that cannot fill any currently missing issue.
+    Ambiguous files and monolithic range archives are retained so normal
+    volume-aware matching remains the final authority.
+
+    Returns:
+        int: Number of files removed.
+    """
+    if not isinstance(getattr(download, 'covered_issues', None), tuple):
+        return 0
+
+    missing_issue_numbers = _missing_issue_numbers(download)
+    kept: List[str] = []
+    removed = 0
+
+    for filepath in download.files:
+        if (
+            not isfile(filepath)
+            or splitext(filepath)[1].lower()
+            not in FileConstants.CONTAINER_EXTENSIONS
+        ):
+            kept.append(filepath)
+            continue
+
+        file_data = extract_filename_data(
+            filepath,
+            assume_volume_number=False
+        )
+        issue_number = file_data['issue_number']
+        if issue_number is None or issue_number_overlaps_missing(
+            issue_number,
+            missing_issue_numbers
+        ):
+            kept.append(filepath)
+            continue
+
+        delete_file_folder(filepath)
+        removed += 1
+        LOGGER.info(
+            'Discarded already-owned issue file from downloaded range: %s',
+            filepath
+        )
+
+    if removed:
+        download.files = kept
+    return removed
+
+
 def _extract_archive(filepath: str, target_folder: str) -> bool:
     """Extract an archive without deleting the source when extraction fails."""
     extension = splitext(filepath)[1].lower()
@@ -176,15 +238,11 @@ def normalize_downloaded_range_pack(download) -> bool:
     Returns:
         bool: Whether at least one outer pack archive was normalized/removed.
     """
-    if not isinstance(download.covered_issues, tuple):
+    if not isinstance(getattr(download, 'covered_issues', None), tuple):
         return False
 
     volume = Volume(download.volume_id)
-    missing_issue_numbers = {
-        issue.calculated_issue_number
-        for issue in volume.get_issues()
-        if not issue.files
-    }
+    missing_issue_numbers = _missing_issue_numbers(download)
 
     normalized_files: List[str] = []
     changed = False

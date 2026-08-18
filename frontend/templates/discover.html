@@ -16,6 +16,7 @@
 	<td class="title-column">
 		<a target="_blank" rel="noopener noreferrer"></a>
 	</td>
+	<td class="reason-column"></td>
 	<td class="status-column">
 		<a></a>
 	</td>
@@ -27,21 +28,29 @@
 	<section class="tool-bar-container" aria-label="Tool bar">
 		<div class="tool-bar">
 			{{ icon_button("refresh-button", "Refresh the list", "refresh.svg", "Refresh") }}
+			<button id="recent-button" class="discover-mode-button active" type="button">Recent</button>
+			<button id="for-you-button" class="discover-mode-button" type="button">For You</button>
 		</div>
 	</section>
 	<div class="main-window">
+		<p id="discover-mode-description">
+			Recent releases from GetComics, cross-referenced against your library.
+		</p>
 		<p id="discover-empty-message" class="hidden">
 			No recent releases found on GetComics right now. Try refreshing,
 			or check back later.
 		</p>
 		<p id="discover-loading-message">Loading recent releases&hellip;</p>
-		{{ page_turner() }}
+		<div id="discover-page-turner">
+			{{ page_turner() }}
+		</div>
 		<div class="table-container icon-text-color">
 			<table>
 				<thead>
 					<tr>
 						<th class="cover-column">Cover</th>
 						<th class="title-column">Title</th>
+						<th class="reason-column">Why</th>
 						<th class="status-column">Status</th>
 					</tr>
 				</thead>

@@ -33,6 +33,10 @@ from backend.internals.db import commit, get_db
 from backend.internals.db_models import FilesDB
 from backend.internals.settings import Settings
 
+# Preserve the historical post-processing patch point while changing the
+# implementation underneath from byte-copy-only to hardlink-first/copy-fallback.
+copy_directory = hardlink_or_copy_path
+
 if TYPE_CHECKING:
     from backend.base.definitions import Download
 
@@ -248,8 +252,12 @@ def copy_file_torrent(download: TorrentDownload) -> None:
         )
         delete_file_folder(file_dest)
 
-    hardlink_or_copy_path(download.files[0], file_dest)
+    copy_directory(download.files[0], file_dest)
     download.files = [file_dest]
+    # File ownership, permissions and dates can mutate hardlink inode metadata.
+    # Keep the historical post-processing action order, but turn that action
+    # into a deferred marker until the torrent client no longer needs its path.
+    download._defer_file_properties_until_seed_cleanup = True
 
     _expand_external_download_root(download)
     _scan_and_rename_download(download)
@@ -261,6 +269,17 @@ def delete_file(download: Download) -> None:
     "Delete file from download folder"
     for f in download.files:
         delete_file_folder(f)
+
+    if getattr(
+        download,
+        '_defer_file_properties_until_seed_cleanup',
+        False
+    ) is True:
+        download._defer_file_properties_until_seed_cleanup = False
+        mass_process_files(
+            download.volume_id,
+            download.issue_id
+        )
     return
 
 
@@ -304,6 +323,12 @@ def convert_file(download: Download) -> None:
 
 def set_file_properties(download: Download) -> None:
     "Process the file to set ownership, permissions and file date"
+    if getattr(
+        download,
+        '_defer_file_properties_until_seed_cleanup',
+        False
+    ) is True:
+        return
 
     mass_process_files(
         download.volume_id,
@@ -414,18 +439,15 @@ class PostProcessorTorrentsComplete(PostProcessor):
 
 
 class PostProcessorTorrentsCopy(PostProcessor):
-    # File ownership/mode/date changes are deliberately deferred until success.
-    # A hardlink shares inode metadata with the active seed, so changing those
-    # properties during seeding could make the torrent client's source unreadable.
     actions_success = [
         remove_from_queue,
-        delete_file,
-        set_file_properties
+        delete_file
     ]
 
     actions_seeding = [
         add_to_history,
         copy_file_torrent,
         convert_file,
+        set_file_properties,
         reset_file_link
     ]

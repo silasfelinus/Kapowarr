@@ -1,21 +1,55 @@
 const indexers = {};
 
-function loadIndexers(api_key) {
-	fetchAPI('/indexers', api_key)
-	.then(json => {
-		const table = document.querySelector('#indexer-list');
+function indexerKey(protocol, id) {
+	return `${protocol}:${id}`;
+};
 
+function endpointFor(protocol) {
+	return protocol === 'torznab' ? '/torznab-indexers' : '/indexers';
+};
+
+function decorateIndexer(indexer, protocol) {
+	return {
+		...indexer,
+		protocol: protocol,
+		endpoint: endpointFor(protocol)
+	};
+};
+
+function loadIndexers(api_key) {
+	Promise.all([
+		fetchAPI('/indexers', api_key),
+		fetchAPI('/torznab-indexers', api_key)
+	])
+	.then(([newznab, torznab]) => {
+		const table = document.querySelector('#indexer-list');
 		document.querySelectorAll('#indexer-list > :not(:first-child)')
 			.forEach(el => el.remove());
 
-		json.result.forEach(indexer => {
-			indexers[indexer.id] = indexer;
+		Object.keys(indexers).forEach(key => delete indexers[key]);
+		const all = [
+			...newznab.result.map(i => decorateIndexer(i, 'newznab')),
+			...torznab.result.map(i => decorateIndexer(i, 'torznab'))
+		];
+		all.sort((a, b) => a.title.localeCompare(b.title));
+
+		all.forEach(indexer => {
+			const key = indexerKey(indexer.protocol, indexer.id);
+			indexers[key] = indexer;
 
 			const entry = document.createElement('button');
-			entry.onclick = e => loadEditIndexer(api_key, indexer.id);
-			entry.innerText = indexer.title + (indexer.enabled ? '' : ' (disabled)');
+			entry.onclick = e => loadEditIndexer(api_key, key);
+			const protocol = indexer.protocol === 'torznab' ? 'Torznab' : 'Newznab';
+			entry.innerText = `${indexer.title} · ${protocol}`
+				+ (indexer.enabled ? '' : ' (disabled)');
 			table.appendChild(entry);
 		});
+	});
+};
+
+function toggleTorznabFields(prefix, protocol) {
+	document.querySelectorAll(`.${prefix}-torznab-option`).forEach(row => {
+		row.classList.toggle('hidden', protocol !== 'torznab');
 	});
 };
 
@@ -24,10 +58,13 @@ function showAddIndexer() {
 	document.querySelector('#test-indexer-add').classList.remove(
 		'show-success', 'show-fail'
 	);
+	document.querySelector('#add-protocol-input').value = 'newznab';
 	document.querySelector('#add-title-input').value = '';
 	document.querySelector('#add-base-url-input').value = '';
 	document.querySelector('#add-api-key-input').value = '';
+	document.querySelector('#add-categories-input').value = '7030';
 	document.querySelector('#add-enabled-input').checked = true;
+	toggleTorznabFields('add', 'newznab');
 
 	showWindow('add-indexer-window');
 };
@@ -37,12 +74,15 @@ async function testAddIndexer(api_key) {
 	hide([error]);
 	const test_button = document.querySelector('#test-indexer-add');
 	test_button.classList.remove('show-success', 'show-fail');
+	const protocol = document.querySelector('#add-protocol-input').value;
 
 	const data = {
 		base_url: document.querySelector('#add-base-url-input').value,
 		api_key: document.querySelector('#add-api-key-input').value
 	};
-	return await sendAPI('POST', '/indexers/test', api_key, {}, data)
+	return await sendAPI(
+		'POST', `${endpointFor(protocol)}/test`, api_key, {}, data
+	)
 	.then(response => response.json())
 	.then(json => {
 		if (json.result.success)
@@ -58,13 +98,17 @@ async function testAddIndexer(api_key) {
 
 function saveAddIndexer() {
 	usingApiKey().then(api_key => {
+		const protocol = document.querySelector('#add-protocol-input').value;
 		const data = {
 			title: document.querySelector('#add-title-input').value,
 			base_url: document.querySelector('#add-base-url-input').value,
 			api_key: document.querySelector('#add-api-key-input').value,
 			enabled: document.querySelector('#add-enabled-input').checked
 		};
-		sendAPI('POST', '/indexers', api_key, {}, data)
+		if (protocol === 'torznab')
+			data.categories = document.querySelector('#add-categories-input').value;
+
+		sendAPI('POST', endpointFor(protocol), api_key, {}, data)
 		.then(response => {
 			loadIndexers(api_key);
 			closeWindow();
@@ -79,22 +123,28 @@ function saveAddIndexer() {
 	});
 };
 
-function loadEditIndexer(api_key, id) {
+function loadEditIndexer(api_key, key) {
 	hide([document.querySelector('#edit-error')]);
 	document.querySelector('#test-indexer-edit').classList.remove(
 		'show-success', 'show-fail'
 	);
+	const cached = indexers[key];
 
-	fetchAPI(`/indexers/${id}`, api_key)
+	fetchAPI(`${cached.endpoint}/${cached.id}`, api_key)
 	.then(json => {
-		const data = json.result;
-		indexers[id] = data;
+		const data = decorateIndexer(json.result, cached.protocol);
+		indexers[key] = data;
 
-		document.querySelector('#edit-indexer-window').dataset.id = id;
+		const window = document.querySelector('#edit-indexer-window');
+		window.dataset.id = data.id;
+		window.dataset.protocol = data.protocol;
+		document.querySelector('#edit-protocol-input').value = data.protocol;
 		document.querySelector('#edit-title-input').value = data.title;
 		document.querySelector('#edit-base-url-input').value = data.base_url;
 		document.querySelector('#edit-api-key-input').value = data.api_key;
+		document.querySelector('#edit-categories-input').value = data.categories || '7030';
 		document.querySelector('#edit-enabled-input').checked = data.enabled;
+		toggleTorznabFields('edit', data.protocol);
 
 		showWindow('edit-indexer-window');
 	});
@@ -105,12 +155,15 @@ async function testEditIndexer(api_key) {
 	hide([error]);
 	const test_button = document.querySelector('#test-indexer-edit');
 	test_button.classList.remove('show-success', 'show-fail');
+	const protocol = document.querySelector('#edit-indexer-window').dataset.protocol;
 
 	const data = {
 		base_url: document.querySelector('#edit-base-url-input').value,
 		api_key: document.querySelector('#edit-api-key-input').value
 	};
-	return await sendAPI('POST', '/indexers/test', api_key, {}, data)
+	return await sendAPI(
+		'POST', `${endpointFor(protocol)}/test`, api_key, {}, data
+	)
 	.then(response => response.json())
 	.then(json => {
 		if (json.result.success)
@@ -126,14 +179,19 @@ async function testEditIndexer(api_key) {
 
 function saveEditIndexer() {
 	usingApiKey().then(api_key => {
-		const id = document.querySelector('#edit-indexer-window').dataset.id;
+		const window = document.querySelector('#edit-indexer-window');
+		const id = window.dataset.id;
+		const protocol = window.dataset.protocol;
 		const data = {
 			title: document.querySelector('#edit-title-input').value,
 			base_url: document.querySelector('#edit-base-url-input').value,
 			api_key: document.querySelector('#edit-api-key-input').value,
 			enabled: document.querySelector('#edit-enabled-input').checked
 		};
-		sendAPI('PUT', `/indexers/${id}`, api_key, {}, data)
+		if (protocol === 'torznab')
+			data.categories = document.querySelector('#edit-categories-input').value;
+
+		sendAPI('PUT', `${endpointFor(protocol)}/${id}`, api_key, {}, data)
 		.then(response => {
 			loadIndexers(api_key);
 			closeWindow();
@@ -149,16 +207,16 @@ function saveEditIndexer() {
 };
 
 function deleteIndexer(api_key) {
-	const id = document.querySelector('#edit-indexer-window').dataset.id;
-	sendAPI('DELETE', `/indexers/${id}`, api_key)
+	const window = document.querySelector('#edit-indexer-window');
+	const id = window.dataset.id;
+	const protocol = window.dataset.protocol;
+	sendAPI('DELETE', `${endpointFor(protocol)}/${id}`, api_key)
 	.then(response => {
-		delete indexers[id];
+		delete indexers[indexerKey(protocol, id)];
 		loadIndexers(api_key);
 		closeWindow();
 	});
 };
-
-// code run on load
 
 usingApiKey()
 .then(api_key => {
@@ -167,7 +225,8 @@ usingApiKey()
 	document.querySelector('#test-indexer-add').onclick = e => testAddIndexer(api_key);
 	document.querySelector('#test-indexer-edit').onclick = e => testEditIndexer(api_key);
 	document.querySelector('#delete-indexer-edit').onclick = e => deleteIndexer(api_key);
-
+	document.querySelector('#add-protocol-input').onchange = e =>
+		toggleTorznabFields('add', e.target.value);
 });
 
 document.querySelector('#add-indexer-form').action = 'javascript:saveAddIndexer()';

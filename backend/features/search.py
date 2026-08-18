@@ -15,6 +15,8 @@ from backend.implementations.getcomics import search_getcomics
 from backend.implementations.indexers import Indexers, search_indexer
 from backend.implementations.matching import check_search_result_match
 from backend.implementations.query_builders import QueryBuilders
+from backend.implementations.torznab import (TorznabIndexers,
+                                            search_torznab_indexer)
 from backend.implementations.volumes import Volume
 
 
@@ -47,7 +49,6 @@ class SearchSources:
             for download_type, sources in cls.sources.items()
             if sources
         ]
-
 
 
 def _rank_search_result(
@@ -189,6 +190,19 @@ class SearchIndexers(SearchSource):
         return [result for response in responses for result in response]
 
 
+@SearchSources.register(DownloadType.TORRENT)
+class SearchTorznab(SearchSource):
+    async def search(self, session: AsyncSession) -> List[SearchResultData]:
+        indexers = TorznabIndexers.get_enabled()
+        if not indexers:
+            return []
+
+        responses = await gather(*(
+            search_torznab_indexer(session, indexer, self.query)
+            for indexer in indexers
+        ))
+        return [result for response in responses for result in response]
+
 
 def _dedupe_search_results(
     responses: Sequence[List[SearchResultData]]
@@ -239,7 +253,6 @@ async def search_planned_queries(
         responses = await gather(*searches)
 
     return _dedupe_search_results(responses)
-
 
 
 def manual_search(
@@ -332,7 +345,6 @@ def manual_search(
         return results
 
     return []
-
 
 
 def auto_search(

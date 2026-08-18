@@ -3,6 +3,7 @@
 from re import IGNORECASE, compile
 from time import time
 from typing import Any, Dict, List, Union
+from urllib.parse import parse_qs, urlsplit
 
 from requests.exceptions import RequestException
 
@@ -162,7 +163,14 @@ class qBittorrent(BaseExternalClient):
             f'{self.base_url}/api/v2/torrents/add',
             files=files
         )
-        t_hash = download_link.split('urn:btih:')[1].split('&')[0]
+
+        # A Torznab-normalized magnet may percent-encode its xt value. Parse the
+        # query rather than assuming a literal ``urn:btih:`` substring.
+        xt_values = parse_qs(urlsplit(download_link).query).get('xt') or []
+        if not xt_values or not xt_values[0].lower().startswith('urn:btih:'):
+            raise ClientNotWorking(BrokenClientReason.FAILED_PROCESSING_RESPONSE)
+        t_hash = xt_values[0].split(':')[-1]
+
         self.torrent_hashes[t_hash] = None
         return t_hash
 

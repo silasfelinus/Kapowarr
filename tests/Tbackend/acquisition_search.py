@@ -55,12 +55,15 @@ class QueryBuilderTest(unittest.TestCase):
 
 
 class SearchCoordinatorTest(unittest.TestCase):
-    def test_getcomics_and_newznab_are_registered_as_protocol_peers(self):
+    def test_sources_are_registered_as_protocol_peers(self):
         self.assertIn(search.SearchGetComics, search.SearchSources.sources[
             DownloadType.DIRECT
         ])
         self.assertIn(search.SearchIndexers, search.SearchSources.sources[
             DownloadType.USENET
+        ])
+        self.assertIn(search.SearchTorznab, search.SearchSources.sources[
+            DownloadType.TORRENT
         ])
 
     @patch('backend.features.search.Volume')
@@ -92,11 +95,16 @@ class SearchCoordinatorTest(unittest.TestCase):
         self.assertEqual(len(captured), 1)
         self.assertEqual(set(captured[0]), {
             DownloadType.DIRECT,
-            DownloadType.USENET
+            DownloadType.USENET,
+            DownloadType.TORRENT
         })
         self.assertEqual(
             list(captured[0][DownloadType.DIRECT]),
             list(captured[0][DownloadType.USENET])
+        )
+        self.assertEqual(
+            list(captured[0][DownloadType.DIRECT]),
+            list(captured[0][DownloadType.TORRENT])
         )
 
 

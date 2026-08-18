@@ -5,8 +5,8 @@
 This is a selective port of upstream Kapowarr's query-builder seam. The fork
 already has working GetComics and Newznab clients, so the useful part to import
 is the separation between *what metadata we are searching for* and *how a
-protocol phrases that search*. Torznab can register its own builder next
-without adding another branch to ``features.search.manual_search``.
+protocol phrases that search*. Torznab plugs into the same seam as a torrent
+protocol peer.
 """
 
 from __future__ import annotations
@@ -54,12 +54,17 @@ class QueryBuilders:
         return cls.builders[download_type]()
 
 
-@QueryBuilders.register(DownloadType.DIRECT, DownloadType.USENET)
+@QueryBuilders.register(
+    DownloadType.DIRECT,
+    DownloadType.USENET,
+    DownloadType.TORRENT
+)
 class ComicQueryBuilder(QueryBuilder):
-    """Current GetComics/Newznab query policy, isolated behind a protocol seam.
+    """Comic-oriented query policy shared by current acquisition protocols.
 
-    Keeping these two protocols identical today is intentional. The separation
-    means torrent/Torznab can diverge later without changing search orchestration.
+    The registry remains protocol-specific even while the formats are the same;
+    a future Torznab/Newznab-specific variation can diverge without changing
+    search orchestration.
     """
 
     TPB_FORMATS = (

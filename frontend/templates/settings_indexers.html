@@ -16,28 +16,36 @@
 		<form id="add-indexer-form">
 			<table>
 				<tr>
-					<th><label for="add-title-input">Title</label></th>
+					<th><label for="add-protocol-input">Protocol</label></th>
 					<td>
-						<input type="text" id="add-title-input" required>
+						<select id="add-protocol-input">
+							<option value="newznab">Newznab (Usenet)</option>
+							<option value="torznab">Torznab (Torrent)</option>
+						</select>
 					</td>
 				</tr>
 				<tr>
-					<th><label for="add-base-url-input">URL</label></th>
-					<td>
-						<input type="text" id="add-base-url-input" required>
-					</td>
+					<th><label for="add-title-input">Title</label></th>
+					<td><input type="text" id="add-title-input" required></td>
+				</tr>
+				<tr>
+					<th><label for="add-base-url-input">API URL</label></th>
+					<td><input type="text" id="add-base-url-input" required></td>
 				</tr>
 				<tr>
 					<th><label for="add-api-key-input">API Key</label></th>
+					<td><input type="text" id="add-api-key-input" required></td>
+				</tr>
+				<tr class="add-torznab-option hidden">
+					<th><label for="add-categories-input">Categories</label></th>
 					<td>
-						<input type="text" id="add-api-key-input" required>
+						<input type="text" id="add-categories-input" value="7030">
+						<p class="description">Comma-separated Torznab category IDs. 7030 is the standard comics category.</p>
 					</td>
 				</tr>
 				<tr>
 					<th><label for="add-enabled-input">Enabled</label></th>
-					<td>
-						<input type="checkbox" id="add-enabled-input" checked>
-					</td>
+					<td><input type="checkbox" id="add-enabled-input" checked></td>
 				</tr>
 			</table>
 		</form>
@@ -45,13 +53,10 @@
 
 	{% set add_submit %}
 		<button id="test-indexer-add" class="test-button" type="button">
-			<div>Failed</div>
-			<div>Test</div>
-			<div>Success</div>
+			<div>Failed</div><div>Test</div><div>Success</div>
 		</button>
 		<button id="submit-indexer-add" type="submit" form="add-indexer-form">Add</button>
 	{% endset %}
-
 	{{ window(False, "add-indexer-window", "Add Indexer", add_content, add_submit) }}
 
 	{% set edit_content %}
@@ -59,28 +64,33 @@
 		<form id="edit-indexer-form">
 			<table>
 				<tr>
-					<th><label for="edit-title-input">Title</label></th>
+					<th><label for="edit-protocol-input">Protocol</label></th>
 					<td>
-						<input type="text" id="edit-title-input" required>
+						<select id="edit-protocol-input" disabled>
+							<option value="newznab">Newznab (Usenet)</option>
+							<option value="torznab">Torznab (Torrent)</option>
+						</select>
 					</td>
 				</tr>
 				<tr>
-					<th><label for="edit-base-url-input">URL</label></th>
-					<td>
-						<input type="text" id="edit-base-url-input" required>
-					</td>
+					<th><label for="edit-title-input">Title</label></th>
+					<td><input type="text" id="edit-title-input" required></td>
+				</tr>
+				<tr>
+					<th><label for="edit-base-url-input">API URL</label></th>
+					<td><input type="text" id="edit-base-url-input" required></td>
 				</tr>
 				<tr>
 					<th><label for="edit-api-key-input">API Key</label></th>
-					<td>
-						<input type="text" id="edit-api-key-input" required>
-					</td>
+					<td><input type="text" id="edit-api-key-input" required></td>
+				</tr>
+				<tr class="edit-torznab-option hidden">
+					<th><label for="edit-categories-input">Categories</label></th>
+					<td><input type="text" id="edit-categories-input"></td>
 				</tr>
 				<tr>
 					<th><label for="edit-enabled-input">Enabled</label></th>
-					<td>
-						<input type="checkbox" id="edit-enabled-input">
-					</td>
+					<td><input type="checkbox" id="edit-enabled-input"></td>
 				</tr>
 			</table>
 		</form>
@@ -89,13 +99,10 @@
 	{% set edit_submit %}
 		<button id="delete-indexer-edit" type="button">Delete</button>
 		<button id="test-indexer-edit" class="test-button" type="button">
-			<div>Failed</div>
-			<div>Test</div>
-			<div>Success</div>
+			<div>Failed</div><div>Test</div><div>Success</div>
 		</button>
 		<button id="submit-indexer-edit" type="submit" form="edit-indexer-form">Save</button>
 	{% endset %}
-
 	{{ window(False, "edit-indexer-window", "Edit Indexer", edit_content, edit_submit) }}
 {% endblock windows %}
 
@@ -104,8 +111,9 @@
 	<div class="settings-container">
 		<h2>Indexers</h2>
 		<p class="description">
-			Newznab-compatible Usenet indexers to search for releases on, in addition to GetComics.
-			Every enabled indexer is queried alongside GetComics on every manual and automatic search.
+			Search GetComics plus any enabled Newznab Usenet and Torznab torrent feeds.
+			Prowlarr and Jackett can be added by pasting their Torznab API URL and API key.
+			Search results keep the configured indexer name so you can see where each release came from.
 		</p>
 		<div id="indexer-list" class="client-list">
 			<button id="add-indexer" class="add-button icon-text-color" title="Add indexer">

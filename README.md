@@ -10,7 +10,7 @@
 
 # Kapowarr
 
-> **Personal fork:** This repository is Silas Felinus's fork of [Casvt/Kapowarr](https://github.com/Casvt/Kapowarr). It keeps the upstream GPL-3.0 license and attribution while extending Kapowarr as an aggregation-first comic manager. Fork additions now include large-library continuous import, SABnzbd/Newznab support, notifications and health checks, interface/QoL work, and a lightweight built-in reader. Fork container builds are published as `ghcr.io/silasfelinus/kapowarr:latest`; upstream remains the original project and maintainer. See [`FORK_MAINTENANCE.md`](./FORK_MAINTENANCE.md) for how this fork tracks upstream.
+> **Personal fork:** This repository is Silas Felinus's fork of [Casvt/Kapowarr](https://github.com/Casvt/Kapowarr). It keeps the upstream GPL-3.0 license and attribution while extending Kapowarr as an aggregation-first comic manager. Fork additions now include large-library continuous import, SABnzbd/Newznab support, notifications and health checks, interface/QoL work, and a lightweight built-in reader. Fork container builds are published as `ghcr.io/silasfelinus/kapowarr:latest`; upstream remains the original project and maintainer. See [`FORK_MAINTENANCE.md`](./FORK_MAINTENANCE.md) for how this fork tracks upstream, and [`AGENT_WORKFLOW_NOTES.md`](./AGENT_WORKFLOW_NOTES.md) for AI-agent workflow hazards.
 
 Kapowarr is a software to build and manage a comic book library, fitting in the *arr suite of software.
 

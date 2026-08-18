@@ -2,8 +2,8 @@
 
 """
 GetComics Discover: browse GetComics' recent releases inside Kapowarr,
-cross-referenced against the library so already-added series can be told
-apart from ones that still need to be searched for and added.
+cross-referenced against the library so already-added series can be excluded
+from the discovery feed.
 
 Mirrors `backend.features.pull_list`'s relationship with
 `backend.implementations.weekly_releases` (itself mirroring
@@ -265,11 +265,16 @@ def recommend_discover_items(
 
 
 def get_discover_feed(page: int = 1) -> Tuple[List[DiscoverMatchData], int]:
-    """Fetch one chronological Discover page and cross-reference the library."""
+    """Return one chronological page containing only not-yet-owned releases.
+
+    The cross-reference still happens server-side so ownership is decided by
+    Kapowarr's normal title matcher. Already-owned volumes are removed from
+    the public Discover feed rather than merely being labelled in the UI.
+    """
     items, max_page = run(_fetch_discover_page(page))
     volumes = Library.get_public_volumes()
     matches = match_discover_items_to_library(items, volumes)
-    return matches, max_page
+    return [item for item in matches if item['volume_id'] is None], max_page
 
 
 def get_recommended_discover_feed() -> Tuple[List[Dict[str, Any]], int]:

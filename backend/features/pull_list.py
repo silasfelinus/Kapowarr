@@ -146,7 +146,18 @@ def check_weekly_pull_list() -> List[Dict[str, Any]]:
         List[Dict[str, Any]]: The matches that were stored.
     """
     releases = run(_fetch_all_weekly_releases())
-    monitored_volumes = Library.get_public_volumes(filter=LibraryFilter.MONITORED)
+    if not releases:
+        # An empty weekly source is almost certainly a source outage or markup
+        # change. Preserve the last known-good pull list and let the task runner
+        # record a visible failure instead of silently replacing it with
+        # nothing.
+        raise RuntimeError(
+            'No weekly releases were returned; the previous pull list was kept'
+        )
+
+    monitored_volumes = Library.get_public_volumes(
+        filter=LibraryFilter.MONITORED
+    )
     matches = match_releases_to_library(releases, monitored_volumes)
 
     checked_at = round(time())

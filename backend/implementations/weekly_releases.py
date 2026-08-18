@@ -10,11 +10,11 @@ live in `backend.features.pull_list`, mirroring how `search_getcomics()`/
 `search_indexer()` here plug into `SearchGetComics`/`SearchIndexers` in
 `backend.features.search`.
 
-The live GetComics layout was verified on 2026-08-18. Weekly Pack posts are
-surfaced on the normal GetComics home page, and issue rows currently look
-like ``Action Comics #1101 : Download | Read Online``. The parser remains
-intentionally defensive so harmless markup changes do not crash the weekly
-task.
+The source and line shape were live-checked on 2026-08-18. GetComics exposes
+weekly-pack posts through its ``dc-week`` tag archive, and issue rows include
+download/read-online text after the issue number. The home page remains a
+fallback if the tag archive moves again, and the parser stays tolerant of the
+trailing action text rather than coupling itself to individual links.
 """
 
 from re import compile as re_compile
@@ -104,13 +104,12 @@ def _parse_weekly_release_lines(
 async def _find_latest_weekly_release_article(
     session: AsyncSession
 ) -> Union[str, None]:
-    """Find the newest Weekly Pack article from the GetComics home page.
+    """Find the newest Weekly Pack article from GetComics.
 
     GetComics does not currently expose the previously assumed
-    ``/category/weekly-comic-book-releases/`` listing. Weekly Pack posts are
-    regular ``article.post`` entries on the home page, so scan the available
-    posts and choose the first title/link that clearly identifies a Weekly
-    Pack. This is more tolerant of the site's tag/category reshuffling.
+    ``/category/weekly-comic-book-releases/`` listing. Check the live
+    ``dc-week`` tag archive first and then the home page, choosing the first
+    title/link that clearly identifies a Weekly Pack.
 
     Args:
         session (AsyncSession): The session to make the request with.
@@ -119,29 +118,31 @@ async def _find_latest_weekly_release_article(
         Union[str, None]: The newest Weekly Pack link, or ``None`` when the
             page cannot be fetched or no Weekly Pack is visible.
     """
-    listing_html = await session.get_text(
-        Constants.GC_SITE_URL, quiet_fail=True
-    )
-    if not listing_html:
-        return None
-
-    soup = BeautifulSoup(listing_html, "html.parser")
-    for article in soup.find_all("article", {"class": "post"}):
-        if not isinstance(article, Tag):
+    for listing_url in (
+        Constants.GC_WEEKLY_RELEASES_URL,
+        Constants.GC_SITE_URL
+    ):
+        listing_html = await session.get_text(listing_url, quiet_fail=True)
+        if not listing_html:
             continue
 
-        title_el = article.find("h1", {"class": "post-title"})
-        anchor = title_el.find("a") if isinstance(title_el, Tag) else None
-        if not isinstance(anchor, Tag):
-            continue
+        soup = BeautifulSoup(listing_html, "html.parser")
+        for article in soup.find_all("article", {"class": "post"}):
+            if not isinstance(article, Tag):
+                continue
 
-        link = anchor.get("href")
-        title = anchor.get_text(" ", strip=True)
-        if not isinstance(link, str) or not link:
-            continue
+            title_el = article.find("h1", {"class": "post-title"})
+            anchor = title_el.find("a") if isinstance(title_el, Tag) else None
+            if not isinstance(anchor, Tag):
+                continue
 
-        if "weekly pack" in title.lower() or "weekly-pack" in link.lower():
-            return link
+            link = anchor.get("href")
+            title = anchor.get_text(" ", strip=True)
+            if not isinstance(link, str) or not link:
+                continue
+
+            if "weekly pack" in title.lower() or "weekly-pack" in link.lower():
+                return link
 
     return None
 

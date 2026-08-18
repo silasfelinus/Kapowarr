@@ -1,6 +1,5 @@
 import sqlite3
 import unittest
-from asyncio import run
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -128,12 +127,13 @@ class torznab_search(unittest.IsolatedAsyncioTestCase):
           <channel><item><title>Batman 001</title>
           <torznab:attr name="infohash" value="ABCDEF1234" />
           </item></channel></rss>'''
+        session = _FakeSession(body)
         results = await tz.search_torznab_indexer(
-            _FakeSession(body), _indexer(''), 'Batman'
+            session, _indexer(''), 'Batman'
         )
         clean, _, _ = tz.strip_torznab_tag(results[0]['link'])
         self.assertTrue(clean.startswith('magnet:?'))
-        self.assertNotIn('cat', _FakeSession(body).calls)
+        self.assertNotIn('cat', session.calls[0][1])
 
     async def test_malformed_xml_isolated_to_empty_result(self):
         results = await tz.search_torznab_indexer(
@@ -202,7 +202,8 @@ class create_torznab_download_test(unittest.IsolatedAsyncioTestCase):
             'get_least_used_client',
             return_value=fake_client
         ), patch.object(
-            tz.Settings,
+            tz,
+            'Settings',
             return_value=SimpleNamespace(
                 sv=SimpleNamespace(
                     download_folder='/downloads',

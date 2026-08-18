@@ -92,6 +92,11 @@ def ui_blocklist():
     return render('blocklist.html')
 
 
+@ui.route('/activity/pull-list', methods=methods)
+def ui_pull_list():
+    return render('pull_list.html')
+
+
 @ui.route('/system/status', methods=methods)
 def ui_status():
     return render('status.html')
@@ -142,7 +147,6 @@ def ui_general():
     return render('settings_general.html')
 
 
-# These modules decorate the existing ui/api blueprints and therefore must load
+# Reader routes decorate the existing ui/api blueprints and therefore must load
 # after this module has created ``ui`` and ``render``.
 import frontend.reader  # noqa: E402,F401  # isort: skip
-import frontend.torznab  # noqa: E402,F401  # isort: skip

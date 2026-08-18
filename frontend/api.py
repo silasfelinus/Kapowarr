@@ -23,6 +23,7 @@ from backend.features.download_queue import (DownloadHandler,
 from backend.features.library_import import (import_library,
                                              propose_library_import)
 from backend.features.mass_edit import run_mass_editor_action
+from backend.features.pull_list import get_pull_list
 from backend.features.search import manual_search
 from backend.features.tasks import (Task, TaskHandler,
                                     delete_task_history, get_task_history,
@@ -1522,6 +1523,17 @@ def api_indexer(id: int):
     elif request.method == 'DELETE':
         indexer.delete()
         return return_api({})
+
+
+# =====================
+# Pull List
+# =====================
+@api.route('/pulllist', methods=['GET'])
+@error_handler
+@auth
+def api_pull_list():
+    result = get_pull_list()
+    return return_api(result)
 
 
 # =====================

@@ -15,6 +15,7 @@ from backend.base.definitions import (BlocklistReason, DownloadState,
 from backend.base.files import (copy_directory, delete_file_folder,
                                 rename_file, set_detected_extension)
 from backend.base.logging import LOGGER
+from backend.features.pack_normalization import normalize_downloaded_range_pack
 from backend.implementations.blocklist import add_to_blocklist
 from backend.implementations.conversion import mass_convert
 from backend.implementations.converters import extract_files_from_folder
@@ -81,12 +82,29 @@ def add_to_history(download: Download) -> None:
 
 
 def add_file_to_database(download: Download) -> None:
-    "Register files in database and match to a volume/issue"
+    """Register downloaded files in the database and match them to issues.
+
+    A search result can describe a true multi-issue range even when the search
+    was launched from one issue. Before the first scan, normalize a downloaded
+    outer pack that contains complete nested issue files so the scanner sees
+    those real files rather than one giant archive covering the whole range.
+    """
+    normalized_pack = normalize_downloaded_range_pack(download)
+    if not download.files:
+        return
+
     scan_files(
         download.volume_id,
         filepath_filter=download.files,
         update_websocket=True
     )
+
+    if normalized_pack and Settings().sv.rename_downloaded_files:
+        download.files = mass_rename(
+            download.volume_id,
+            filepath_filter=download.files,
+            process_individual_files=False
+        )
     return
 
 
@@ -158,6 +176,13 @@ def move_torrent_to_dest(download: TorrentDownload) -> None:
     if not download.files:
         return
 
+    # A torrent/Usenet folder can itself contain a single 1-100.zip/cbr-style
+    # pack. Split it before the first scan so existing issues are still known as
+    # existing and only genuinely missing issue files are retained.
+    normalize_downloaded_range_pack(download)
+    if not download.files:
+        return
+
     scan_files(
         download.volume_id,
         filepath_filter=download.files,
@@ -207,6 +232,10 @@ def copy_file_torrent(download: TorrentDownload) -> None:
         download.volume_id
     )
 
+    if not download.files:
+        return
+
+    normalize_downloaded_range_pack(download)
     if not download.files:
         return
 
@@ -260,7 +289,7 @@ def rename_with_proper_extension(download: Download) -> None:
 
 def convert_file(download: Download) -> None:
     "Convert a file into a different format based on settings"
-    if not Settings().sv.convert:
+    if not download.files or not Settings().sv.convert:
         return
 
     download.files += mass_convert(

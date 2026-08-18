@@ -9,7 +9,7 @@ cannot promote unrelated comics above a better match.
 
 from json import dumps, loads
 from re import IGNORECASE, compile
-from typing import Any, Dict, List, Mapping, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Sequence
 
 from backend.base.custom_exceptions import InvalidKeyValue, KeyNotFound
 from backend.base.definitions import DownloadGroup, DownloadType
@@ -181,3 +181,13 @@ def getcomics_quality_rank(path: Sequence[DownloadGroup]) -> int:
     if all(label == 'unknown' for label in labels):
         return 1
     return 2
+
+
+def order_getcomics_groups(groups: Sequence[DownloadGroup]) -> List[DownloadGroup]:
+    """Stable-order GetComics variants by explicit HD/SD preference.
+
+    The later path builder still owns match/range correctness. This only moves an
+    explicitly preferred quality ahead of an otherwise-equivalent variant; with
+    ``any`` every key is zero, preserving the page's original order.
+    """
+    return sorted(groups, key=lambda group: getcomics_quality_rank((group,)))

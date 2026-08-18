@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
 
+from asyncio import run
+from types import SimpleNamespace
 from unittest import TestCase
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from backend.base.definitions import DownloadType
 from backend.features import acquisition_preferences as preferences
-from backend.features.search import _rank_search_result
+from backend.features.search import (SearchIndexers, SearchTorznab,
+                                     _rank_search_result)
 
 
 def group(title):
@@ -83,6 +86,83 @@ class acquisition_source_order(TestCase):
             DownloadType.DIRECT,
             DownloadType.TORRENT
         ])
+
+
+class indexer_priority_policy(TestCase):
+    def test_priority_map_validation(self):
+        self.assertEqual(
+            preferences._validated_priority_map({
+                'newznab:1': 1,
+                'torznab:20': 100
+            }),
+            {'newznab:1': 1, 'torznab:20': 100}
+        )
+
+        invalid_values = (
+            {'other:1': 1},
+            {'newznab:1': 0},
+            {'newznab:1': 101},
+            {'newznab:1': True},
+            {'newznab:1': '1'}
+        )
+        for value in invalid_values:
+            with self.subTest(value=value):
+                with self.assertRaises(Exception):
+                    preferences._validated_priority_map(value)
+
+    def test_priority_defaults_to_fifty(self):
+        with patch.object(
+            preferences,
+            'get_acquisition_preferences',
+            return_value={'indexer_priorities': {'newznab:7': 3}}
+        ):
+            self.assertEqual(preferences.indexer_priority('newznab', 7), 3)
+            self.assertEqual(preferences.indexer_priority('newznab', 8), 50)
+            self.assertEqual(preferences.indexer_priority('torznab', 7), 50)
+
+    @patch('backend.features.search.search_indexer', new_callable=AsyncMock)
+    @patch('backend.features.search.indexer_priority')
+    @patch('backend.features.search.Indexers.get_enabled')
+    def test_newznab_search_uses_priority_order(
+        self, get_enabled, priority, search_indexer
+    ):
+        low = SimpleNamespace(id=1, title='Low')
+        high = SimpleNamespace(id=2, title='High')
+        get_enabled.return_value = [low, high]
+        priority.side_effect = lambda protocol, indexer_id: {1: 90, 2: 5}[indexer_id]
+
+        async def search_side_effect(session, indexer, query):
+            return [{'source': indexer.title}]
+        search_indexer.side_effect = search_side_effect
+
+        found = run(SearchIndexers('Batman').search(object()))
+        self.assertEqual([entry['source'] for entry in found], ['High', 'Low'])
+        self.assertEqual(
+            [call.args for call in priority.call_args_list],
+            [('newznab', 1), ('newznab', 2)]
+        )
+
+    @patch('backend.features.search.search_torznab_indexer', new_callable=AsyncMock)
+    @patch('backend.features.search.indexer_priority')
+    @patch('backend.features.search.TorznabIndexers.get_enabled')
+    def test_torznab_search_uses_priority_order(
+        self, get_enabled, priority, search_indexer
+    ):
+        first = SimpleNamespace(id=3, title='First')
+        second = SimpleNamespace(id=4, title='Second')
+        get_enabled.return_value = [first, second]
+        priority.side_effect = lambda protocol, indexer_id: {3: 1, 4: 80}[indexer_id]
+
+        async def search_side_effect(session, indexer, query):
+            return [{'source': indexer.title}]
+        search_indexer.side_effect = search_side_effect
+
+        found = run(SearchTorznab('Batman').search(object()))
+        self.assertEqual([entry['source'] for entry in found], ['First', 'Second'])
+        self.assertEqual(
+            [call.args for call in priority.call_args_list],
+            [('torznab', 3), ('torznab', 4)]
+        )
 
 
 class pack_policy(TestCase):

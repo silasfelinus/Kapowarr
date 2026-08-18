@@ -1215,3 +1215,24 @@ def _migrate_add_indexers():
     """)
 
     return
+
+
+@DatabaseMigrationHandler.register_handler(47)
+def _migrate_add_pull_list_entries():
+    get_db().executescript("""
+        CREATE TABLE IF NOT EXISTS pull_list_entries(
+            id INTEGER PRIMARY KEY,
+            volume_id INTEGER NOT NULL,
+            issue_number VARCHAR(20),
+            release_title VARCHAR(255) NOT NULL,
+            year INTEGER(5),
+            source VARCHAR(50) NOT NULL,
+            link TEXT NOT NULL,
+            checked_at INTEGER NOT NULL,
+
+            FOREIGN KEY (volume_id) REFERENCES volumes(id)
+                ON DELETE CASCADE
+        );
+    """)
+
+    return

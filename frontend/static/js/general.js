@@ -226,6 +226,11 @@ function handleTaskRemoved(data) {
 	const task_string = buildTaskString(data);
 	if (task_string in task_to_button)
 		unspinButton(task_string);
+
+	document.dispatchEvent(new CustomEvent(
+		'kapowarr:task-ended',
+		{detail: data}
+	));
 };
 
 function connectToWebSocket(api_key) {

@@ -49,6 +49,11 @@ class task_history_outcomes(unittest.TestCase):
         return cursor
 
     def _run(self, task):
+        lifecycle = []
+        socket = Mock()
+        socket.emit.side_effect = (
+            lambda event: lifecycle.append(type(event).__name__)
+        )
         self.handler.queue = [{
             'task': task,
             'id': 1,
@@ -58,18 +63,26 @@ class task_history_outcomes(unittest.TestCase):
         with patch.object(
             tasks_module, 'get_db', side_effect=lambda *a, **k: self._cursor()
         ), patch.object(
-            tasks_module, 'WebSocket', return_value=Mock()
+            tasks_module, 'WebSocket', return_value=socket
+        ), patch.object(
+            tasks_module, 'commit',
+            side_effect=lambda: lifecycle.append('commit')
         ), patch.object(tasks_module, 'sleep'):
             self.handler._TaskHandler__run_task(task)
+        return lifecycle
 
     def test_successful_task_is_recorded(self):
-        self._run(_Task())
+        lifecycle = self._run(_Task())
 
         row = self.connection.execute(
             'SELECT task_name, display_title FROM task_history'
         ).fetchone()
         self.assertEqual(tuple(row), ('test_task', 'Test Task'))
         self.assertEqual(self.handler.queue, [])
+        self.assertLess(
+            lifecycle.index('commit'),
+            lifecycle.index('TaskEndedEvent')
+        )
 
     def test_failed_task_is_recorded_with_error_and_removed(self):
         self._run(_Task(should_fail=True))

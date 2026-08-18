@@ -84,4 +84,8 @@ usingApiKey()
 	fillPlanning(api_key);
 	TaskEls.buttons.refresh.onclick = e => fillHistory(api_key);
 	TaskEls.buttons.clear.onclick = e => clearHistory(api_key);
+	document.addEventListener('kapowarr:task-ended', () => {
+		fillHistory(api_key);
+		fillPlanning(api_key);
+	});
 });

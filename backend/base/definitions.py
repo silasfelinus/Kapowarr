@@ -112,6 +112,13 @@ class Constants:
     GC_SOURCE_TERM = "GetComics"
     "The name used for GetComics as a download source"
 
+    GC_WEEKLY_RELEASES_URL = "https://getcomics.org/category/weekly-comic-book-releases/"
+    """
+    The GetComics category listing its "weekly pull list" posts. Used by
+    `backend.implementations.weekly_releases` to find the most recent
+    weekly-releases post to parse.
+    """
+
     MEGA_API_URL = "https://eu.api.mega.co.nz/cs"
     "The base URL of the Mega API"
 
@@ -647,6 +654,34 @@ class MatchedSearchResultData(
     _issue_number: Union[float, Tuple[float, float]]
 
 
+class WeeklyReleaseData(TypedDict):
+    """One "release" line parsed out of a weekly-release source (see
+    `backend.implementations.weekly_releases`), before any cross-
+    referencing against the library has happened.
+    """
+    series: str
+    issue_number: Union[str, None]
+    year: Union[int, None]
+    link: str
+    "Link to the source post/page the release was found on"
+    source: str
+    "Display name of the weekly-release source (e.g. 'GetComics')"
+
+
+class PullListEntryData(TypedDict):
+    """A `WeeklyReleaseData` that matched a monitored library volume,
+    ready to store/display as a "wanted addition" (see
+    `backend.features.pull_list`).
+    """
+    volume_id: int
+    volume_title: str
+    issue_number: Union[str, None]
+    release_title: str
+    year: Union[int, None]
+    source: str
+    link: str
+
+
 class IssueMetadata(TypedDict):
     comicvine_id: int
     volume_id: int
@@ -955,6 +990,38 @@ class SearchSource(ABC):
 
     def __repr__(self) -> str:
         return f'<{self.__class__.__name__}(query={self.query}); {id(self)}>'
+
+
+class WeeklyReleaseSource(ABC):
+    """A pluggable source of "what's releasing this week" data, mirroring
+    `SearchSource`. Kept as a separate abstraction rather than reusing
+    `SearchSource`, because it answers a different question: not "find
+    downloads for this specific volume/issue query" but "what released
+    this week, across the board", which has no query to construct and is
+    called once per check rather than once per search.
+
+    See `backend.features.pull_list.WeeklyReleaseSources` for the registry
+    this plugs into, and `backend.implementations.weekly_releases` for the
+    raw fetch/parse logic backing the built-in GetComics implementation.
+    """
+
+    @abstractmethod
+    async def fetch(self, session: 'AsyncSession') -> List[WeeklyReleaseData]:
+        """Fetch and parse this week's releases.
+
+        Args:
+            session (AsyncSession): The session to use for the fetch.
+
+        Returns:
+            List[WeeklyReleaseData]: The releases found. Empty (rather than
+                raising) on any request/parse failure -- one broken source
+                shouldn't fail a check that combines several, same contract
+                as `SearchSource.search()`.
+        """
+        ...
+
+    def __repr__(self) -> str:
+        return f'<{self.__class__.__name__}>'
 
 
 class ExternalDownloadClient(ABC):

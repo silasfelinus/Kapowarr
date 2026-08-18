@@ -551,15 +551,9 @@ class TaskHandler(metaclass=Singleton):
         LOGGER.debug(f'Running task {task.display_title}')
         with self.context():
             socket = WebSocket()
+            history_title = task.display_title
             try:
                 result = task.run()
-                cursor = get_db()
-
-                # Note in history
-                cursor.execute(
-                    "INSERT INTO task_history VALUES (?,?,?);",
-                    (task.action, task.display_title, round(time()))
-                )
 
                 if not task.stop:
                     if task.category == 'download' and result:
@@ -570,15 +564,36 @@ class TaskHandler(metaclass=Singleton):
 
                     LOGGER.info(f'Finished task {task.display_title}')
 
-            except Exception:
+            except Exception as error:
                 LOGGER.exception(
                     'An error occured while trying to run a task: ')
-                task.message = 'AN ERROR OCCURED'
+                error_detail = str(error).strip() or type(error).__name__
+                error_detail = ' '.join(error_detail.split())[:240]
+                task.message = f'Failed: {error_detail}'
+                history_title = f'{task.display_title} — {task.message}'
                 socket.emit(TaskStatusEvent(task.message))
                 sleep(1.5)
 
             finally:
                 if not task.stop:
+                    try:
+                        get_db().execute(
+                            """
+                            INSERT INTO task_history(
+                                task_name, display_title, run_at
+                            ) VALUES (?,?,?);
+                            """,
+                            (task.action, history_title, round(time()))
+                        )
+                    except Exception:
+                        # History must never prevent queue cleanup or the next
+                        # task from starting, even if the database itself is
+                        # the thing that failed.
+                        LOGGER.exception(
+                            'Failed to record task history for %s',
+                            task.display_title
+                        )
+
                     socket.emit(TaskEndedEvent(task))
                     self.queue.pop(0)
                     self._process_queue()

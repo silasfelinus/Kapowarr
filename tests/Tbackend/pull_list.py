@@ -182,7 +182,7 @@ class weekly_pull_list_persistence(unittest.TestCase):
         self.assertEqual(stored[0]['year'], 2024)
         self.assertEqual(stored[0]['source'], 'GetComics')
 
-    def test_check_replaces_previous_results(self):
+    def test_empty_source_preserves_previous_results_and_fails(self):
         with patch.object(
             pull_list_module, '_fetch_all_weekly_releases',
             new=AsyncMock(return_value=[_release('Batman', '1')])
@@ -194,8 +194,7 @@ class weekly_pull_list_persistence(unittest.TestCase):
 
         self.assertEqual(len(get_pull_list()), 1)
 
-        # A second, empty check should clear the previous week's entries
-        # rather than accumulating alongside them.
+        # A source outage or markup break must not erase the last good list.
         with patch.object(
             pull_list_module, '_fetch_all_weekly_releases',
             new=AsyncMock(return_value=[])
@@ -203,9 +202,10 @@ class weekly_pull_list_persistence(unittest.TestCase):
             pull_list_module.Library, 'get_public_volumes',
             return_value=[_volume(1, 'Batman')]
         ):
-            check_weekly_pull_list()
+            with self.assertRaisesRegex(RuntimeError, 'previous pull list was kept'):
+                check_weekly_pull_list()
 
-        self.assertEqual(get_pull_list(), [])
+        self.assertEqual(len(get_pull_list()), 1)
 
     def test_no_matches_stores_nothing(self):
         with patch.object(

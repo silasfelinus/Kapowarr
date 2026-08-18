@@ -186,7 +186,8 @@ WEEKLY_LINK = 'http://getcomics.example/other-comics/2026-08-12-weekly-pack/'
 class find_latest_weekly_release_article(unittest.IsolatedAsyncioTestCase):
     async def test_finds_weekly_pack_after_normal_post(self):
         session = _FakeAsyncSession({
-            'https://getcomics.org': LISTING_HTML
+            'https://getcomics.org/tag/dc-week/':
+                LISTING_HTML
         })
         link = await _find_latest_weekly_release_article(session)
         self.assertEqual(link, WEEKLY_LINK)
@@ -210,14 +211,15 @@ class find_latest_weekly_release_article(unittest.IsolatedAsyncioTestCase):
 
     async def test_no_article_tag_returns_none(self):
         session = _FakeAsyncSession({
-            'https://getcomics.org': '<html><body>Nothing here</body></html>'
+            'https://getcomics.org/tag/dc-week/':
+                '<html><body>Nothing here</body></html>'
         })
         link = await _find_latest_weekly_release_article(session)
         self.assertIsNone(link)
 
     async def test_no_weekly_pack_returns_none(self):
         session = _FakeAsyncSession({
-            'https://getcomics.org': (
+            'https://getcomics.org/tag/dc-week/': (
                 '<article class="post"><h1 class="post-title">'
                 '<a href="http://x/batman">Batman #1</a>'
                 '</h1></article>'
@@ -230,7 +232,8 @@ class find_latest_weekly_release_article(unittest.IsolatedAsyncioTestCase):
 class getcomics_weekly_releases_fetch(unittest.IsolatedAsyncioTestCase):
     async def test_full_fetch_parses_live_shaped_releases(self):
         session = _FakeAsyncSession({
-            'https://getcomics.org': LISTING_HTML,
+            'https://getcomics.org/tag/dc-week/':
+                LISTING_HTML,
             WEEKLY_LINK: ARTICLE_HTML
         })
 
@@ -249,7 +252,8 @@ class getcomics_weekly_releases_fetch(unittest.IsolatedAsyncioTestCase):
 
     async def test_empty_article_body_returns_empty(self):
         session = _FakeAsyncSession({
-            'https://getcomics.org': LISTING_HTML
+            'https://getcomics.org/tag/dc-week/':
+                LISTING_HTML
             # No body registered for the Weekly Pack link itself.
         })
         releases = await fetch_getcomics_weekly_releases(session)

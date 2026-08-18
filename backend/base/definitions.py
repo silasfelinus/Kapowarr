@@ -112,9 +112,9 @@ class Constants:
     GC_SOURCE_TERM = "GetComics"
     "The name used for GetComics as a download source"
 
-    GC_WEEKLY_RELEASES_URL = "https://getcomics.org/category/weekly-comic-book-releases/"
+    GC_WEEKLY_RELEASES_URL = "https://getcomics.org/tag/dc-week/"
     """
-    The GetComics category listing its "weekly pull list" posts. Used by
+    The GetComics tag archive listing its "weekly pull list" posts. Used by
     `backend.implementations.weekly_releases` to find the most recent
     weekly-releases post to parse.
     """

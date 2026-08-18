@@ -145,16 +145,23 @@ class TorrentRootHandlingTest(unittest.TestCase):
             scan_files.assert_called_once()
 
     def test_inode_metadata_processing_waits_until_seed_source_is_deleted(self):
-        self.assertNotIn(
-            pp.set_file_properties,
-            pp.PostProcessorTorrentsCopy.actions_seeding
+        download = SimpleNamespace(
+            files=['/seed/Batman 001.cbz'],
+            volume_id=1,
+            issue_id=2,
+            _defer_file_properties_until_seed_cleanup=True
         )
-        success = pp.PostProcessorTorrentsCopy.actions_success
-        self.assertIn(pp.set_file_properties, success)
-        self.assertLess(
-            success.index(pp.delete_file),
-            success.index(pp.set_file_properties)
-        )
+
+        with patch.object(pp, 'mass_process_files') as process_files, \
+             patch.object(pp, 'delete_file_folder') as delete_path:
+            pp.set_file_properties(download)
+            process_files.assert_not_called()
+
+            pp.delete_file(download)
+
+        delete_path.assert_called_once_with('/seed/Batman 001.cbz')
+        process_files.assert_called_once_with(1, 2)
+        self.assertFalse(download._defer_file_properties_until_seed_cleanup)
 
 
 class RangePruningTest(unittest.TestCase):

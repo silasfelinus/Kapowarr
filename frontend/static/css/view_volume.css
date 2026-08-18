@@ -86,6 +86,10 @@ This flows better for ARIA.
 	font-size: .9rem;
 }
 
+#volume-download-status {
+	align-self: flex-start;
+}
+
 #volume-path {
 	white-space: pre-wrap;
 }

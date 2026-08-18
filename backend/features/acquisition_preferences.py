@@ -19,11 +19,13 @@ SOURCE_PREFERENCE_OPTIONS = ('direct', 'torrent', 'usenet')
 DEFAULT_SOURCE_PREFERENCE = SOURCE_PREFERENCE_OPTIONS
 QUALITY_PREFERENCE_OPTIONS = ('any', 'hd', 'sd')
 PACK_PREFERENCE_OPTIONS = ('neutral', 'prefer', 'avoid')
+DEFAULT_INDEXER_PRIORITY = 50
 
 _DEFAULTS = {
     'acquisition_source_preference': dumps(DEFAULT_SOURCE_PREFERENCE),
     'getcomics_quality_preference': 'any',
-    'pack_preference': 'neutral'
+    'pack_preference': 'neutral',
+    'indexer_priorities': dumps({})
 }
 
 _DOWNLOAD_TYPE_NAMES = {
@@ -56,6 +58,22 @@ def _validated_source_preference(value: Any) -> List[str]:
     return result
 
 
+def _validated_priority_map(value: Any) -> Dict[str, int]:
+    if not isinstance(value, dict):
+        raise InvalidKeyValue('indexer_priorities', value)
+
+    result: Dict[str, int] = {}
+    for key, priority in value.items():
+        if not isinstance(key, str) or not key.startswith(('newznab:', 'torznab:')):
+            raise InvalidKeyValue('indexer_priorities', value)
+        if isinstance(priority, bool) or not isinstance(priority, int):
+            raise InvalidKeyValue('indexer_priorities', value)
+        if not 1 <= priority <= 100:
+            raise InvalidKeyValue('indexer_priorities', value)
+        result[key] = priority
+    return result
+
+
 def get_acquisition_preferences() -> Dict[str, Any]:
     """Return the current acquisition policy, inserting defaults lazily."""
     _ensure_defaults()
@@ -64,7 +82,8 @@ def get_acquisition_preferences() -> Dict[str, Any]:
         WHERE key IN (
             'acquisition_source_preference',
             'getcomics_quality_preference',
-            'pack_preference'
+            'pack_preference',
+            'indexer_priorities'
         );"""
     ).fetchall())
 
@@ -83,10 +102,18 @@ def get_acquisition_preferences() -> Dict[str, Any]:
     if pack not in PACK_PREFERENCE_OPTIONS:
         pack = 'neutral'
 
+    try:
+        indexer_priorities = _validated_priority_map(
+            loads(rows.get('indexer_priorities', '{}'))
+        )
+    except (TypeError, ValueError, InvalidKeyValue):
+        indexer_priorities = {}
+
     return {
         'acquisition_source_preference': source_preference,
         'getcomics_quality_preference': quality,
-        'pack_preference': pack
+        'pack_preference': pack,
+        'indexer_priorities': indexer_priorities
     }
 
 
@@ -115,6 +142,11 @@ def update_acquisition_preferences(data: Mapping[str, Any]) -> Dict[str, Any]:
             raise InvalidKeyValue('pack_preference', value)
         updates['pack_preference'] = value
 
+    if 'indexer_priorities' in data:
+        updates['indexer_priorities'] = dumps(
+            _validated_priority_map(data['indexer_priorities'])
+        )
+
     if updates:
         get_db().executemany(
             'INSERT OR REPLACE INTO config(key, value) VALUES (?, ?);',
@@ -136,6 +168,14 @@ def ordered_download_types(
         key=lambda download_type: positions.get(
             _DOWNLOAD_TYPE_NAMES[download_type], len(positions)
         )
+    )
+
+
+def indexer_priority(protocol: str, indexer_id: int) -> int:
+    """Return configured indexer priority (1 is highest, 50 is default)."""
+    key = f'{protocol}:{indexer_id}'
+    return get_acquisition_preferences()['indexer_priorities'].get(
+        key, DEFAULT_INDEXER_PRIORITY
     )
 
 

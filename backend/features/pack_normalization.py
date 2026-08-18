@@ -114,7 +114,7 @@ def prune_downloaded_range_files(download) -> int:
     Returns:
         int: Number of files removed.
     """
-    if not isinstance(download.covered_issues, tuple):
+    if not isinstance(getattr(download, 'covered_issues', None), tuple):
         return 0
 
     missing_issue_numbers = _missing_issue_numbers(download)
@@ -238,7 +238,7 @@ def normalize_downloaded_range_pack(download) -> bool:
     Returns:
         bool: Whether at least one outer pack archive was normalized/removed.
     """
-    if not isinstance(download.covered_issues, tuple):
+    if not isinstance(getattr(download, 'covered_issues', None), tuple):
         return False
 
     volume = Volume(download.volume_id)

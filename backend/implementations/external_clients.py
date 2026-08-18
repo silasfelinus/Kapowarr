@@ -14,6 +14,8 @@ from backend.base.definitions import (BrokenClientReason, ClientTestResult,
                                       DownloadType, ExternalDownloadClient)
 from backend.base.helpers import get_subclasses, normalise_base_url
 from backend.base.logging import LOGGER
+from backend.features.acquisition_preferences import (client_priority,
+                                                       remove_client_priority)
 from backend.internals.db import get_db
 from backend.internals.server import Server
 
@@ -183,7 +185,8 @@ class BaseExternalClient(ExternalDownloadClient):
             'base_url': self._base_url,
             'username': self._username,
             'password': self._password,
-            'api_token': self._api_token
+            'api_token': self._api_token,
+            'priority': client_priority(self._id)
         }
 
     def update_client(self, data: Mapping[str, Any]) -> None:
@@ -262,6 +265,7 @@ class BaseExternalClient(ExternalDownloadClient):
         except IntegrityError:
             raise ExternalClientDownloading(self._id)
 
+        remove_client_priority(self._id)
         return
 
 
@@ -478,6 +482,8 @@ class ExternalClients:
             ORDER BY title, id;
             """
         ).fetchalldict()
+        for client in result:
+            client['priority'] = client_priority(client['id'])
         return result
 
     @staticmethod
@@ -511,7 +517,11 @@ class ExternalClients:
     def get_least_used_client(
         download_type: DownloadType
     ) -> ExternalDownloadClient:
-        """Get the least used client of a specific download type.
+        """Get the preferred least-used client of a specific download type.
+
+        Client priority is considered first (1 is highest). Existing load
+        balancing is preserved inside the highest-priority tier so two equal
+        clients still share work instead of one becoming a permanent hot spot.
 
         Args:
             download_type (DownloadType): The download type to get the client
@@ -521,35 +531,34 @@ class ExternalClients:
             ExternalClientNotFound: No client of the specified type was found.
 
         Returns:
-            ExternalDownloadClient: The least used client.
+            ExternalDownloadClient: The preferred least-used client.
         """
-        cursor = get_db()
-        lu_id = cursor.execute("""
-            SELECT clients.id
-            FROM download_queue queue
-            INNER JOIN external_download_clients clients
+        rows = get_db().execute("""
+            SELECT clients.id, COUNT(queue.id) AS queue_count
+            FROM external_download_clients clients
+            LEFT JOIN download_queue queue
                 ON queue.external_client_id = clients.id
             WHERE clients.download_type = ?
             GROUP BY clients.id
-            ORDER BY COUNT(queue.id)
-            LIMIT 1;
+            ORDER BY clients.id;
             """,
             (download_type.value,)
-        ).fetchone()
+        ).fetchall()
 
-        if lu_id:
-            return ExternalClients.get_client(lu_id[0])
+        if not rows:
+            raise ExternalClientNotFound(-1)
 
-        first_id = cursor.execute("""
-            SELECT id
-            FROM external_download_clients
-            WHERE download_type = ?
-            LIMIT 1;
-            """,
-            (download_type.value,)
-        ).fetchone()
-
-        if first_id:
-            return ExternalClients.get_client(first_id[0])
-
-        raise ExternalClientNotFound(-1)
+        priorities = {
+            row['id']: client_priority(row['id'])
+            for row in rows
+        }
+        best_priority = min(priorities.values())
+        eligible = [
+            row for row in rows
+            if priorities[row['id']] == best_priority
+        ]
+        selected = min(
+            eligible,
+            key=lambda row: (row['queue_count'], row['id'])
+        )
+        return ExternalClients.get_client(selected['id'])

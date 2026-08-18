@@ -32,9 +32,12 @@ from backend.implementations.download_clients import (BaseDirectDownload,
                                                       MegaDownload,
                                                       NZBDownload,
                                                       TorrentDownload)
+from backend.implementations.download_preppers import DownloadPreppers
 from backend.implementations.external_clients import ExternalClients
+# Compatibility patch points retained for existing callers/tests. Queue
+# dispatch itself goes through DownloadPreppers rather than these classes.
 from backend.implementations.getcomics import GetComicsPage
-from backend.implementations.indexers import Indexers, create_nzb_download
+from backend.implementations.indexers import Indexers
 from backend.implementations.volumes import Issue
 from backend.internals.db import get_db, iter_commit
 from backend.internals.server import (AddedToQueueEvent, QueueStatusEvent,
@@ -442,19 +445,9 @@ class DownloadHandler(metaclass=Singleton):
 
     # region Adding
     def __determine_link_type(self, link: str) -> Union[str, None]:
-        """Determine the service type of the link (e.g. getcomics, torrent, etc.).
-
-        Args:
-            link (str): The link to check.
-
-        Returns:
-            Union[str, None]: The service type of the link or `None` if unknown.
-        """
-        if link.startswith(Constants.GC_SITE_URL):
-            return 'gc'
-        if Indexers.find_by_link(link) is not None:
-            return 'nzb'
-        return None
+        """Determine which registered download prepper owns a result link."""
+        prepper = DownloadPreppers.get_for_link(link)
+        return prepper.identifier if prepper is not None else None
 
     def link_in_queue(self, link: str) -> bool:
         """Check if a link is already in the queue.
@@ -477,7 +470,7 @@ class DownloadHandler(metaclass=Singleton):
             volume_id (int): The ID of the volume to check for.
 
         Returns:
-            bool: Whether there is a download in the queue for the given volume.
+            bool: Whether there is a download in the queue.
         """
         return any(
             d.volume_id == volume_id
@@ -491,10 +484,10 @@ class DownloadHandler(metaclass=Singleton):
         issue_id: Union[int, None] = None,
         force_match: bool = False
     ) -> Tuple[List[dict], Union[EnqueuingDownloadFailureReason, None]]:
-        """Add a download to the queue.
+        """Add a source result to the queue through its registered prepper.
 
         Args:
-            link (str): A getcomics link to download from.
+            link (str): A source result/download link.
 
             volume_id (int): The id of the volume for which the download is
             intended.
@@ -523,75 +516,19 @@ class DownloadHandler(metaclass=Singleton):
             return [], None
 
         link_type = self.__determine_link_type(link)
-        downloads: List[Download] = []
-        if link_type == 'gc':
-            gcp = GetComicsPage(link)
+        if link_type is None:
+            LOGGER.warning('No download prepper recognised link: %s', link)
+            return [], None
 
-            try:
-                await gcp.load_data()
-
-            except EnqueuingDownloadFailure as e:
-                add_to_blocklist(
-                    web_link=link,
-                    web_title=None,
-                    web_sub_title=None,
-                    download_link=None,
-                    source=None,
-                    volume_id=volume_id,
-                    issue_id=issue_id,
-                    reason=BlocklistReason.LINK_BROKEN
-                )
-                LOGGER.warning(
-                    f'Unable to extract download links from source; fail_reason="{e.reason.value}"'
-                )
-                return [], e.reason
-
-            try:
-                downloads = await gcp.create_downloads(
-                    volume_id, issue_id, force_match
-                )
-
-            except EnqueuingDownloadFailure as e:
-                if e.reason == EnqueuingDownloadFailureReason.NO_WORKING_LINKS:
-                    add_to_blocklist(
-                        web_link=link,
-                        web_title=gcp.title,
-                        web_sub_title=None,
-                        download_link=None,
-                        source=None,
-                        volume_id=volume_id,
-                        issue_id=issue_id,
-                        reason=BlocklistReason.NO_WORKING_LINKS
-                    )
-
-                LOGGER.warning(
-                    f'Unable to extract download links from source; fail_reason="{e.reason.value}"'
-                )
-                return [], e.reason
-
-        elif link_type == 'nzb':
-            try:
-                downloads = [await create_nzb_download(
-                    link, volume_id, issue_id, force_match
-                )]
-
-            except EnqueuingDownloadFailure as e:
-                if e.reason == EnqueuingDownloadFailureReason.LINK_BROKEN:
-                    add_to_blocklist(
-                        web_link=None,
-                        web_title=None,
-                        web_sub_title=None,
-                        download_link=link,
-                        source=None,
-                        volume_id=volume_id,
-                        issue_id=issue_id,
-                        reason=BlocklistReason.LINK_BROKEN
-                    )
-
-                LOGGER.warning(
-                    f'Unable to add indexer download; fail_reason="{e.reason.value}"'
-                )
-                return [], e.reason
+        try:
+            downloads = await DownloadPreppers.get(link_type).prepare(
+                link,
+                volume_id,
+                issue_id,
+                force_match
+            )
+        except EnqueuingDownloadFailure as error:
+            return [], error.reason
 
         result = self.__prepare_downloads_for_queue(
             downloads,

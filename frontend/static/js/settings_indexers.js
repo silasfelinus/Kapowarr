@@ -1,4 +1,5 @@
 const indexers = {};
+let indexerPriorities = {};
 
 function indexerKey(protocol, id) {
 	return `${protocol}:${id}`;
@@ -8,30 +9,46 @@ function endpointFor(protocol) {
 	return protocol === 'torznab' ? '/torznab-indexers' : '/indexers';
 };
 
+function priorityFor(protocol, id) {
+	return indexerPriorities[indexerKey(protocol, id)] || 50;
+};
+
+function savePriorityMap(api_key) {
+	return sendAPI(
+		'PUT', '/settings/acquisition', api_key, {},
+		{indexer_priorities: indexerPriorities}
+	);
+};
+
 function decorateIndexer(indexer, protocol) {
 	return {
 		...indexer,
 		protocol: protocol,
-		endpoint: endpointFor(protocol)
+		endpoint: endpointFor(protocol),
+		priority: priorityFor(protocol, indexer.id)
 	};
 };
 
 function loadIndexers(api_key) {
 	Promise.all([
 		fetchAPI('/indexers', api_key),
-		fetchAPI('/torznab-indexers', api_key)
+		fetchAPI('/torznab-indexers', api_key),
+		fetchAPI('/settings/acquisition', api_key)
 	])
-	.then(([newznab, torznab]) => {
+	.then(([newznab, torznab, acquisition]) => {
 		const table = document.querySelector('#indexer-list');
 		document.querySelectorAll('#indexer-list > :not(:first-child)')
 			.forEach(el => el.remove());
 
 		Object.keys(indexers).forEach(key => delete indexers[key]);
+		indexerPriorities = acquisition.result.indexer_priorities || {};
 		const all = [
 			...newznab.result.map(i => decorateIndexer(i, 'newznab')),
 			...torznab.result.map(i => decorateIndexer(i, 'torznab'))
 		];
-		all.sort((a, b) => a.title.localeCompare(b.title));
+		all.sort((a, b) =>
+			a.priority - b.priority || a.title.localeCompare(b.title)
+		);
 
 		all.forEach(indexer => {
 			const key = indexerKey(indexer.protocol, indexer.id);
@@ -40,7 +57,7 @@ function loadIndexers(api_key) {
 			const entry = document.createElement('button');
 			entry.onclick = e => loadEditIndexer(api_key, key);
 			const protocol = indexer.protocol === 'torznab' ? 'Torznab' : 'Newznab';
-			entry.innerText = `${indexer.title} · ${protocol}`
+			entry.innerText = `${indexer.title} · ${protocol} · P${indexer.priority}`
 				+ (indexer.enabled ? '' : ' (disabled)');
 			table.appendChild(entry);
 		});
@@ -63,6 +80,7 @@ function showAddIndexer() {
 	document.querySelector('#add-base-url-input').value = '';
 	document.querySelector('#add-api-key-input').value = '';
 	document.querySelector('#add-categories-input').value = '7030';
+	document.querySelector('#add-priority-input').value = 50;
 	document.querySelector('#add-enabled-input').checked = true;
 	toggleTorznabFields('add', 'newznab');
 
@@ -99,6 +117,7 @@ async function testAddIndexer(api_key) {
 function saveAddIndexer() {
 	usingApiKey().then(api_key => {
 		const protocol = document.querySelector('#add-protocol-input').value;
+		const priority = parseInt(document.querySelector('#add-priority-input').value);
 		const data = {
 			title: document.querySelector('#add-title-input').value,
 			base_url: document.querySelector('#add-base-url-input').value,
@@ -109,7 +128,12 @@ function saveAddIndexer() {
 			data.categories = document.querySelector('#add-categories-input').value;
 
 		sendAPI('POST', endpointFor(protocol), api_key, {}, data)
-		.then(response => {
+		.then(response => response.json())
+		.then(json => {
+			indexerPriorities[indexerKey(protocol, json.result.id)] = priority;
+			return savePriorityMap(api_key);
+		})
+		.then(() => {
 			loadIndexers(api_key);
 			closeWindow();
 		})
@@ -143,6 +167,7 @@ function loadEditIndexer(api_key, key) {
 		document.querySelector('#edit-base-url-input').value = data.base_url;
 		document.querySelector('#edit-api-key-input').value = data.api_key;
 		document.querySelector('#edit-categories-input').value = data.categories || '7030';
+		document.querySelector('#edit-priority-input').value = data.priority;
 		document.querySelector('#edit-enabled-input').checked = data.enabled;
 		toggleTorznabFields('edit', data.protocol);
 
@@ -182,6 +207,7 @@ function saveEditIndexer() {
 		const window = document.querySelector('#edit-indexer-window');
 		const id = window.dataset.id;
 		const protocol = window.dataset.protocol;
+		const priority = parseInt(document.querySelector('#edit-priority-input').value);
 		const data = {
 			title: document.querySelector('#edit-title-input').value,
 			base_url: document.querySelector('#edit-base-url-input').value,
@@ -192,7 +218,11 @@ function saveEditIndexer() {
 			data.categories = document.querySelector('#edit-categories-input').value;
 
 		sendAPI('PUT', `${endpointFor(protocol)}/${id}`, api_key, {}, data)
-		.then(response => {
+		.then(() => {
+			indexerPriorities[indexerKey(protocol, id)] = priority;
+			return savePriorityMap(api_key);
+		})
+		.then(() => {
 			loadIndexers(api_key);
 			closeWindow();
 		})
@@ -211,8 +241,12 @@ function deleteIndexer(api_key) {
 	const id = window.dataset.id;
 	const protocol = window.dataset.protocol;
 	sendAPI('DELETE', `${endpointFor(protocol)}/${id}`, api_key)
-	.then(response => {
+	.then(() => {
 		delete indexers[indexerKey(protocol, id)];
+		delete indexerPriorities[indexerKey(protocol, id)];
+		return savePriorityMap(api_key);
+	})
+	.then(() => {
 		loadIndexers(api_key);
 		closeWindow();
 	});

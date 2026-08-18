@@ -2,9 +2,11 @@
 
 """Source-specific preparation of search-result links for the download queue.
 
-GetComics, Newznab and Torznab all enter the queue through the same registry.
-Each prepper owns the source-specific work required to turn one result link into
-one or more ``Download`` objects.
+This selectively ports upstream Kapowarr's download-prepper seam while keeping
+this fork's working GetComics and Newznab/SAB implementations intact. A prepper
+owns the source-specific work required to turn one result link into one or more
+``Download`` objects. The queue only needs to ask the registry which prepper
+recognises a link.
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ class DownloadPrepper(ABC):
     @classmethod
     @abstractmethod
     def matches(cls, link: str) -> bool:
+        """Return whether this prepper owns ``link``."""
         ...
 
     @classmethod
@@ -42,10 +45,13 @@ class DownloadPrepper(ABC):
         issue_id: Union[int, None] = None,
         force_match: bool = False
     ) -> List[Download]:
+        """Turn ``link`` into one or more downloads or raise a known failure."""
         ...
 
 
 class DownloadPreppers:
+    """Registry of source-specific queue handoff implementations."""
+
     preppers: Dict[str, Type[DownloadPrepper]] = {}
 
     @classmethod
@@ -167,7 +173,7 @@ class NewznabDownloadPrepper(DownloadPrepper):
                 )
 
             LOGGER.warning(
-                'Unable to add Newznab download; fail_reason="%s"',
+                'Unable to add indexer download; fail_reason="%s"',
                 error.reason.value
             )
             raise

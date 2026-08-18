@@ -147,6 +147,7 @@ def ui_general():
     return render('settings_general.html')
 
 
-# Reader routes decorate the existing ui/api blueprints and therefore must load
+# These modules decorate the existing ui/api blueprints and therefore must load
 # after this module has created ``ui`` and ``render``.
 import frontend.reader  # noqa: E402,F401  # isort: skip
+import frontend.torznab  # noqa: E402,F401  # isort: skip

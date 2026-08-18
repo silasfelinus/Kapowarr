@@ -34,6 +34,31 @@ class parse_weekly_release_lines(unittest.TestCase):
         self.assertEqual(releases[1]['issue_number'], '45')
         self.assertEqual(releases[1]['year'], 2024)
 
+    def test_parses_live_getcomics_download_suffix(self):
+        html = """
+        <div class="entry-content">
+            <ul>
+                <li>
+                    Action Comics #1101 :
+                    <a href="/download/1">Download</a> |
+                    <a href="/read/1">Read Online</a>
+                </li>
+                <li>D’Orc #7 : <a href="/download/2">Download</a></li>
+                <li>The Witcher – The Last Wish : <a href="/download/3">Download</a></li>
+            </ul>
+        </div>
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        releases = _parse_weekly_release_lines(
+            soup, "GetComics", "http://x/weekly-pack"
+        )
+
+        self.assertEqual(len(releases), 2)
+        self.assertEqual(releases[0]['series'], 'Action Comics')
+        self.assertEqual(releases[0]['issue_number'], '1101')
+        self.assertEqual(releases[1]['series'], 'D’Orc')
+        self.assertEqual(releases[1]['issue_number'], '7')
+
     def test_falls_back_to_paragraph_lines_when_no_list_items(self):
         html = """
         <div class="entry-content">
@@ -70,7 +95,7 @@ class parse_weekly_release_lines(unittest.TestCase):
         <div class="entry-content">
             <ul>
                 <li>Batman #123</li>
-                <li>Batman #123</li>
+                <li>Batman #123 : Download</li>
             </ul>
         </div>
         """
@@ -104,7 +129,7 @@ class parse_weekly_release_lines(unittest.TestCase):
         html = """
         <div class="entry-content">
             <ul>
-                <li>X-Men #1AU</li>
+                <li>X-Men #1AU : Download</li>
             </ul>
         </div>
         """
@@ -119,11 +144,7 @@ class parse_weekly_release_lines(unittest.TestCase):
 # Fetch helpers, with a fake AsyncSession
 # =====================
 class _FakeAsyncSession:
-    """Returns canned response bodies from a dict keyed by URL, mirroring
-    `indexers.py` test suite's `_FakeAsyncSession` but supporting multiple
-    distinct URLs since fetching weekly releases is a two-step process
-    (listing page, then the latest article on it).
-    """
+    """Returns canned response bodies from a dict keyed by URL."""
 
     def __init__(self, bodies) -> None:
         self._bodies = bodies
@@ -136,28 +157,51 @@ class _FakeAsyncSession:
 
 LISTING_HTML = """
 <article class="post">
-    <h1 class="post-title"><a href="http://getcomics.example/weekly-1">This Week</a></h1>
+    <h1 class="post-title">
+        <a href="http://getcomics.example/batman">Absolute Batman #23 (2026)</a>
+    </h1>
+</article>
+<article class="post">
+    <h1 class="post-title">
+        <a href="http://getcomics.example/other-comics/2026-08-12-weekly-pack/">
+            2026.08.12 Weekly Pack
+        </a>
+    </h1>
 </article>
 """
 
 ARTICLE_HTML = """
 <div class="entry-content">
+    <h3>DC COMICS</h3>
     <ul>
-        <li>Batman #123</li>
-        <li>Amazing Spider-Man #45 (2024)</li>
+        <li>Action Comics #1101 : <a href="/d/1">Download</a> | Read Online</li>
+        <li>Absolute Batman #23 : <a href="/d/2">Download</a></li>
     </ul>
 </div>
 """
 
+WEEKLY_LINK = 'http://getcomics.example/other-comics/2026-08-12-weekly-pack/'
+
 
 class find_latest_weekly_release_article(unittest.IsolatedAsyncioTestCase):
-    async def test_finds_link(self):
+    async def test_finds_weekly_pack_after_normal_post(self):
         session = _FakeAsyncSession({
-            'https://getcomics.org/category/weekly-comic-book-releases/':
-                LISTING_HTML
+            'https://getcomics.org': LISTING_HTML
         })
         link = await _find_latest_weekly_release_article(session)
-        self.assertEqual(link, 'http://getcomics.example/weekly-1')
+        self.assertEqual(link, WEEKLY_LINK)
+
+    async def test_weekly_pack_href_is_enough_even_if_title_changes(self):
+        html = """
+        <article class="post">
+            <h1 class="post-title">
+                <a href="http://x/2026-08-12-weekly-pack/">New Comics 08/12</a>
+            </h1>
+        </article>
+        """
+        session = _FakeAsyncSession({'https://getcomics.org': html})
+        link = await _find_latest_weekly_release_article(session)
+        self.assertEqual(link, 'http://x/2026-08-12-weekly-pack/')
 
     async def test_empty_listing_returns_none(self):
         session = _FakeAsyncSession({})
@@ -166,37 +210,37 @@ class find_latest_weekly_release_article(unittest.IsolatedAsyncioTestCase):
 
     async def test_no_article_tag_returns_none(self):
         session = _FakeAsyncSession({
-            'https://getcomics.org/category/weekly-comic-book-releases/':
-                '<html><body>Nothing here</body></html>'
+            'https://getcomics.org': '<html><body>Nothing here</body></html>'
         })
         link = await _find_latest_weekly_release_article(session)
         self.assertIsNone(link)
 
-    async def test_no_anchor_returns_none(self):
+    async def test_no_weekly_pack_returns_none(self):
         session = _FakeAsyncSession({
-            'https://getcomics.org/category/weekly-comic-book-releases/':
-                '<article class="post"><h1 class="post-title"></h1></article>'
+            'https://getcomics.org': (
+                '<article class="post"><h1 class="post-title">'
+                '<a href="http://x/batman">Batman #1</a>'
+                '</h1></article>'
+            )
         })
         link = await _find_latest_weekly_release_article(session)
         self.assertIsNone(link)
 
 
 class getcomics_weekly_releases_fetch(unittest.IsolatedAsyncioTestCase):
-    async def test_full_fetch_parses_releases(self):
+    async def test_full_fetch_parses_live_shaped_releases(self):
         session = _FakeAsyncSession({
-            'https://getcomics.org/category/weekly-comic-book-releases/':
-                LISTING_HTML,
-            'http://getcomics.example/weekly-1': ARTICLE_HTML
+            'https://getcomics.org': LISTING_HTML,
+            WEEKLY_LINK: ARTICLE_HTML
         })
 
         releases = await fetch_getcomics_weekly_releases(session)
 
         self.assertEqual(len(releases), 2)
-        self.assertEqual(releases[0]['series'], 'Batman')
+        self.assertEqual(releases[0]['series'], 'Action Comics')
+        self.assertEqual(releases[0]['issue_number'], '1101')
         self.assertEqual(releases[0]['source'], 'GetComics')
-        self.assertEqual(
-            releases[0]['link'], 'http://getcomics.example/weekly-1'
-        )
+        self.assertEqual(releases[0]['link'], WEEKLY_LINK)
 
     async def test_no_listing_returns_empty(self):
         session = _FakeAsyncSession({})
@@ -205,9 +249,8 @@ class getcomics_weekly_releases_fetch(unittest.IsolatedAsyncioTestCase):
 
     async def test_empty_article_body_returns_empty(self):
         session = _FakeAsyncSession({
-            'https://getcomics.org/category/weekly-comic-book-releases/':
-                LISTING_HTML
-            # No body registered for the article link itself.
+            'https://getcomics.org': LISTING_HTML
+            # No body registered for the Weekly Pack link itself.
         })
         releases = await fetch_getcomics_weekly_releases(session)
         self.assertEqual(releases, [])

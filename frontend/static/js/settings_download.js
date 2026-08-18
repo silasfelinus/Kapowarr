@@ -1,19 +1,31 @@
 function fillSettings(api_key) {
-	fetchAPI('/settings', api_key)
-	.then(json => {
-		document.querySelector('#download-folder-input').value = json.result.download_folder;
-		document.querySelector('#concurrent-direct-downloads-input').value = json.result.concurrent_direct_downloads;
-		document.querySelector('#download-timeout-input').value = ((json.result.failing_download_timeout || 0) / 60) || '';
-		document.querySelector('#seeding-handling-input').value = json.result.seeding_handling;
-		document.querySelector('#delete-downloads-input').checked = json.result.delete_completed_downloads;
-		fillPref(json.result.service_preference);
+	Promise.all([
+		fetchAPI('/settings', api_key),
+		fetchAPI('/settings/acquisition', api_key)
+	])
+	.then(([settingsJson, acquisitionJson]) => {
+		const settings = settingsJson.result;
+		const acquisition = acquisitionJson.result;
+		document.querySelector('#download-folder-input').value = settings.download_folder;
+		document.querySelector('#concurrent-direct-downloads-input').value = settings.concurrent_direct_downloads;
+		document.querySelector('#download-timeout-input').value = ((settings.failing_download_timeout || 0) / 60) || '';
+		document.querySelector('#seeding-handling-input').value = settings.seeding_handling;
+		document.querySelector('#delete-downloads-input').checked = settings.delete_completed_downloads;
+		fillOrderedPreference('#pref-table', settings.service_preference);
+		fillOrderedPreference(
+			'#source-pref-table',
+			acquisition.acquisition_source_preference,
+			{direct: 'Direct', torrent: 'Torrent', usenet: 'Usenet'}
+		);
+		document.querySelector('#getcomics-quality-input').value = acquisition.getcomics_quality_preference;
+		document.querySelector('#pack-preference-input').value = acquisition.pack_preference;
 	});
 };
 
 function saveSettings(api_key) {
 	document.querySelector("#save-button p").innerText = 'Saving';
 	document.querySelector('#download-folder-input').classList.remove('error-input');
-	const data = {
+	const settingsData = {
 		'download_folder': document.querySelector('#download-folder-input').value,
 		'concurrent_direct_downloads': parseInt(document.querySelector('#concurrent-direct-downloads-input').value),
 		'failing_download_timeout': parseInt(document.querySelector('#download-timeout-input').value || 0) * 60,
@@ -21,24 +33,32 @@ function saveSettings(api_key) {
 		'delete_completed_downloads': document.querySelector('#delete-downloads-input').checked,
 		'service_preference': [...document.querySelectorAll('#pref-table select')].map(e => e.value)
 	};
-	sendAPI('PUT', '/settings', api_key, {}, data)
-	.then(response => 
+	const acquisitionData = {
+		'acquisition_source_preference': [...document.querySelectorAll('#source-pref-table select')].map(e => e.value),
+		'getcomics_quality_preference': document.querySelector('#getcomics-quality-input').value,
+		'pack_preference': document.querySelector('#pack-preference-input').value
+	};
+	Promise.all([
+		sendAPI('PUT', '/settings', api_key, {}, settingsData),
+		sendAPI('PUT', '/settings/acquisition', api_key, {}, acquisitionData)
+	])
+	.then(() =>
 		document.querySelector("#save-button p").innerText = 'Saved'
 	)
 	.catch(e => {
 		document.querySelector("#save-button p").innerText = 'Failed';
-        e.json().then(e => {
-            if (
-                e.error === "InvalidKeyValue"
-                && e.result.key === "download_folder"
-                ||
-                e.error === "FolderNotFound"
-            )
-                document.querySelector('#download-folder-input').classList.add('error-input');
+		e.json().then(e => {
+			if (
+				e.error === "InvalidKeyValue"
+				&& e.result.key === "download_folder"
+				||
+				e.error === "FolderNotFound"
+			)
+				document.querySelector('#download-folder-input').classList.add('error-input');
 
 			else
-                console.log(e);
-        });
+				console.log(e);
+		});
 	});
 };
 
@@ -53,37 +73,38 @@ function emptyFolder(api_key) {
 };
 
 //
-// Service preference
+// Ordered preferences
 //
-function fillPref(pref) {
-	const selects = document.querySelectorAll('#pref-table select');
+function fillOrderedPreference(tableSelector, pref, labels = {}) {
+	const selects = document.querySelectorAll(`${tableSelector} select`);
 	for (let i = 0; i < pref.length; i++) {
-		const service = pref[i];
+		const current = pref[i];
 		const select = selects[i];
-		select.onchange = updatePrefOrder;
+		select.onchange = e => updatePrefOrder(e, tableSelector);
 		pref.forEach(option => {
 			const entry = document.createElement('option');
 			entry.value = option;
-			entry.innerText = option.charAt(0).toUpperCase() + option.slice(1);
-			if (option === service)
+			entry.innerText = labels[option] || option;
+			if (option === current)
 				entry.selected = true;
 			select.appendChild(entry);
 		});
 	};
 };
 
-function updatePrefOrder(e) {
-	const other_selects = document.querySelectorAll(
-		`#pref-table select:not([data-place="${e.target.dataset.place}"])`
+function updatePrefOrder(e, tableSelector) {
+	const otherSelects = document.querySelectorAll(
+		`${tableSelector} select:not([data-place="${e.target.dataset.place}"])`
 	);
-	// Find select that has the value of the target select
-	for (let i = 0; i < other_selects.length; i++) {
-		if (other_selects[i].value === e.target.value) {
-			// Set it to old value of target select
-			all_values = [...document.querySelector('#pref-table select').options].map(e => e.value)
-			used_values = new Set([...document.querySelectorAll('#pref-table select')].map(s => s.value));
-			open_value = all_values.filter(e => !used_values.has(e))[0];
-			other_selects[i].value = open_value;
+	for (let i = 0; i < otherSelects.length; i++) {
+		if (otherSelects[i].value === e.target.value) {
+			const firstSelect = document.querySelector(`${tableSelector} select`);
+			const allValues = [...firstSelect.options].map(option => option.value);
+			const usedValues = new Set(
+				[...document.querySelectorAll(`${tableSelector} select`)].map(select => select.value)
+			);
+			const openValue = allValues.filter(value => !usedValues.has(value))[0];
+			otherSelects[i].value = openValue;
 			break;
 		};
 	};

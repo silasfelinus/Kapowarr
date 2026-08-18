@@ -82,7 +82,14 @@ def add_to_history(download: Download) -> None:
 
 
 def add_file_to_database(download: Download) -> None:
-    "Register files in database and match to a volume/issue"
+    """Register downloaded files in the database and match them to issues.
+
+    A search result can describe a true multi-issue range even when the search
+    was launched from one issue. Before the first scan, normalize a downloaded
+    outer pack that contains complete nested issue files so the scanner sees
+    those real files rather than one giant archive covering the whole range.
+    """
+    normalized_pack = normalize_downloaded_range_pack(download)
     if not download.files:
         return
 
@@ -91,6 +98,13 @@ def add_file_to_database(download: Download) -> None:
         filepath_filter=download.files,
         update_websocket=True
     )
+
+    if normalized_pack and Settings().sv.rename_downloaded_files:
+        download.files = mass_rename(
+            download.volume_id,
+            filepath_filter=download.files,
+            process_individual_files=False
+        )
     return
 
 
@@ -273,23 +287,6 @@ def rename_with_proper_extension(download: Download) -> None:
     return
 
 
-def rename_normalized_pack_files(download: Download) -> None:
-    """Apply normal naming after a direct-download range pack was split."""
-    if (
-        not getattr(download, '_normalized_range_pack', False)
-        or not download.files
-        or not Settings().sv.rename_downloaded_files
-    ):
-        return
-
-    download.files = mass_rename(
-        download.volume_id,
-        filepath_filter=download.files,
-        process_individual_files=False
-    )
-    return
-
-
 def convert_file(download: Download) -> None:
     "Convert a file into a different format based on settings"
     if not download.files or not Settings().sv.convert:
@@ -322,9 +319,7 @@ class PostProcessor:
         add_to_history,
         move_to_dest,
         rename_with_proper_extension,
-        normalize_downloaded_range_pack,
         add_file_to_database,
-        rename_normalized_pack_files,
         convert_file,
         set_file_properties
     ]

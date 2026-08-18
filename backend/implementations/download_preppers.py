@@ -142,6 +142,11 @@ class GetComicsDownloadPrepper(DownloadPrepper):
 class NewznabDownloadPrepper(DownloadPrepper):
     @classmethod
     def matches(cls, link: str) -> bool:
+        # Torznab search results carry an explicit local fragment tag. Reject
+        # those before consulting the Newznab table so clearly identified
+        # torrent links do not make an unnecessary app-context-bound DB lookup.
+        if is_torznab_link(link):
+            return False
         return Indexers.find_by_link(link) is not None
 
     @classmethod

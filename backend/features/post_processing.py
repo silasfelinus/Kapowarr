@@ -15,6 +15,7 @@ from backend.base.definitions import (BlocklistReason, DownloadState,
 from backend.base.files import (copy_directory, delete_file_folder,
                                 rename_file, set_detected_extension)
 from backend.base.logging import LOGGER
+from backend.features.pack_normalization import normalize_downloaded_range_pack
 from backend.implementations.blocklist import add_to_blocklist
 from backend.implementations.conversion import mass_convert
 from backend.implementations.converters import extract_files_from_folder
@@ -82,6 +83,9 @@ def add_to_history(download: Download) -> None:
 
 def add_file_to_database(download: Download) -> None:
     "Register files in database and match to a volume/issue"
+    if not download.files:
+        return
+
     scan_files(
         download.volume_id,
         filepath_filter=download.files,
@@ -158,6 +162,13 @@ def move_torrent_to_dest(download: TorrentDownload) -> None:
     if not download.files:
         return
 
+    # A torrent/Usenet folder can itself contain a single 1-100.zip/cbr-style
+    # pack. Split it before the first scan so existing issues are still known as
+    # existing and only genuinely missing issue files are retained.
+    normalize_downloaded_range_pack(download)
+    if not download.files:
+        return
+
     scan_files(
         download.volume_id,
         filepath_filter=download.files,
@@ -210,6 +221,10 @@ def copy_file_torrent(download: TorrentDownload) -> None:
     if not download.files:
         return
 
+    normalize_downloaded_range_pack(download)
+    if not download.files:
+        return
+
     scan_files(
         download.volume_id,
         filepath_filter=download.files,
@@ -258,9 +273,26 @@ def rename_with_proper_extension(download: Download) -> None:
     return
 
 
+def rename_normalized_pack_files(download: Download) -> None:
+    """Apply normal naming after a direct-download range pack was split."""
+    if (
+        not getattr(download, '_normalized_range_pack', False)
+        or not download.files
+        or not Settings().sv.rename_downloaded_files
+    ):
+        return
+
+    download.files = mass_rename(
+        download.volume_id,
+        filepath_filter=download.files,
+        process_individual_files=False
+    )
+    return
+
+
 def convert_file(download: Download) -> None:
     "Convert a file into a different format based on settings"
-    if not Settings().sv.convert:
+    if not download.files or not Settings().sv.convert:
         return
 
     download.files += mass_convert(
@@ -290,7 +322,9 @@ class PostProcessor:
         add_to_history,
         move_to_dest,
         rename_with_proper_extension,
+        normalize_downloaded_range_pack,
         add_file_to_database,
+        rename_normalized_pack_files,
         convert_file,
         set_file_properties
     ]

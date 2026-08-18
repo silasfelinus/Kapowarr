@@ -23,7 +23,7 @@ from backend.features.search import auto_search
 from backend.implementations.conversion import mass_convert
 from backend.implementations.naming import mass_rename
 from backend.implementations.volumes import Volume, refresh_and_scan
-from backend.internals.db import close_db, get_db
+from backend.internals.db import close_db, commit, get_db
 from backend.internals.server import (TaskAddedEvent, TaskEndedEvent,
                                       TaskStatusEvent, WebSocket)
 
@@ -585,6 +585,10 @@ class TaskHandler(metaclass=Singleton):
                             """,
                             (task.action, history_title, round(time()))
                         )
+                        # The task-ended event tells open Tasks pages to
+                        # reload history. Make the new row visible to those
+                        # request connections before emitting the event.
+                        commit()
                     except Exception:
                         # History must never prevent queue cleanup or the next
                         # task from starting, even if the database itself is

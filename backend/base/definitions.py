@@ -654,6 +654,31 @@ class MatchedSearchResultData(
     _issue_number: Union[float, Tuple[float, float]]
 
 
+class DiscoverItemData(SearchResultData):
+    """One item found while browsing GetComics' recent posts for the
+    Discover page (see `backend.implementations.discover`), before any
+    cross-referencing against the library has happened.
+
+    Reuses the same filename-derived shape as `SearchResultData` -- this is
+    the same raw "GC post title" data `search_getcomics()` parses via
+    `extract_filename_data()`, just sourced from GetComics' general
+    recent-posts listing instead of a search query -- and adds a
+    best-effort cover image extracted from the post listing itself.
+    """
+    cover: Union[str, None]
+    "Best-effort thumbnail URL for the post, or None if none was found"
+
+
+class DiscoverMatchData(DiscoverItemData):
+    """A `DiscoverItemData` cross-referenced against the library, ready to
+    display on the Discover page (see `backend.features.discover`).
+    """
+    volume_id: Union[int, None]
+    "The id of the matched library volume, or None if not yet added"
+    volume_title: Union[str, None]
+    "The matched library volume's current title, or None if not yet added"
+
+
 class WeeklyReleaseData(TypedDict):
     """One "release" line parsed out of a weekly-release source (see
     `backend.implementations.weekly_releases`), before any cross-
@@ -1017,6 +1042,44 @@ class WeeklyReleaseSource(ABC):
                 raising) on any request/parse failure -- one broken source
                 shouldn't fail a check that combines several, same contract
                 as `SearchSource.search()`.
+        """
+        ...
+
+    def __repr__(self) -> str:
+        return f'<{self.__class__.__name__}>'
+
+
+class DiscoverSource(ABC):
+    """A pluggable source of "recent releases to browse" data for the
+    Discover page, mirroring `WeeklyReleaseSource`. Kept separate from it
+    because it answers a different question again: not "what released
+    this week" (unconditional, single result set) but "browse recent
+    releases" (paged, the caller decides how far back to look), so `fetch`
+    takes a page number and reports back how many pages are available.
+
+    See `backend.features.discover.DiscoverSources` for the registry this
+    plugs into, and `backend.implementations.discover` for the raw
+    fetch/parse logic backing the built-in GetComics implementation.
+    """
+
+    @abstractmethod
+    async def fetch(
+        self,
+        session: 'AsyncSession',
+        page: int = 1
+    ) -> Tuple[List[DiscoverItemData], int]:
+        """Fetch and parse one page of recent releases.
+
+        Args:
+            session (AsyncSession): The session to use for the fetch.
+            page (int, optional): The page to fetch. Defaults to 1.
+
+        Returns:
+            Tuple[List[DiscoverItemData], int]: The items found on this
+                page, and the total number of pages available. Empty items
+                (rather than raising) on any request/parse failure, same
+                contract as `SearchSource.search()` /
+                `WeeklyReleaseSource.fetch()`.
         """
         ...
 

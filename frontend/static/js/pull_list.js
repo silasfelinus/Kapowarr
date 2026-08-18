@@ -3,7 +3,8 @@ const PullListEls = {
 	empty_message: document.querySelector('#pull-list-empty-message'),
 	buttons: {
 		refresh: document.querySelector('#refresh-button'),
-		check: document.querySelector('#check-button')
+		check: document.querySelector('#check-button'),
+		reading_lists: document.querySelector('#reading-lists-button')
 	},
 	entry: document.querySelector('.pre-build-els .pull-list-entry')
 };
@@ -78,4 +79,7 @@ usingApiKey()
 	fillList(api_key);
 	PullListEls.buttons.refresh.onclick = e => fillList(api_key);
 	PullListEls.buttons.check.onclick = e => checkNow(api_key);
+	PullListEls.buttons.reading_lists.onclick = e => {
+		window.location.href = `${url_base}/activity/reading-lists`;
+	};
 });

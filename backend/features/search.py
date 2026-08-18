@@ -11,7 +11,8 @@ from backend.base.helpers import (AsyncSession, check_overlapping_issues,
                                   extract_year_from_date, force_range,
                                   normalise_query_string)
 from backend.base.logging import LOGGER
-from backend.features.acquisition_preferences import (ordered_download_types,
+from backend.features.acquisition_preferences import (indexer_priority,
+                                                       ordered_download_types,
                                                        pack_preference_rank)
 from backend.implementations.getcomics import search_getcomics
 from backend.implementations.indexers import Indexers, search_indexer
@@ -189,6 +190,7 @@ class SearchIndexers(SearchSource):
         indexers = Indexers.get_enabled()
         if not indexers:
             return []
+        indexers.sort(key=lambda indexer: indexer_priority('newznab', indexer.id))
 
         responses = await gather(*(
             search_indexer(session, indexer, self.query)
@@ -203,6 +205,7 @@ class SearchTorznab(SearchSource):
         indexers = TorznabIndexers.get_enabled()
         if not indexers:
             return []
+        indexers.sort(key=lambda indexer: indexer_priority('torznab', indexer.id))
 
         responses = await gather(*(
             search_torznab_indexer(session, indexer, self.query)

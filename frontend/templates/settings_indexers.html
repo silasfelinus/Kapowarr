@@ -44,6 +44,13 @@
 					</td>
 				</tr>
 				<tr>
+					<th><label for="add-priority-input">Priority</label></th>
+					<td>
+						<input type="number" id="add-priority-input" min="1" max="100" value="50" required>
+						<p class="description">1 is highest. Priority only breaks ties between otherwise-equivalent results from the same protocol.</p>
+					</td>
+				</tr>
+				<tr>
 					<th><label for="add-enabled-input">Enabled</label></th>
 					<td><input type="checkbox" id="add-enabled-input" checked></td>
 				</tr>
@@ -89,6 +96,13 @@
 					<td><input type="text" id="edit-categories-input"></td>
 				</tr>
 				<tr>
+					<th><label for="edit-priority-input">Priority</label></th>
+					<td>
+						<input type="number" id="edit-priority-input" min="1" max="100" required>
+						<p class="description">1 is highest. Equal priorities keep the indexers' existing stable order.</p>
+					</td>
+				</tr>
+				<tr>
 					<th><label for="edit-enabled-input">Enabled</label></th>
 					<td><input type="checkbox" id="edit-enabled-input"></td>
 				</tr>
@@ -114,6 +128,7 @@
 			Search GetComics plus any enabled Newznab Usenet and Torznab torrent feeds.
 			Prowlarr and Jackett can be added by pasting their Torznab API URL and API key.
 			Search results keep the configured indexer name so you can see where each release came from.
+			Within each protocol, lower priority numbers win otherwise-equivalent ties.
 		</p>
 		<div id="indexer-list" class="client-list">
 			<button id="add-indexer" class="add-button icon-text-color" title="Add indexer">

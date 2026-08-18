@@ -6,9 +6,25 @@
 }
 
 #discover-empty-message,
-#discover-loading-message {
+#discover-loading-message,
+#discover-mode-description {
 	padding: 0 0 1rem 0;
 	color: var(--text-color);
+}
+
+.discover-mode-button {
+	border: 1px solid var(--border-color);
+	border-radius: 4px;
+	padding: .45rem .75rem;
+	background: var(--foreground-color);
+	color: var(--text-color);
+	cursor: pointer;
+}
+
+.discover-mode-button.active {
+	background: var(--accent-color);
+	color: var(--nav-color);
+	border-color: var(--accent-color);
 }
 
 .table-container {
@@ -17,7 +33,7 @@
 
 table {
 	width: 100%;
-	min-width: 33.3rem;
+	min-width: 46rem;
 	table-layout: fixed;
 
 	color: var(--text-color);
@@ -33,6 +49,21 @@ th, td {
 
 .title-column {
 	overflow: auto;
+}
+
+.reason-column {
+	width: 18rem;
+	font-size: .9rem;
+	color: var(--text-color);
+}
+
+.reason-column a {
+	color: var(--text-color);
+	text-decoration: none;
+}
+
+.reason-column a:hover {
+	text-decoration: underline;
 }
 
 .status-column {
@@ -90,4 +121,10 @@ th, td {
 .status-column a.not-added {
 	color: var(--nav-color);
 	background-color: var(--accent-color);
+}
+
+@media (max-width: 700px) {
+	.reason-column {
+		width: 13rem;
+	}
 }

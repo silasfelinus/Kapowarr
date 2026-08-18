@@ -5,7 +5,8 @@
 from flask import request
 
 from backend.base.custom_exceptions import InvalidKeyValue
-from backend.features.discover import get_discover_feed
+from backend.features.discover import (get_discover_feed,
+                                       get_recommended_discover_feed)
 from frontend.api import api, auth, error_handler, return_api
 from frontend.ui import render, ui
 
@@ -19,6 +20,20 @@ def ui_discover():
 @error_handler
 @auth
 def api_discover():
+    mode = request.values.get('mode', 'recent')
+    if mode not in ('recent', 'for-you'):
+        raise InvalidKeyValue('mode', mode)
+
+    if mode == 'for-you':
+        items, pages_scanned = get_recommended_discover_feed()
+        return return_api({
+            'items': items,
+            'mode': mode,
+            'page': 1,
+            'max_page': 1,
+            'pages_scanned': pages_scanned
+        })
+
     raw_page = request.values.get('page', '1')
     try:
         page = int(raw_page)
@@ -30,6 +45,8 @@ def api_discover():
     items, max_page = get_discover_feed(page)
     return return_api({
         'items': items,
+        'mode': mode,
         'page': min(page, max_page),
-        'max_page': max_page
+        'max_page': max_page,
+        'pages_scanned': 1
     })

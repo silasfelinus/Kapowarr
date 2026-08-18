@@ -4,13 +4,14 @@ from threading import Event
 from unittest.mock import MagicMock, patch
 
 from backend.base.custom_exceptions import (ClientNotWorking,
+                                            CredentialInvalid,
                                             DownloadLimitReached,
                                             DownloadNotFound,
                                             DownloadUnmovable, InvalidKeyValue,
                                             IssueNotFound, LinkBroken)
 from backend.base.definitions import (BlocklistReason, BrokenClientReason,
-                                      DownloadSource, DownloadState,
-                                      ExternalDownload)
+                                      Constants, DownloadSource,
+                                      DownloadState, ExternalDownload)
 from backend.features import download_queue as dq
 from backend.features.download_queue import DownloadHandler
 
@@ -169,6 +170,96 @@ class run_external_download_progress(unittest.TestCase):
 
         post_processer.seeding.assert_called_once_with(dl)
         post_processer.success.assert_called_once_with(dl)
+
+
+# kapowarr/t-024: `update_status()` is documented to raise
+# `ClientNotWorking`/`CredentialInvalid`, but nothing used to catch it here
+# -- an outage or a malformed client response killed this polling thread
+# silently, with no state change and no log line pointing at the affected
+# download. It now tolerates a bounded run of consecutive failures before
+# giving up and marking the download failed through the normal terminal
+# branch.
+@patch('backend.features.download_queue.WebSocket')
+class run_external_download_status_failures(unittest.TestCase):
+    def test_transient_failures_are_tolerated_and_recovered_from(self, _mock_ws):
+        handler = _make_handler()
+        dl = _make_external_download([DownloadState.IMPORTING_STATE])
+        real_side_effect = dl.update_status.side_effect
+        call_count = {'n': 0}
+
+        def flaky(*a, **k):
+            call_count['n'] += 1
+            if call_count['n'] <= 2:
+                raise ClientNotWorking(BrokenClientReason.CONNECTION_ERROR)
+            return real_side_effect(*a, **k)
+
+        dl.update_status.side_effect = flaky
+        handler.queue = [dl]
+        post_processer = MagicMock()
+
+        handler._DownloadHandler__run_external_download(dl, post_processer)
+
+        # 2 failed attempts + 1 that actually advanced the state.
+        self.assertEqual(dl.update_status.call_count, 3)
+        post_processer.success.assert_called_once_with(dl)
+        dl.stop.assert_not_called()
+
+    def test_gives_up_after_consecutive_failure_limit_and_marks_failed(self, _mock_ws):
+        handler = _make_handler()
+        dl = _make_external_download([])
+        dl.update_status.side_effect = ClientNotWorking(
+            BrokenClientReason.CONNECTION_ERROR
+        )
+        dl.stop.side_effect = lambda state: setattr(dl, 'state', state)
+        handler.queue = [dl]
+        post_processer = MagicMock()
+
+        handler._DownloadHandler__run_external_download(dl, post_processer)
+
+        self.assertEqual(
+            dl.update_status.call_count,
+            Constants.EXTERNAL_DOWNLOAD_STATUS_FAILURE_LIMIT
+        )
+        dl.stop.assert_called_once_with(state=DownloadState.FAILED_STATE)
+        # Giving up routes through the same terminal branch a "discovered
+        # while polling" failure already does -- perm_failed, removed from
+        # the client and the in-memory queue.
+        post_processer.perm_failed.assert_called_once_with(dl)
+        dl.remove_from_client.assert_called_once_with(delete_files=True)
+        self.assertNotIn(dl, handler.queue)
+
+    def test_credential_invalid_counts_toward_the_same_limit(self, _mock_ws):
+        handler = _make_handler()
+        dl = _make_external_download([])
+        dl.update_status.side_effect = CredentialInvalid()
+        dl.stop.side_effect = lambda state: setattr(dl, 'state', state)
+        handler.queue = [dl]
+        post_processer = MagicMock()
+
+        handler._DownloadHandler__run_external_download(dl, post_processer)
+
+        dl.stop.assert_called_once_with(state=DownloadState.FAILED_STATE)
+        post_processer.perm_failed.assert_called_once_with(dl)
+
+    def test_failure_never_calls_update_status_again_after_giving_up(self, _mock_ws):
+        # The give-up branch must fall through to the terminal-state check
+        # instead of looping back to update_status() -- looping back would
+        # just raise the same way again with no sleep in between.
+        handler = _make_handler()
+        dl = _make_external_download([])
+        dl.update_status.side_effect = ClientNotWorking(
+            BrokenClientReason.CONNECTION_ERROR
+        )
+        dl.stop.side_effect = lambda state: setattr(dl, 'state', state)
+        handler.queue = [dl]
+        post_processer = MagicMock()
+
+        handler._DownloadHandler__run_external_download(dl, post_processer)
+
+        self.assertEqual(
+            dl.update_status.call_count,
+            Constants.EXTERNAL_DOWNLOAD_STATUS_FAILURE_LIMIT
+        )
 
 
 class determine_link_type(unittest.TestCase):

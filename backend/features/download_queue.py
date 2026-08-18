@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Tuple, Type, Union
 from typing_extensions import assert_never
 
 from backend.base.custom_exceptions import (ClientNotWorking,
+                                            CredentialInvalid,
                                             DownloadLimitReached,
                                             DownloadNotFound,
                                             DownloadUnmovable,
@@ -134,8 +135,52 @@ class DownloadHandler(metaclass=Singleton):
         # which doesn't seed) never touches this branch.
         files_copied = False
 
+        # `update_status()` is documented to raise `ClientNotWorking`/
+        # `CredentialInvalid` (see `ExternalDownload.update_status()`), but
+        # nothing here used to catch it -- an outage (client restart,
+        # network blip) or a malformed client response raised straight out
+        # of this loop, which is run in a background thread. That silently
+        # killed the thread: no log line pointing at this download, no
+        # state change, no post-processing -- the download just sat frozen
+        # in the queue forever, indistinguishable from one still genuinely
+        # in progress (kapowarr/t-024). Tolerate a bounded run of
+        # consecutive failures (transient outage) before giving up and
+        # marking the download failed through the same terminal-state
+        # branch already used for a graceful failure below.
+        consecutive_status_failures = 0
+
         while True:
-            download.update_status()
+            try:
+                download.update_status()
+                consecutive_status_failures = 0
+
+            except (ClientNotWorking, CredentialInvalid) as e:
+                consecutive_status_failures += 1
+                LOGGER.warning(
+                    "Failed to update status of download %r (attempt %d/%d): %s",
+                    download.title, consecutive_status_failures,
+                    Constants.EXTERNAL_DOWNLOAD_STATUS_FAILURE_LIMIT, e
+                )
+
+                if (
+                    consecutive_status_failures
+                    < Constants.EXTERNAL_DOWNLOAD_STATUS_FAILURE_LIMIT
+                ):
+                    download.sleep_event.wait(
+                        timeout=Constants.TORRENT_UPDATE_INTERVAL
+                    )
+                    continue
+
+                LOGGER.error(
+                    "Giving up on download %r after %d consecutive failed "
+                    "status updates; marking as failed",
+                    download.title, consecutive_status_failures
+                )
+                # Fall through to the FAILED_STATE branch below instead of
+                # calling update_status() again -- it would just raise the
+                # same way and spin this loop with no sleep in between.
+                download.stop(state=DownloadState.FAILED_STATE)
+
             ws.emit(status_event)
 
             if download.state == DownloadState.CANCELED_STATE:

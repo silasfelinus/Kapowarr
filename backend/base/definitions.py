@@ -133,6 +133,17 @@ class Constants:
     TORRENT_UPDATE_INTERVAL = 5 # seconds
     "The interval in seconds between status updates from external clients"
 
+    EXTERNAL_DOWNLOAD_STATUS_FAILURE_LIMIT = 60
+    """
+    How many consecutive `update_status()` failures (`ClientNotWorking`/
+    `CredentialInvalid`) an external download's polling loop tolerates
+    before giving up and marking it failed. At `TORRENT_UPDATE_INTERVAL`
+    (5s) between attempts, 60 is ~5 minutes of continuous failure --
+    generous enough to ride out a client restart or a network blip
+    without silently retrying forever on something that will never
+    recover (e.g. a revoked API key).
+    """
+
     TORRENT_TAG = "kapowarr"
     "The tag to give to downloads at external clients"
 

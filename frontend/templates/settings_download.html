@@ -72,51 +72,76 @@
 					</tr>
 				</tbody>
 			</table>
-			<h2>Service preference</h2>
-			<p>The preference for service to download from when using GetComics as the source.</p>
+
+			<h2>Acquisition Preferences</h2>
+			<p>These preferences break ties between valid releases. They never make a non-matching release outrank a correct one.</p>
+			<table class="fold-table">
+				<tbody>
+					<tr>
+						<th>Source Priority</th>
+						<td>
+							<table id="source-pref-table" class="short-table">
+								<tbody>
+									<tr><th>1</th><td><select data-place="1"></select></td></tr>
+									<tr><th>2</th><td><select data-place="2"></select></td></tr>
+									<tr><th>3</th><td><select data-place="3"></select></td></tr>
+								</tbody>
+							</table>
+							<p>Preferred acquisition protocol when otherwise-equivalent matches are available: Direct (including GetComics), Torrent, or Usenet.</p>
+						</td>
+					</tr>
+					<tr>
+						<th><label for="getcomics-quality-input">GetComics Quality</label></th>
+						<td>
+							<select id="getcomics-quality-input">
+								<option value="any">No preference</option>
+								<option value="hd">Prefer HD</option>
+								<option value="sd">Prefer SD</option>
+							</select>
+							<p>When GetComics explicitly offers equivalent HD and SD download groups, prefer the selected variant. Unlabelled releases remain usable.</p>
+						</td>
+					</tr>
+					<tr>
+						<th><label for="pack-preference-input">Issue Packs</label></th>
+						<td>
+							<select id="pack-preference-input">
+								<option value="neutral">Neutral</option>
+								<option value="prefer">Prefer packs</option>
+								<option value="avoid">Prefer single issues</option>
+							</select>
+							<p>Choose whether a valid multi-issue range should be preferred over individual issues. Existing pack safety and owned-issue pruning still apply.</p>
+						</td>
+					</tr>
+				</tbody>
+			</table>
+
+			<h2>GetComics Service Preference</h2>
+			<p>The preference for hosting service after a GetComics release has been selected.</p>
 			<table id="pref-table" class="short-table">
 				<tbody>
 					<tr>
 						<th>1</th>
-						<td>
-							<select data-place="1">
-							</select>
-						</td>
+						<td><select data-place="1"></select></td>
 					</tr>
 					<tr>
 						<th>2</th>
-						<td>
-							<select data-place="2">
-							</select>
-						</td>
+						<td><select data-place="2"></select></td>
 					</tr>
 					<tr>
 						<th>3</th>
-						<td>
-							<select data-place="3">
-							</select>
-						</td>
+						<td><select data-place="3"></select></td>
 					</tr>
 					<tr>
 						<th>4</th>
-						<td>
-							<select data-place="4">
-							</select>
-						</td>
+						<td><select data-place="4"></select></td>
 					</tr>
 					<tr>
 						<th>5</th>
-						<td>
-							<select data-place="5">
-							</select>
-						</td>
+						<td><select data-place="5"></select></td>
 					</tr>
 					<tr>
 						<th>6</th>
-						<td>
-							<select data-place="6">
-							</select>
-						</td>
+						<td><select data-place="6"></select></td>
 					</tr>
 				</tbody>
 			</table>

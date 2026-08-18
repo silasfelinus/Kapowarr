@@ -18,6 +18,7 @@ from backend.base.custom_exceptions import EnqueuingDownloadFailure
 from backend.base.definitions import (BlocklistReason, Constants, Download,
                                       EnqueuingDownloadFailureReason)
 from backend.base.logging import LOGGER
+from backend.features.acquisition_preferences import order_getcomics_groups
 from backend.implementations.blocklist import add_to_blocklist
 from backend.implementations.getcomics import GetComicsPage
 from backend.implementations.indexers import Indexers, create_nzb_download
@@ -111,6 +112,12 @@ class GetComicsDownloadPrepper(DownloadPrepper):
                 error.reason.value
             )
             raise
+
+        # GetComics exposes HD/SD at the article's download-group level rather
+        # than in the search result. Reorder those variants before the existing
+        # path builder chooses among equivalent groups. Match/range correctness
+        # remains entirely inside GetComicsPage.create_downloads().
+        page.download_groups = order_getcomics_groups(page.download_groups)
 
         try:
             return await page.create_downloads(

@@ -30,12 +30,6 @@ class DownloadPrepperRegistryTest(unittest.TestCase):
             dp.DownloadPreppers.get_for_link('https://example.invalid/file')
         )
 
-    @patch.object(dp, 'create_nzb_download', new_callable=AsyncMock)
-    async def _unused_async_test_marker(self, _create):
-        # unittest on Python 3.8 does not natively await async test methods;
-        # real async coverage lives in the synchronous wrapper below.
-        pass
-
     def test_newznab_prepper_delegates_to_existing_download_factory(self):
         expected = MagicMock()
         with patch.object(

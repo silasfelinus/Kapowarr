@@ -152,3 +152,4 @@ def ui_general():
 import frontend.reader  # noqa: E402,F401  # isort: skip
 import frontend.torznab  # noqa: E402,F401  # isort: skip
 import frontend.reading_lists  # noqa: E402,F401  # isort: skip
+import frontend.discover  # noqa: E402,F401  # isort: skip

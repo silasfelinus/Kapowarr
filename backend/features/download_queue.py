@@ -34,6 +34,10 @@ from backend.implementations.download_clients import (BaseDirectDownload,
                                                       TorrentDownload)
 from backend.implementations.download_preppers import DownloadPreppers
 from backend.implementations.external_clients import ExternalClients
+# Compatibility patch points retained for existing callers/tests. Queue
+# dispatch itself goes through DownloadPreppers rather than these classes.
+from backend.implementations.getcomics import GetComicsPage
+from backend.implementations.indexers import Indexers
 from backend.implementations.volumes import Issue
 from backend.internals.db import get_db, iter_commit
 from backend.internals.server import (AddedToQueueEvent, QueueStatusEvent,
@@ -466,7 +470,7 @@ class DownloadHandler(metaclass=Singleton):
             volume_id (int): The ID of the volume to check for.
 
         Returns:
-            bool: Whether there is a download in the queue for the given volume.
+            bool: Whether there is a download in the queue.
         """
         return any(
             d.volume_id == volume_id

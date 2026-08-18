@@ -154,8 +154,18 @@ def match_discover_items_to_library(
 
 
 def _recommendation_tokens(title: str) -> Tuple[str, ...]:
-    """Return meaningful lowercase title tokens for deterministic matching."""
-    cleaned = sub(r'[^a-z0-9]+', ' ', title.lower()).strip()
+    """Return meaningful lowercase title tokens for deterministic matching.
+
+    Strip explicit volume numbering before normal tokenisation so a title
+    such as ``Batman Vol. 2`` does not gain a false numeric franchise token,
+    while real numeric titles such as ``100 Bullets`` keep their number.
+    """
+    without_volume_number = sub(
+        r'\b(?:vol|volume)\.?\s*\d+\b',
+        ' ',
+        title.lower()
+    )
+    cleaned = sub(r'[^a-z0-9]+', ' ', without_volume_number).strip()
     return tuple(
         token for token in cleaned.split()
         if token not in _RECOMMENDATION_STOPWORDS
@@ -183,7 +193,13 @@ def _score_related_title(candidate: str, library_title: str) -> int:
 
     score = len(shared) * 3
 
-    if candidate_tokens[0] == library_tokens[0]:
+    # Sharing the opening word is meaningful only when there is already
+    # more than one token of evidence. This avoids recommending unrelated
+    # multi-word titles such as "Dark Crisis" from "Dark Horse Presents".
+    if (
+        len(shared) >= 2
+        and candidate_tokens[0] == library_tokens[0]
+    ):
         score += 2
 
     candidate_normal = ' '.join(candidate_tokens)

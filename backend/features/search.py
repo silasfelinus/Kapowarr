@@ -11,6 +11,8 @@ from backend.base.helpers import (AsyncSession, check_overlapping_issues,
                                   extract_year_from_date, force_range,
                                   normalise_query_string)
 from backend.base.logging import LOGGER
+from backend.features.acquisition_preferences import (ordered_download_types,
+                                                       pack_preference_rank)
 from backend.implementations.getcomics import search_getcomics
 from backend.implementations.indexers import Indexers, search_indexer
 from backend.implementations.matching import check_search_result_match
@@ -119,6 +121,11 @@ def _rank_search_result(
         vy_score -= 1
 
     rating.append(vy_score)
+
+    # User pack preference is deliberately below match/title/year correctness,
+    # but above the historical issue-shape tie-breaker. Neutral adds the same
+    # zero to every result and therefore preserves the old order exactly.
+    rating.append(pack_preference_rank(result['issue_number']))
 
     # Sort on issue number fitting
     if calculated_issue_number is not None:
@@ -230,8 +237,8 @@ async def search_multiple_queries(*queries: str) -> List[SearchResultData]:
     async with AsyncSession() as session:
         searches = [
             Source(query).search(session)
-            for sources in SearchSources.sources.values()
-            for Source in sources
+            for download_type in ordered_download_types(SearchSources.active_types())
+            for Source in SearchSources.sources[download_type]
             for query in queries
         ]
         responses = await gather(*searches)
@@ -242,13 +249,18 @@ async def search_multiple_queries(*queries: str) -> List[SearchResultData]:
 async def search_planned_queries(
     query_plan: Mapping[DownloadType, Sequence[str]]
 ) -> List[SearchResultData]:
-    """Search each protocol only with the queries built for that protocol."""
+    """Search each protocol only with the queries built for that protocol.
+
+    Protocol preference changes the stable input order, so otherwise-equal
+    results inherit the user's preferred acquisition source without making
+    source choice more important than matching correctness.
+    """
     async with AsyncSession() as session:
         searches = [
             Source(query).search(session)
-            for download_type, queries in query_plan.items()
+            for download_type in ordered_download_types(tuple(query_plan))
             for Source in SearchSources.sources.get(download_type, [])
-            for query in queries
+            for query in query_plan[download_type]
         ]
         responses = await gather(*searches)
 

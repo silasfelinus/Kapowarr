@@ -514,3 +514,28 @@ main > *:not(.tool-bar-container) {
 		width: 3.5rem;
 	}
 }
+
+/* Download queue status */
+.download-status {
+	display: block;
+	padding: .35rem .55rem;
+	border-radius: 4px;
+	background-color: var(--accent-color);
+	color: var(--nav-background-color);
+	font-size: .8rem;
+	font-weight: 600;
+	line-height: 1.2;
+	text-decoration: none;
+}
+
+.download-status[data-status="downloading"],
+.download-status[data-status="importing"],
+.download-status[data-status="seeding"] {
+	background-color: var(--success-color);
+	color: var(--light-color);
+}
+
+.download-status[data-status="paused"] {
+	background-color: var(--error-color);
+	color: var(--light-color);
+}

@@ -35,6 +35,17 @@ have flagged (t-005, t-007). The Newznab JSON response shape below follows
 the long-stable public spec (https://newznab.readthedocs.io/), including
 the well-known quirk where `channel.item` is a bare object instead of a
 single-element list when a search returns exactly one result.
+
+`search_indexer()`'s response parsing is deliberately defensive about
+shape, not just content: `SearchIndexers.search()` (see
+`backend.features.search`) awaits every enabled indexer through a plain
+`asyncio.gather()` with no `return_exceptions=True`, so an *unhandled*
+exception here would fail the whole combined search (GetComics included),
+not just this one indexer's results -- same
+"empty rather than raising" contract the docstring below already
+promises, just also enforced against a misconfigured/misbehaving endpoint
+returning a shape that isn't a well-formed Newznab response, not only
+non-JSON or an explicit `error` key (kapowarr/t-024).
 """
 
 from concurrent.futures import (Future, ThreadPoolExecutor,
@@ -381,6 +392,20 @@ async def search_indexer(
         LOGGER.warning("Indexer %s returned a non-JSON response", indexer.title)
         return []
 
+    if not isinstance(data, dict):
+        # A well-formed Newznab response is always a JSON object; a
+        # misconfigured/misbehaving endpoint (wrong URL, unrelated JSON
+        # API behind the same base_url, etc.) could return anything else.
+        # `search_getcomics()`'s `quiet_fail=True` contract -- one broken
+        # source shouldn't fail a search combining several -- only holds
+        # if this function never raises, so treat any unexpected shape as
+        # "no results" rather than letting a `dict`-only call blow up.
+        LOGGER.warning(
+            "Indexer %s returned an unexpected response shape (%s)",
+            indexer.title, type(data).__name__
+        )
+        return []
+
     if "error" in data:
         LOGGER.warning(
             "Indexer %s returned an error: %s",
@@ -388,14 +413,20 @@ async def search_indexer(
         )
         return []
 
-    items = data.get("channel", {}).get("item", [])
+    channel = data.get("channel")
+    items = channel.get("item", []) if isinstance(channel, dict) else []
     if isinstance(items, dict):
         # Newznab's well-known single-result JSON quirk: `item` is a bare
         # object instead of a one-element list.
         items = [items]
+    elif not isinstance(items, list):
+        items = []
 
     results: List[SearchResultData] = []
     for item in items:
+        if not isinstance(item, dict):
+            continue
+
         title = item.get("title")
         if not title:
             continue
@@ -421,7 +452,11 @@ def _extract_item_link(item: Mapping[str, Any]) -> Union[str, None]:
     """
     enclosure = item.get("enclosure")
     if isinstance(enclosure, dict):
-        url = enclosure.get("@attributes", {}).get("url")
+        # `.get("@attributes", {})` alone doesn't defend against a
+        # present-but-`null` key -- the default only applies when the key
+        # is *absent*, and a bare-JSON-object Newznab response can
+        # legitimately have `"@attributes": null` on a malformed entry.
+        url = (enclosure.get("@attributes") or {}).get("url")
         if url:
             return url
 
@@ -432,7 +467,7 @@ def _extract_item_link(item: Mapping[str, Any]) -> Union[str, None]:
     guid = item.get("guid")
     if isinstance(guid, dict):
         text = guid.get("#text")
-        is_permalink = guid.get("@attributes", {}).get("isPermaLink") == "true"
+        is_permalink = (guid.get("@attributes") or {}).get("isPermaLink") == "true"
         if is_permalink and text:
             return text
 

@@ -76,6 +76,20 @@ class newznab_item_link_extraction(unittest.TestCase):
     def test_nothing_found(self):
         self.assertIsNone(_extract_item_link({}))
 
+    def test_null_enclosure_attributes_falls_back_to_link(self):
+        # `.get("@attributes", {})`'s default only applies when the key is
+        # *absent* -- a present-but-null value used to raise AttributeError
+        # on the chained `.get("url")` (kapowarr/t-024).
+        item = {
+            "enclosure": {"@attributes": None},
+            "link": "http://idx/details/1"
+        }
+        self.assertEqual(_extract_item_link(item), "http://idx/details/1")
+
+    def test_null_guid_attributes_does_not_raise(self):
+        item = {"guid": {"#text": "abc-123", "@attributes": None}}
+        self.assertIsNone(_extract_item_link(item))
+
 
 # =====================
 # Registry (Indexer/Indexers)
@@ -258,6 +272,44 @@ class search_indexer_parsing(unittest.IsolatedAsyncioTestCase):
         session = _FakeAsyncSession(body)
         results = await search_indexer(session, _fake_indexer(), 'Batman')
         self.assertEqual(results, [])
+
+    # -- kapowarr/t-024: malformed/unexpected response shapes must return
+    # [] rather than raise, same as the non-JSON/error-key cases above --
+    # `SearchIndexers.search()` awaits every indexer through a plain
+    # `asyncio.gather()` with no `return_exceptions=True`, so a raised
+    # exception here would fail the whole combined search, not just this
+    # one indexer.
+    async def test_top_level_non_dict_returns_empty(self):
+        session = _FakeAsyncSession('[1, 2, 3]')
+        results = await search_indexer(session, _fake_indexer(), 'Batman')
+        self.assertEqual(results, [])
+
+    async def test_channel_is_null_returns_empty(self):
+        session = _FakeAsyncSession('{"channel": null}')
+        results = await search_indexer(session, _fake_indexer(), 'Batman')
+        self.assertEqual(results, [])
+
+    async def test_channel_is_not_a_dict_returns_empty(self):
+        session = _FakeAsyncSession('{"channel": "unexpected"}')
+        results = await search_indexer(session, _fake_indexer(), 'Batman')
+        self.assertEqual(results, [])
+
+    async def test_item_is_not_a_list_or_dict_returns_empty(self):
+        session = _FakeAsyncSession('{"channel": {"item": "unexpected"}}')
+        results = await search_indexer(session, _fake_indexer(), 'Batman')
+        self.assertEqual(results, [])
+
+    async def test_non_dict_item_in_list_is_skipped(self):
+        body = (
+            '{"channel": {"item": ['
+            '"not-a-dict",'
+            '{"title": "Batman (2020) 001", "link": "https://idx/get/1"}'
+            ']}}'
+        )
+        session = _FakeAsyncSession(body)
+        results = await search_indexer(session, _fake_indexer(), 'Batman')
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['link'], 'https://idx/get/1')
 
 
 # =====================

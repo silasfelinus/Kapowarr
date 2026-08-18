@@ -270,6 +270,69 @@ class sabnzbd_client_instance(unittest.TestCase):
 
         self.assertEqual(result, {})
 
+    # kapowarr/t-024: `.get('queue', {})`/`.get('history', {})`'s default
+    # only applies when the key is *absent*, not when it's present with a
+    # JSON `null` value -- an unhardened chained `.get('slots', [])` on
+    # `None` raised AttributeError and killed the download's polling
+    # thread. A real SABnzbd instance is not known to ever send this, but
+    # a proxy/reverse-proxy/misbehaving instance in front of it plausibly
+    # could, and the failure mode (silent thread death) is severe enough
+    # to defend against cheaply.
+    def test_get_download_tolerates_null_queue_key(self):
+        client = self._make_client()
+        client.known_ids.add('nzo_1')
+        fake = FakeSession({
+            'queue': FakeResponse({'queue': None}),
+            'history': FakeResponse({'history': {'slots': []}})
+        })
+        with _patched_session(fake):
+            result = client.get_download('nzo_1')
+
+        self.assertIsNone(result)
+
+    def test_get_download_tolerates_null_history_key(self):
+        client = self._make_client()
+        client.known_ids.add('nzo_1')
+        fake = FakeSession({
+            'queue': FakeResponse({'queue': {'slots': []}}),
+            'history': FakeResponse({'history': None})
+        })
+        with _patched_session(fake):
+            result = client.get_download('nzo_1')
+
+        self.assertIsNone(result)
+
+    def test_get_download_tolerates_null_slots_key(self):
+        client = self._make_client()
+        client.known_ids.add('nzo_1')
+        fake = FakeSession({
+            'queue': FakeResponse({'queue': {'slots': None}}),
+            'history': FakeResponse({'history': {'slots': None}})
+        })
+        with _patched_session(fake):
+            result = client.get_download('nzo_1')
+
+        self.assertIsNone(result)
+
+    def test_get_download_skips_non_dict_slot_entries(self):
+        client = self._make_client()
+        client.known_ids.add('nzo_1')
+        fake = FakeSession({
+            'queue': FakeResponse({'queue': {'slots': ['not-a-dict']}}),
+            'history': FakeResponse({
+                'history': {'slots': [{
+                    'nzo_id': 'nzo_1',
+                    'status': 'Completed',
+                    'bytes': '104857600',
+                    'storage': '/downloads/kapowarr/Batman 001'
+                }]}
+            })
+        })
+        with _patched_session(fake):
+            result = client.get_download('nzo_1')
+
+        self.assertEqual(result['state'], DownloadState.IMPORTING_STATE)
+
     def test_delete_download_hits_both_queue_and_history_and_forgets_id(self):
         client = self._make_client()
         client.known_ids.add('nzo_1')

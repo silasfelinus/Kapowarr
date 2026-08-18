@@ -197,8 +197,14 @@ class SABnzbd(BaseExternalClient):
             self.ssn, self.base_url, self.api_token,
             mode='queue'
         )
-        for slot in result.get('queue', {}).get('slots', []):
-            if slot.get('nzo_id') == download_id:
+        # `.get('queue', {})` alone doesn't defend against a present-but-
+        # `null` key (the default only applies when the key is *absent*),
+        # and a slot itself could in principle not be a mapping -- both
+        # are unlikely from a real SABnzbd instance but not worth an
+        # unhandled AttributeError killing the polling loop over.
+        queue_slots = (result.get('queue') or {}).get('slots') or []
+        for slot in queue_slots:
+            if isinstance(slot, dict) and slot.get('nzo_id') == download_id:
                 return slot
         return None
 
@@ -213,8 +219,9 @@ class SABnzbd(BaseExternalClient):
             self.ssn, self.base_url, self.api_token,
             mode='history'
         )
-        for slot in result.get('history', {}).get('slots', []):
-            if slot.get('nzo_id') == download_id:
+        history_slots = (result.get('history') or {}).get('slots') or []
+        for slot in history_slots:
+            if isinstance(slot, dict) and slot.get('nzo_id') == download_id:
                 return slot
         return None
 

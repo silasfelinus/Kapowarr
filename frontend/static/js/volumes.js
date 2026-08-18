@@ -130,6 +130,27 @@ class LibraryEntry {
 
 		return;
 	};
+
+	setDownloadStatus(download_status) {
+		const elements = [
+			this.list_entry.querySelector('.list-download-status'),
+			this.table_entry.querySelector('.table-download-status')
+		];
+
+		elements.forEach(element => {
+			if (download_status === null) {
+				element.classList.add('hidden');
+				element.innerText = '';
+				delete element.dataset.status;
+				return;
+			};
+
+			element.innerText = download_status.text;
+			element.title = `${download_status.text}. View download queue.`;
+			element.dataset.status = download_status.status;
+			element.classList.remove('hidden');
+		});
+	};
 };
 
 function buildLibraryEntry(volume, api_key, list_fragment, table_fragment) {
@@ -190,6 +211,7 @@ function buildLibraryEntry(volume, api_key, list_fragment, table_fragment) {
 		volume.issues_downloaded_monitored,
 		volume.issue_count_monitored
 	);
+	library_entry.setDownloadStatus(getVolumeDownloadStatus(volume.id));
 
 	// Add to view
 	list_fragment.appendChild(list_entry);
@@ -409,6 +431,17 @@ usingApiKey()
 				).value
 			}
 		);
+
+	document.addEventListener(
+		'kapowarr:download-queue-changed',
+		() => library_els.views.table
+			.querySelectorAll('.table-entry')
+			.forEach(entry => {
+				const id = parseInt(entry.dataset.id);
+				new LibraryEntry(id, api_key)
+					.setDownloadStatus(getVolumeDownloadStatus(id));
+			})
+	);
 
 	socket.on(
 		'downloaded_status',

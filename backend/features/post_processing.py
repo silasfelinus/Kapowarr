@@ -12,10 +12,14 @@ from typing import TYPE_CHECKING, Dict
 
 from backend.base.definitions import (BlocklistReason, DownloadState,
                                       FileConstants, NotificationEvent)
-from backend.base.files import (copy_directory, delete_file_folder,
-                                rename_file, set_detected_extension)
+from backend.base.files import (delete_file_folder, rename_file,
+                                set_detected_extension)
 from backend.base.logging import LOGGER
-from backend.features.pack_normalization import normalize_downloaded_range_pack
+from backend.features.pack_normalization import (
+    normalize_downloaded_range_pack,
+    prune_downloaded_range_files,
+)
+from backend.features.seed_import import hardlink_or_copy_path
 from backend.implementations.blocklist import add_to_blocklist
 from backend.implementations.conversion import mass_convert
 from backend.implementations.converters import extract_files_from_folder
@@ -81,6 +85,13 @@ def add_to_history(download: Download) -> None:
     return
 
 
+def _normalize_downloaded_range(download: Download) -> bool:
+    """Normalize wrapped packs and remove already-owned individual issues."""
+    normalized_pack = normalize_downloaded_range_pack(download)
+    prune_downloaded_range_files(download)
+    return normalized_pack
+
+
 def add_file_to_database(download: Download) -> None:
     """Register downloaded files in the database and match them to issues.
 
@@ -89,7 +100,7 @@ def add_file_to_database(download: Download) -> None:
     outer pack that contains complete nested issue files so the scanner sees
     those real files rather than one giant archive covering the whole range.
     """
-    normalized_pack = normalize_downloaded_range_pack(download)
+    normalized_pack = _normalize_downloaded_range(download)
     if not download.files:
         return
 
@@ -158,28 +169,26 @@ def move_to_dest(download: Download) -> None:
     return
 
 
-def move_torrent_to_dest(download: TorrentDownload) -> None:
-    """
-    Move folder downloaded using torrent from download folder to
-    final destination, extract files, scan them, rename them.
-    """
-    if not exists(download.files[0]):
-        return
-
-    move_to_dest(download)
-
-    download.files = extract_files_from_folder(
-        download.files[0],
-        download.volume_id
-    )
-
+def _expand_external_download_root(download: Download) -> None:
+    """Resolve either a single-file or directory external download."""
     if not download.files:
         return
 
-    # A torrent/Usenet folder can itself contain a single 1-100.zip/cbr-style
-    # pack. Split it before the first scan so existing issues are still known as
-    # existing and only genuinely missing issue files are retained.
-    normalize_downloaded_range_pack(download)
+    root = download.files[0]
+    if isfile(root):
+        download.files = [root]
+    else:
+        download.files = extract_files_from_folder(
+            root,
+            download.volume_id
+        )
+
+    if download.files:
+        _normalize_downloaded_range(download)
+    return
+
+
+def _scan_and_rename_download(download: Download) -> None:
     if not download.files:
         return
 
@@ -189,34 +198,48 @@ def move_torrent_to_dest(download: TorrentDownload) -> None:
         update_websocket=True
     )
 
-    rename_files = Settings().sv.rename_downloaded_files
-    if rename_files:
+    if Settings().sv.rename_downloaded_files:
         download.files = mass_rename(
             download.volume_id,
             filepath_filter=download.files,
             process_individual_files=False
         )
+    return
 
+
+def move_torrent_to_dest(download: TorrentDownload) -> None:
+    """
+    Move a completed torrent root to the final destination, handling both
+    single-file and directory torrents before scanning/renaming.
+    """
+    if not exists(download.files[0]):
+        return
+
+    move_to_dest(download)
+    _expand_external_download_root(download)
+    _scan_and_rename_download(download)
     return
 
 
 def copy_file_torrent(download: TorrentDownload) -> None:
+    """Create a seed-safe library-side torrent copy.
+
+    Prefer hardlinks so active seeds do not consume duplicate storage; fall back
+    to normal file copies when hardlinks are unavailable (for example across
+    filesystems). Rename/conversion then operate only on the library-side path.
+    Change back to the torrent client's source path with ``reset_file_link``.
     """
-    Copy downloaded files to dest. Change download.file to copy.
-    Change back using `PPA.reset_file_link()`.
-    """
-    download._original_files = download.files
-    if not exists(download.files[0]):
+    download._original_files = list(download.files)
+    if not download.files or not exists(download.files[0]):
         return
 
     folder = Volume(download.volume_id).vd.folder
     file_dest = join(folder, basename(download.files[0]))
     LOGGER.debug(
-        f'Copying download to final destination: {download}, Dest: {file_dest}'
+        f'Preparing seed-safe library copy: {download}, Dest: {file_dest}'
     )
 
-    # If it takes very long to delete/copy the folder (because of it's size),
-    # the DB is left locked for a long period leading to timeouts.
+    # Copying/linking a large tree should not hold the DB lock.
     commit()
 
     if exists(file_dest):
@@ -225,34 +248,11 @@ def copy_file_torrent(download: TorrentDownload) -> None:
         )
         delete_file_folder(file_dest)
 
-    copy_directory(download.files[0], file_dest)
+    hardlink_or_copy_path(download.files[0], file_dest)
+    download.files = [file_dest]
 
-    download.files = extract_files_from_folder(
-        file_dest,
-        download.volume_id
-    )
-
-    if not download.files:
-        return
-
-    normalize_downloaded_range_pack(download)
-    if not download.files:
-        return
-
-    scan_files(
-        download.volume_id,
-        filepath_filter=download.files,
-        update_websocket=True
-    )
-
-    rename_files = Settings().sv.rename_downloaded_files
-    if rename_files:
-        download.files = mass_rename(
-            download.volume_id,
-            filepath_filter=download.files,
-            process_individual_files=False
-        )
-
+    _expand_external_download_root(download)
+    _scan_and_rename_download(download)
     return
 
 
@@ -414,15 +414,18 @@ class PostProcessorTorrentsComplete(PostProcessor):
 
 
 class PostProcessorTorrentsCopy(PostProcessor):
+    # File ownership/mode/date changes are deliberately deferred until success.
+    # A hardlink shares inode metadata with the active seed, so changing those
+    # properties during seeding could make the torrent client's source unreadable.
     actions_success = [
         remove_from_queue,
-        delete_file
+        delete_file,
+        set_file_properties
     ]
 
     actions_seeding = [
         add_to_history,
         copy_file_torrent,
         convert_file,
-        set_file_properties,
         reset_file_link
     ]

@@ -12,7 +12,7 @@ without adding another branch to ``features.search.manual_search``.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Dict, List, Type
+from typing import Dict, List, Type, Union
 
 from backend.base.definitions import DownloadType, SpecialVersion, VolumeData
 from backend.base.helpers import normalise_query_string
@@ -26,7 +26,7 @@ class QueryBuilder(ABC):
         self,
         volume: VolumeData,
         title: str,
-        issue_number: str = None
+        issue_number: Union[str, None] = None
     ) -> List[str]:
         ...
 
@@ -90,7 +90,7 @@ class ComicQueryBuilder(QueryBuilder):
         self,
         volume: VolumeData,
         title: str,
-        issue_number: str = None
+        issue_number: Union[str, None] = None
     ) -> List[str]:
         if volume.special_version == SpecialVersion.TPB:
             formats = self.TPB_FORMATS

@@ -2,11 +2,9 @@
 
 """Source-specific preparation of search-result links for the download queue.
 
-This selectively ports upstream Kapowarr's download-prepper seam while keeping
-this fork's working GetComics and Newznab/SAB implementations intact. A prepper
-owns the source-specific work required to turn one result link into one or more
-``Download`` objects. The queue only needs to ask the registry which prepper
-recognises a link.
+GetComics, Newznab and Torznab all enter the queue through the same registry.
+Each prepper owns the source-specific work required to turn one result link into
+one or more ``Download`` objects.
 """
 
 from __future__ import annotations
@@ -21,6 +19,8 @@ from backend.base.logging import LOGGER
 from backend.implementations.blocklist import add_to_blocklist
 from backend.implementations.getcomics import GetComicsPage
 from backend.implementations.indexers import Indexers, create_nzb_download
+from backend.implementations.torznab import (create_torznab_download,
+                                            is_torznab_link)
 
 
 class DownloadPrepper(ABC):
@@ -31,7 +31,6 @@ class DownloadPrepper(ABC):
     @classmethod
     @abstractmethod
     def matches(cls, link: str) -> bool:
-        """Return whether this prepper owns ``link``."""
         ...
 
     @classmethod
@@ -43,13 +42,10 @@ class DownloadPrepper(ABC):
         issue_id: Union[int, None] = None,
         force_match: bool = False
     ) -> List[Download]:
-        """Turn ``link`` into one or more downloads or raise a known failure."""
         ...
 
 
 class DownloadPreppers:
-    """Registry of source-specific queue handoff implementations."""
-
     preppers: Dict[str, Type[DownloadPrepper]] = {}
 
     @classmethod
@@ -171,7 +167,48 @@ class NewznabDownloadPrepper(DownloadPrepper):
                 )
 
             LOGGER.warning(
-                'Unable to add indexer download; fail_reason="%s"',
+                'Unable to add Newznab download; fail_reason="%s"',
+                error.reason.value
+            )
+            raise
+
+
+@DownloadPreppers.register('torznab')
+class TorznabDownloadPrepper(DownloadPrepper):
+    @classmethod
+    def matches(cls, link: str) -> bool:
+        return is_torznab_link(link)
+
+    @classmethod
+    async def prepare(
+        cls,
+        link: str,
+        volume_id: int,
+        issue_id: Union[int, None] = None,
+        force_match: bool = False
+    ) -> List[Download]:
+        try:
+            return [await create_torznab_download(
+                link,
+                volume_id,
+                issue_id,
+                force_match
+            )]
+        except EnqueuingDownloadFailure as error:
+            if error.reason == EnqueuingDownloadFailureReason.LINK_BROKEN:
+                add_to_blocklist(
+                    web_link=link,
+                    web_title=None,
+                    web_sub_title='Torznab',
+                    download_link=None,
+                    source=None,
+                    volume_id=volume_id,
+                    issue_id=issue_id,
+                    reason=BlocklistReason.LINK_BROKEN
+                )
+
+            LOGGER.warning(
+                'Unable to add Torznab download; fail_reason="%s"',
                 error.reason.value
             )
             raise

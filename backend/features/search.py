@@ -23,9 +23,11 @@ from backend.implementations.volumes import Volume
 class SearchSources:
     """Registry of search-source implementations by acquisition protocol.
 
-    Newznab remains backed by the fork's existing indexer table, GetComics is
-    configuration-free, and Torznab/Prowlarr/Jackett register as torrent peers
-    without teaching the coordinator source-specific branches.
+    This is the small, fork-compatible part of upstream's indexer-client
+    manager that we actually need. Newznab remains backed by the fork's existing
+    indexer table and GetComics remains configuration-free; Torznab can register
+    as a torrent peer without teaching the search coordinator another special
+    case.
     """
 
     sources: Dict[DownloadType, List[Type[SearchSource]]] = {
@@ -56,10 +58,34 @@ def _rank_search_result(
     year: Tuple[Union[int, None], Union[int, None]] = (None, None),
     calculated_issue_number: Union[float, None] = None
 ) -> List[int]:
-    """Give a search result a rank, based on which you can sort."""
+    """Give a search result a rank, based on which you can sort.
+
+    Args:
+        result (MatchedSearchResultData): A search result.
+
+        title (str): Title of volume.
+
+        volume_number (int): The volume number of the volume.
+
+        year (Tuple[Union[int, None], Union[int, None]], optional): The year of
+        the volume and the year of the issue if searching for an issue and
+        release date is known.
+            Defaults to (None, None).
+
+        calculated_issue_number (Union[float, None], optional): The
+        calculated_issue_number of the issue.
+            Defaults to None.
+
+    Returns:
+        List[int]: A list of numbers which determines the ranking of the result.
+    """
     rating = []
+
+    # Prefer matches (False == 0 == higher rank)
     rating.append(not result['match'])
 
+    # The more words in the search term that are present in
+    # the search results' title, the higher ranked it gets
     split_title = title.split(' ')
     rating.append(len([
         word
@@ -67,6 +93,7 @@ def _rank_search_result(
         if word not in split_title
     ]))
 
+    # Prefer volume number or year matches, even better if both match
     vy_score = 3
     if (
         result['volume_number'] is not None
@@ -79,6 +106,7 @@ def _rank_search_result(
         and result['year'] is not None
         and year[1] == result['year']
     ):
+        # issue year direct match
         vy_score -= 2
 
     elif (
@@ -87,15 +115,19 @@ def _rank_search_result(
         and result['year'] is not None
         and year[0] - 1 <= result['year'] <= year[1] + 1
     ):
+        # fuzzy match between start year and issue year
         vy_score -= 1
 
     rating.append(vy_score)
 
+    # Sort on issue number fitting
     if calculated_issue_number is not None:
+        # Search was for issue
         if (
             isinstance(result['issue_number'], float)
             and calculated_issue_number == result['issue_number']
         ):
+            # Issue number is direct match
             rating.append(0)
 
         elif isinstance(result['issue_number'], tuple):
@@ -104,26 +136,34 @@ def _rank_search_result(
                 <= calculated_issue_number
                 <= result['issue_number'][1]
             ):
+                # Issue number falls between range
                 rating.append(
                     1 - (1 / (
                         result['issue_number'][1] - result['issue_number'][0] + 1
                     ))
                 )
+
             else:
+                # Issue number falls outside so release is not useful
                 rating.append(3)
 
         elif result['special_version'] is not None:
+            # Issue number not found but is special version
             rating.append(2)
+
         else:
+            # No issue number found and not special version
             rating.append(3)
 
     else:
+        # Search was for volume
         if isinstance(result['issue_number'], tuple):
             rating.append(
                 1.0
                 /
                 (result['issue_number'][1] - result['issue_number'][0] + 1)
             )
+
         elif isinstance(result['issue_number'], float):
             rating.append(1)
 
@@ -171,6 +211,8 @@ def _dedupe_search_results(
     processed_links = set()
     for response in responses:
         for result in response:
+            # Don't add if the link is already in the results. A source can
+            # return the same release for multiple query variations.
             if result['link'] not in processed_links:
                 search_results.append(result)
                 processed_links.add(result['link'])
@@ -179,7 +221,12 @@ def _dedupe_search_results(
 
 
 async def search_multiple_queries(*queries: str) -> List[SearchResultData]:
-    """Search every registered source with the same query variations."""
+    """Search every registered source with the same query variations.
+
+    Kept as a compatibility helper for callers/tests that already have query
+    strings. New volume/issue searches use :func:`search_planned_queries` so
+    each protocol can own its query-builder policy.
+    """
     async with AsyncSession() as session:
         searches = [
             Source(query).search(session)
@@ -212,7 +259,17 @@ def manual_search(
     volume_id: int,
     issue_id: Union[int, None] = None
 ) -> List[MatchedSearchResultData]:
-    """Do a manual search for a volume or issue."""
+    """Do a manual search for a volume or issue.
+
+    Args:
+        volume_id (int): The id of the volume to search for.
+        issue_id (Union[int, None], optional): The id of the issue to search for,
+        in the case that you want to search for an issue instead of a volume.
+            Defaults to None.
+
+    Returns:
+        List[MatchedSearchResultData]: List with search results.
+    """
     volume = Volume(volume_id)
     volume_data = volume.get_data()
     volume_issues = volume.get_issues()
@@ -274,6 +331,7 @@ def manual_search(
         ]
 
         search_title = normalise_query_string(title).replace(':', '')
+        # Sort results; put best result at top
         results.sort(key=lambda r: _rank_search_result(
             r, search_title, volume_data.volume_number,
             (
@@ -293,7 +351,17 @@ def auto_search(
     volume_id: int,
     issue_id: Union[int, None] = None
 ) -> List[MatchedSearchResultData]:
-    """Search for a volume or issue and automatically choose a result."""
+    """Search for a volume or issue and automatically choose a result.
+
+    Args:
+        volume_id (int): The ID of the volume to search for.
+        issue_id (Union[int, None], optional): The id of the issue to search for,
+        in the case that you want to search for an issue instead of a volume.
+            Defaults to None.
+
+    Returns:
+        List[MatchedSearchResultData]: List with chosen search results.
+    """
     volume = Volume(volume_id)
     volume_data = volume.get_data()
     volume_issues = volume.get_issues(_skip_files=True)
@@ -306,18 +374,24 @@ def auto_search(
 
     searchable_issues: List[Tuple[int, float]] = []
     if not volume_data.monitored:
+        # Volume is unmonitored so don't auto search
         pass
 
     elif issue_id is None:
+        # Auto search volume
+        # Get open issues (monitored and no file).
         searchable_issues = volume.get_open_issues()
 
     else:
+        # Auto search issue
         issue = volume.get_issue(issue_id)
         issue_data = issue.get_data()
         if issue_data.monitored and not issue.get_files():
+            # Issue is open
             searchable_issues = [(issue_id, issue_data.calculated_issue_number)]
 
     if not searchable_issues:
+        # No issues to search for
         result = []
         LOGGER.debug(f'Auto search results: {result}')
         return result
@@ -332,15 +406,19 @@ def auto_search(
         SpecialVersion.NORMAL,
         SpecialVersion.VOLUME_AS_ISSUE
     ):
+        # We're searching for one "item", so just grab first search result.
         result = search_results[:1] if search_results else []
         LOGGER.debug('Auto search results: %s', result)
         return result
 
+    # We're searching for a volume, so we might download multiple search results.
+    # Find a combination of search results that download the most issues.
     chosen_downloads: List[MatchedSearchResultData] = []
     searchable_issue_numbers = {i[1] for i in searchable_issues}
     for result in search_results:
         result = refine_special_version(volume_data, result)
 
+        # Determine what issues the result covers
         if result["special_version"]:
             result["issue_number"] = 1.0
             covered_issues = volume_issues
@@ -364,8 +442,10 @@ def auto_search(
             i.calculated_issue_number not in searchable_issue_numbers
             for i in covered_issues
         ):
+            # Part or all of what the result covers is already downloaded
             continue
 
+        # Check that any other selected download doesn't already cover the issue
         for part in chosen_downloads:
             if check_overlapping_issues(
                 part["issue_number"], # type: ignore
@@ -375,6 +455,9 @@ def auto_search(
         else:
             chosen_downloads.append(result)
 
+    # Find issues that have still not been covered. Might've been that the
+    # download for the issue simply did not pop up on volume search, but will
+    # when searching for the individual issue.
     missing_issues = [
         i
         for i in searchable_issues

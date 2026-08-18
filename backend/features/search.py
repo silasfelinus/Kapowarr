@@ -1,20 +1,53 @@
 # -*- coding: utf-8 -*-
 
 from asyncio import gather, run
-from typing import Dict, List, Tuple, Union
+from typing import Dict, List, Mapping, Sequence, Tuple, Type, Union
 
-from backend.base.definitions import (QUERY_FORMATS, MatchedSearchResultData,
+from backend.base.definitions import (DownloadType, MatchedSearchResultData,
                                       SearchResultData, SearchSource,
                                       SpecialVersion)
 from backend.base.file_extraction import refine_special_version
 from backend.base.helpers import (AsyncSession, check_overlapping_issues,
                                   extract_year_from_date, force_range,
-                                  get_subclasses, normalise_query_string)
+                                  normalise_query_string)
 from backend.base.logging import LOGGER
 from backend.implementations.getcomics import search_getcomics
 from backend.implementations.indexers import Indexers, search_indexer
 from backend.implementations.matching import check_search_result_match
+from backend.implementations.query_builders import QueryBuilders
 from backend.implementations.volumes import Volume
+
+
+class SearchSources:
+    """Registry of search-source implementations by acquisition protocol.
+
+    This is the small, fork-compatible part of upstream's indexer-client
+    manager that we actually need. Newznab remains backed by the fork's existing
+    indexer table and GetComics remains configuration-free; Torznab can register
+    as a torrent peer without teaching the search coordinator another special
+    case.
+    """
+
+    sources: Dict[DownloadType, List[Type[SearchSource]]] = {
+        download_type: []
+        for download_type in DownloadType
+    }
+
+    @classmethod
+    def register(cls, download_type: DownloadType):
+        def wrapper(source: Type[SearchSource]) -> Type[SearchSource]:
+            cls.sources[download_type].append(source)
+            return source
+        return wrapper
+
+    @classmethod
+    def active_types(cls) -> List[DownloadType]:
+        return [
+            download_type
+            for download_type, sources in cls.sources.items()
+            if sources
+        ]
+
 
 
 def _rank_search_result(
@@ -136,11 +169,13 @@ def _rank_search_result(
     return rating
 
 
+@SearchSources.register(DownloadType.DIRECT)
 class SearchGetComics(SearchSource):
     async def search(self, session: AsyncSession) -> List[SearchResultData]:
         return await search_getcomics(session, self.query)
 
 
+@SearchSources.register(DownloadType.USENET)
 class SearchIndexers(SearchSource):
     async def search(self, session: AsyncSession) -> List[SearchResultData]:
         indexers = Indexers.get_enabled()
@@ -154,32 +189,57 @@ class SearchIndexers(SearchSource):
         return [result for response in responses for result in response]
 
 
-async def search_multiple_queries(*queries: str) -> List[SearchResultData]:
-    """Do a manual search for multiple queries asynchronously.
 
-    Returns:
-        List[SearchResultData]: The search results for all queries together,
-        duplicates removed.
-    """
-    async with AsyncSession() as session:
-        searches = [
-            Source(query).search(session)
-            for Source in get_subclasses(SearchSource)
-            for query in queries
-        ]
-        responses = await gather(*searches)
-
+def _dedupe_search_results(
+    responses: Sequence[List[SearchResultData]]
+) -> List[SearchResultData]:
     search_results: List[SearchResultData] = []
     processed_links = set()
     for response in responses:
         for result in response:
-            # Don't add if the link is already in the results
-            # Avoids duplicates, as multiple formats can return the same result
+            # Don't add if the link is already in the results. A source can
+            # return the same release for multiple query variations.
             if result['link'] not in processed_links:
                 search_results.append(result)
                 processed_links.add(result['link'])
 
     return search_results
+
+
+async def search_multiple_queries(*queries: str) -> List[SearchResultData]:
+    """Search every registered source with the same query variations.
+
+    Kept as a compatibility helper for callers/tests that already have query
+    strings. New volume/issue searches use :func:`search_planned_queries` so
+    each protocol can own its query-builder policy.
+    """
+    async with AsyncSession() as session:
+        searches = [
+            Source(query).search(session)
+            for sources in SearchSources.sources.values()
+            for Source in sources
+            for query in queries
+        ]
+        responses = await gather(*searches)
+
+    return _dedupe_search_results(responses)
+
+
+async def search_planned_queries(
+    query_plan: Mapping[DownloadType, Sequence[str]]
+) -> List[SearchResultData]:
+    """Search each protocol only with the queries built for that protocol."""
+    async with AsyncSession() as session:
+        searches = [
+            Source(query).search(session)
+            for download_type, queries in query_plan.items()
+            for Source in SearchSources.sources.get(download_type, [])
+            for query in queries
+        ]
+        responses = await gather(*searches)
+
+    return _dedupe_search_results(responses)
+
 
 
 def manual_search(
@@ -225,32 +285,24 @@ def manual_search(
         if not title:
             continue
 
-        if volume_data.special_version == SpecialVersion.TPB:
-            formats = QUERY_FORMATS["TPB"]
+        query_plan: Dict[DownloadType, Sequence[str]] = {}
+        for download_type in SearchSources.active_types():
+            try:
+                builder = QueryBuilders.get(download_type)
+            except KeyError:
+                LOGGER.warning(
+                    'Search source registered without query builder: %s',
+                    download_type.name
+                )
+                continue
 
-        elif volume_data.special_version == SpecialVersion.VOLUME_AS_ISSUE:
-            formats = QUERY_FORMATS["VAI"]
-
-        elif issue_number is None:
-            formats = QUERY_FORMATS["Volume"]
-
-        else:
-            formats = QUERY_FORMATS["Issue"]
-
-        if volume_data.year is None:
-            formats = tuple(
-                f.replace('({year})', '').strip()
-                for f in formats
+            query_plan[download_type] = builder.build(
+                volume_data,
+                title,
+                issue_number
             )
 
-        search_title = normalise_query_string(title).replace(':', '')
-        search_results = run(search_multiple_queries(*(
-            format.format(
-                title=search_title, volume_number=volume_data.volume_number,
-                year=volume_data.year, issue_number=issue_number
-            )
-            for format in formats
-        )))
+        search_results = run(search_planned_queries(query_plan))
         if not search_results:
             continue
 
@@ -265,6 +317,7 @@ def manual_search(
             for result in search_results
         ]
 
+        search_title = normalise_query_string(title).replace(':', '')
         # Sort results; put best result at top
         results.sort(key=lambda r: _rank_search_result(
             r, search_title, volume_data.volume_number,
@@ -279,6 +332,7 @@ def manual_search(
         return results
 
     return []
+
 
 
 def auto_search(

@@ -18,6 +18,7 @@ from backend.base.custom_exceptions import (InvalidComicVineApiKey,
 from backend.base.helpers import Singleton, get_subclasses
 from backend.base.logging import LOGGER
 from backend.features.download_queue import DownloadHandler
+from backend.features.pull_list import check_weekly_pull_list
 from backend.features.search import auto_search
 from backend.implementations.conversion import mass_convert
 from backend.implementations.naming import mass_rename
@@ -486,6 +487,35 @@ class SearchAll(Task):
                     for result in results
                 ]
         return downloads
+
+
+class WeeklyPullListCheck(Task):
+    "Fetch this week's releases and cross-reference them against the library"
+
+    stop = False
+    message = ''
+    action = 'weekly_pull_list_check'
+    display_title = 'Weekly Pull List Check'
+    category = ''
+
+    @property
+    def volume_id(self) -> None:
+        return None
+
+    @property
+    def issue_id(self) -> None:
+        return None
+
+    def __init__(self) -> None:
+        return
+
+    def run(self) -> None:
+        self.message = "Checking this week's releases against the monitored library"
+        WebSocket().emit(TaskStatusEvent(self.message))
+
+        check_weekly_pull_list()
+
+        return
 
 
 # =====================

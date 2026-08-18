@@ -57,6 +57,20 @@ class qBittorrent(BaseExternalClient):
         username: Union[str, None],
         password: Union[str, None]
     ) -> Session:
+        """Login into qBittorrent client.
+
+        Args:
+            base_url (str): Base URL of instance.
+            username (Union[str, None]): Username to access client, if set.
+            password (Union[str, None]): Password to access client, if set.
+
+        Raises:
+            ClientNotWorking: Can't connect to client.
+            CredentialInvalid: Credentials are invalid.
+
+        Returns:
+            Session: Request session that is logged in.
+        """
         ssn = Session()
 
         if username or password:
@@ -79,6 +93,7 @@ class qBittorrent(BaseExternalClient):
                 LOGGER.error(
                     f"Can't connect or version too low of qBittorrent instance: {auth_request.text}"
                 )
+                # Should be at least v4.1
                 raise ClientNotWorking(BrokenClientReason.VERSION_NOT_SUPPORTED)
 
             if not auth_request.ok:
@@ -149,9 +164,8 @@ class qBittorrent(BaseExternalClient):
             files=files
         )
 
-        # Torznab-generated magnets may percent-encode the xt value. Parse the
-        # query rather than relying on the literal ``urn:btih:`` substring so
-        # both standard GetComics magnets and normalized Torznab magnets work.
+        # A Torznab-normalized magnet may percent-encode its xt value. Parse the
+        # query rather than assuming a literal ``urn:btih:`` substring.
         xt_values = parse_qs(urlsplit(download_link).query).get('xt') or []
         if not xt_values or not xt_values[0].lower().startswith('urn:btih:'):
             raise ClientNotWorking(BrokenClientReason.FAILED_PROCESSING_RESPONSE)
@@ -181,6 +195,7 @@ class qBittorrent(BaseExternalClient):
             DownloadState.IMPORTING_STATE
         )
         if result['state'] in ('metaDL', 'stalledDL', 'checkingDL'):
+            # Torrent is failing
             if self.torrent_hashes[download_id] is None:
                 self.torrent_hashes[download_id] = round(time())
                 state = DownloadState.DOWNLOADING_STATE

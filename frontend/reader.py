@@ -13,7 +13,11 @@ from zipfile import BadZipFile, ZipFile
 
 from flask import send_file
 
-from backend.features.comic_reader import get_issue_pages, get_issue_pdf
+from backend.features.comic_reader import (
+    get_issue_pages,
+    get_issue_pdf,
+    read_rar_member,
+)
 from backend.implementations.volumes import Library
 from frontend.api import api, auth, error_handler, return_api
 from frontend.ui import render, ui
@@ -77,8 +81,14 @@ def api_reader_page(issue_id: int, page_index: int):
                 conditional=True
             ), 200
 
-        with ZipFile(page['filepath'], 'r') as archive:
-            page_data = archive.read(page['member'])
+        if page.get('archive_type') == 'rar':
+            page_data = read_rar_member(page['filepath'], page['member'])
+            if page_data is None:
+                return return_api({}, 'ReaderPageUnavailable', 404)
+        else:
+            with ZipFile(page['filepath'], 'r') as archive:
+                page_data = archive.read(page['member'])
+
         return send_file(
             BytesIO(page_data),
             mimetype=page['mimetype'],

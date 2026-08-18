@@ -2,7 +2,7 @@
 
 """Ordered story arcs / reading lists with ComicRack CBL import and export.
 
-The feature deliberately keeps unresolved CBL entries.  A portable reading list
+The feature deliberately keeps unresolved CBL entries. A portable reading list
 is useful even when part of it is not yet in the local library; those unresolved
 or missing entries are precisely the gaps acquisition should be able to fill.
 """
@@ -22,11 +22,7 @@ MAX_CBL_BOOKS = 10000
 
 
 def ensure_reading_list_tables() -> None:
-    """Create the additive reading-list tables idempotently.
-
-    Keeping creation beside the feature makes both upgraded and fresh databases
-    safe even when a fresh install has already stamped the current DB version.
-    """
+    """Create the additive reading-list tables idempotently."""
     get_db().executescript("""
         CREATE TABLE IF NOT EXISTS reading_lists(
             id INTEGER PRIMARY KEY,
@@ -73,9 +69,26 @@ def _optional_int(value: Optional[str]) -> Optional[int]:
         return None
 
 
+def _local_name(element: ET.Element) -> str:
+    return element.tag.split('}')[-1]
+
+
+def _first_child(element: ET.Element, name: str) -> Optional[ET.Element]:
+    return next((child for child in element if _local_name(child) == name), None)
+
+
+def _children(element: ET.Element, name: str) -> List[ET.Element]:
+    return [child for child in element if _local_name(child) == name]
+
+
+def _child_text(element: ET.Element, name: str) -> Optional[str]:
+    child = _first_child(element, name)
+    return child.text if child is not None else None
+
+
 def _comicvine_ids(book: ET.Element) -> Tuple[Optional[int], Optional[int]]:
     """Read ComicVine IDs from common CBL dialects."""
-    for database in book.findall('Database'):
+    for database in _children(book, 'Database'):
         if (database.get('Name') or '').strip().lower() in ('cv', 'comicvine'):
             return (
                 _optional_int(database.get('Series')),
@@ -84,8 +97,8 @@ def _comicvine_ids(book: ET.Element) -> Tuple[Optional[int], Optional[int]]:
 
     # Some generators use explicit child elements instead of <Database>.
     return (
-        _optional_int(book.findtext('ComicID')),
-        _optional_int(book.findtext('IssueID'))
+        _optional_int(_child_text(book, 'ComicID')),
+        _optional_int(_child_text(book, 'IssueID'))
     )
 
 
@@ -103,15 +116,15 @@ def parse_cbl(content: bytes) -> Tuple[str, List[Dict[str, Any]]]:
     except ET.ParseError as exc:
         raise ValueError('Invalid CBL XML') from exc
 
-    if root.tag.split('}')[-1] != 'ReadingList':
+    if _local_name(root) != 'ReadingList':
         raise ValueError('CBL root must be ReadingList')
 
-    title = (root.findtext('Name') or 'Imported Reading List').strip()
+    title = (_child_text(root, 'Name') or 'Imported Reading List').strip()
     if not title:
         title = 'Imported Reading List'
 
-    books_parent = root.find('Books')
-    books = list(books_parent.findall('Book')) if books_parent is not None else []
+    books_parent = _first_child(root, 'Books')
+    books = _children(books_parent, 'Book') if books_parent is not None else []
     if len(books) > MAX_CBL_BOOKS:
         raise ValueError('CBL contains too many books')
 
@@ -120,8 +133,8 @@ def parse_cbl(content: bytes) -> Tuple[str, List[Dict[str, Any]]]:
         series = (book.get('Series') or '').strip()
         number = (book.get('Number') or '').strip()
         if not series or not number:
-            # Preserve ordering for valid books, but malformed anonymous rows do
-            # not have enough identity to be actionable.
+            # Preserve ordering for actionable books. Anonymous malformed rows
+            # do not carry enough identity to match or acquire safely.
             continue
 
         cv_volume_id, cv_issue_id = _comicvine_ids(book)
@@ -345,7 +358,8 @@ def get_reading_lists() -> List[Dict[str, Any]]:
             SUM(CASE WHEN e.issue_id IS NOT NULL AND NOT EXISTS(
                 SELECT 1 FROM issues_files f WHERE f.issue_id = e.issue_id
             ) THEN 1 ELSE 0 END) AS missing_count,
-            SUM(CASE WHEN e.issue_id IS NULL THEN 1 ELSE 0 END) AS unresolved_count
+            SUM(CASE WHEN e.id IS NOT NULL AND e.issue_id IS NULL
+                THEN 1 ELSE 0 END) AS unresolved_count
         FROM reading_lists l
         LEFT JOIN reading_list_entries e ON e.reading_list_id = l.id
         GROUP BY l.id
@@ -370,7 +384,10 @@ def get_reading_list(reading_list_id: int) -> Optional[Dict[str, Any]]:
         SELECT
             e.id, e.position, e.series, e.issue_number,
             e.volume_year, e.issue_year, e.filename,
-            e.comicvine_volume_id, e.comicvine_issue_id,
+            COALESCE(e.comicvine_volume_id, v.comicvine_id)
+                AS comicvine_volume_id,
+            COALESCE(e.comicvine_issue_id, i.comicvine_id)
+                AS comicvine_issue_id,
             e.volume_id, e.issue_id,
             v.title AS matched_volume_title,
             CASE
@@ -382,6 +399,7 @@ def get_reading_list(reading_list_id: int) -> Optional[Dict[str, Any]]:
             END AS status
         FROM reading_list_entries e
         LEFT JOIN volumes v ON v.id = e.volume_id
+        LEFT JOIN issues i ON i.id = e.issue_id
         WHERE e.reading_list_id = ?
         ORDER BY e.position, e.id;
     """, (reading_list_id,)).fetchalldict()
@@ -406,7 +424,7 @@ def missing_reading_list_issues(reading_list_id: int) -> List[Tuple[int, int]]:
     return [
         (row['volume_id'], row['issue_id'])
         for row in get_db().execute("""
-            SELECT DISTINCT e.volume_id, e.issue_id
+            SELECT DISTINCT e.volume_id, e.issue_id, MIN(e.position) AS position
             FROM reading_list_entries e
             WHERE e.reading_list_id = ?
                 AND e.issue_id IS NOT NULL
@@ -414,7 +432,8 @@ def missing_reading_list_issues(reading_list_id: int) -> List[Tuple[int, int]]:
                 AND NOT EXISTS(
                     SELECT 1 FROM issues_files f WHERE f.issue_id = e.issue_id
                 )
-            ORDER BY e.position;
+            GROUP BY e.volume_id, e.issue_id
+            ORDER BY position;
         """, (reading_list_id,)).fetchalldict()
     ]
 

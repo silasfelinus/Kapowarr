@@ -10,16 +10,11 @@ live in `backend.features.pull_list`, mirroring how `search_getcomics()`/
 `search_indexer()` here plug into `SearchGetComics`/`SearchIndexers` in
 `backend.features.search`.
 
-Not live-verified against a real GetComics weekly-releases page in this
-sandbox (no network egress available here) -- same caveat already flagged
-on this fork's other scraped/API integrations (t-005, t-007, t-024,
-`indexers.py`'s Newznab support). Parsing is deliberately defensive about
-page shape (see `_parse_weekly_release_lines`) and covered by fixture-
-based unit tests using saved sample HTML rather than a live fetch. The
-exact markup of GetComics' weekly-releases posts should be checked against
-the live site before relying on this in production; the category URL and
-line-parsing regex in this module are a best-effort match for GetComics'
-existing "one release per list item" post style, not a verified scrape.
+The live GetComics layout was verified on 2026-08-18. Weekly Pack posts are
+surfaced on the normal GetComics home page, and issue rows currently look
+like ``Action Comics #1101 : Download | Read Online``. The parser remains
+intentionally defensive so harmless markup changes do not crash the weekly
+task.
 """
 
 from re import compile as re_compile
@@ -32,11 +27,11 @@ from backend.base.helpers import AsyncSession
 from backend.base.logging import LOGGER
 
 # Matches release lines like "Batman #123", "Batman Vol. 3 #123 (2024)" or
-# "Batman Annual #1AU" -- a series title, a '#', an issue number (allowing
-# non-purely-numeric forms like "1AU" or "12.1"), and an optional trailing
-# year in parentheses.
+# the live GetComics form "Batman #123 : Download | Read Online". The tail
+# after ':' is presentation/download-link text and is deliberately ignored.
 _RELEASE_LINE_REGEX = re_compile(
-    r"^(?P<series>.+?)\s*#\s*(?P<issue>[\w.]+)\s*(?:\((?P<year>\d{4})\))?\s*$"
+    r"^(?P<series>.+?)\s*#\s*(?P<issue>[\w.]+)\s*"
+    r"(?:\((?P<year>\d{4})\))?\s*(?::.*)?$"
 )
 
 
@@ -45,19 +40,15 @@ def _parse_weekly_release_lines(
     source_name: str,
     link: str
 ) -> List[WeeklyReleaseData]:
-    """Parse "Series #Issue" style release lines out of a weekly-releases
-    article body.
+    """Parse "Series #Issue" style release lines out of a Weekly Pack post.
 
-    GetComics' weekly pull-list posts list one release per line -- this
-    looks for `<li>` elements first (the common case for a bulleted pull
-    list) and falls back to paragraph/div text lines, rather than assuming
-    one specific markup shape. Lines that don't look like a release (no
-    recognisable "Title #Number" pattern) are silently skipped instead of
-    raising, since a post's intro/outro paragraphs and category blurbs are
-    expected to not match.
+    GetComics currently lists each release in an ``<li>`` with download and
+    read-online links after a colon. We read the whole list-item text and let
+    `_RELEASE_LINE_REGEX` ignore that trailing UI text. For older/different
+    post layouts, paragraph/div text remains a fallback.
 
     Args:
-        soup (BeautifulSoup): The soup of the weekly-releases article page.
+        soup (BeautifulSoup): The soup of the Weekly Pack article page.
         source_name (str): The display name to tag every release with.
         link (str): The article link to tag every release with.
 
@@ -113,59 +104,65 @@ def _parse_weekly_release_lines(
 async def _find_latest_weekly_release_article(
     session: AsyncSession
 ) -> Union[str, None]:
-    """Find the link to the most recent post in GetComics' weekly-releases
-    category, reusing the same "article.post > h1.post-title > a" markup
-    `getcomics.py`'s own search-result parsing (`_get_articles`) relies on
-    for every other GetComics page.
+    """Find the newest Weekly Pack article from the GetComics home page.
+
+    GetComics does not currently expose the previously assumed
+    ``/category/weekly-comic-book-releases/`` listing. Weekly Pack posts are
+    regular ``article.post`` entries on the home page, so scan the available
+    posts and choose the first title/link that clearly identifies a Weekly
+    Pack. This is more tolerant of the site's tag/category reshuffling.
 
     Args:
         session (AsyncSession): The session to make the request with.
 
     Returns:
-        Union[str, None]: The link, or `None` if it couldn't be found.
+        Union[str, None]: The newest Weekly Pack link, or ``None`` when the
+            page cannot be fetched or no Weekly Pack is visible.
     """
     listing_html = await session.get_text(
-        Constants.GC_WEEKLY_RELEASES_URL, quiet_fail=True
+        Constants.GC_SITE_URL, quiet_fail=True
     )
     if not listing_html:
         return None
 
     soup = BeautifulSoup(listing_html, "html.parser")
-    article = soup.find("article", {"class": "post"})
-    if not isinstance(article, Tag):
-        return None
+    for article in soup.find_all("article", {"class": "post"}):
+        if not isinstance(article, Tag):
+            continue
 
-    title_el = article.find("h1", {"class": "post-title"})
-    anchor = title_el.find("a") if isinstance(title_el, Tag) else None
-    if not isinstance(anchor, Tag):
-        return None
+        title_el = article.find("h1", {"class": "post-title"})
+        anchor = title_el.find("a") if isinstance(title_el, Tag) else None
+        if not isinstance(anchor, Tag):
+            continue
 
-    link = anchor.get("href")
-    return link if isinstance(link, str) and link else None
+        link = anchor.get("href")
+        title = anchor.get_text(" ", strip=True)
+        if not isinstance(link, str) or not link:
+            continue
+
+        if "weekly pack" in title.lower() or "weekly-pack" in link.lower():
+            return link
+
+    return None
 
 
 async def fetch_getcomics_weekly_releases(
     session: AsyncSession
 ) -> List[WeeklyReleaseData]:
-    """Fetch and parse the most recent "weekly releases" post from
-    GetComics.
+    """Fetch and parse the most recent Weekly Pack from GetComics.
 
-    Args:
-        session (AsyncSession): The session to make the requests with.
-
-    Returns:
-        List[WeeklyReleaseData]: The releases found. Empty (rather than
-            raising) on any request/parse failure, same "empty rather than
-            raising" contract as `search_getcomics()`/`search_indexer()` --
-            a broken/unreachable release source shouldn't fail a check
-            that could combine several sources.
+    Returns an empty list rather than raising on request/parse failure, so a
+    broken release source cannot crash a future multi-source weekly check.
+    Failures are logged at warning level instead of disappearing silently.
     """
     link = await _find_latest_weekly_release_article(session)
     if not link:
+        LOGGER.warning("Could not find a current Weekly Pack post on GetComics")
         return []
 
     article_html = await session.get_text(link, quiet_fail=True)
     if not article_html:
+        LOGGER.warning("Could not fetch GetComics Weekly Pack post %s", link)
         return []
 
     article_soup = BeautifulSoup(article_html, "html.parser")
@@ -173,8 +170,8 @@ async def fetch_getcomics_weekly_releases(
         article_soup, Constants.GC_SOURCE_TERM, link
     )
     if not releases:
-        LOGGER.debug(
-            "No parsable release lines found on weekly-releases post %s", link
+        LOGGER.warning(
+            "No parsable release lines found on GetComics Weekly Pack %s", link
         )
 
     return releases

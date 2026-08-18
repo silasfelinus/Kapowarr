@@ -156,6 +156,17 @@ main:has(#massedit-toggle:checked) #library-container {
 	z-index: 1;
 }
 
+.list-download-status {
+	border-radius: 0;
+}
+
+.table-download-status {
+	min-width: 8rem;
+	margin-top: .25rem;
+	text-align: center;
+	white-space: nowrap;
+}
+
 .space-taker {
 	height: 1rem;
 	max-width: 100%;

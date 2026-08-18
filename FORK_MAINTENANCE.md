@@ -7,7 +7,9 @@ customizations, resolve the conflicts that come up, verify the result, and
 keep attribution intact. It is not upstream documentation — see
 [`CONTRIBUTING.md`](./CONTRIBUTING.md) for that project's own contribution
 process, which still applies if you ever want to send something back
-upstream.
+upstream. For workflow hazards specific to how AI agents implement, review,
+and push changes to this fork (not upstream-sync related), see
+[`AGENT_WORKFLOW_NOTES.md`](./AGENT_WORKFLOW_NOTES.md).
 
 ## Why this exists
 

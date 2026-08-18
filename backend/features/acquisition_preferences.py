@@ -20,12 +20,14 @@ DEFAULT_SOURCE_PREFERENCE = SOURCE_PREFERENCE_OPTIONS
 QUALITY_PREFERENCE_OPTIONS = ('any', 'hd', 'sd')
 PACK_PREFERENCE_OPTIONS = ('neutral', 'prefer', 'avoid')
 DEFAULT_INDEXER_PRIORITY = 50
+DEFAULT_CLIENT_PRIORITY = 50
 
 _DEFAULTS = {
     'acquisition_source_preference': dumps(DEFAULT_SOURCE_PREFERENCE),
     'getcomics_quality_preference': 'any',
     'pack_preference': 'neutral',
-    'indexer_priorities': dumps({})
+    'indexer_priorities': dumps({}),
+    'client_priorities': dumps({})
 }
 
 _DOWNLOAD_TYPE_NAMES = {
@@ -74,6 +76,22 @@ def _validated_priority_map(value: Any) -> Dict[str, int]:
     return result
 
 
+def _validated_client_priority_map(value: Any) -> Dict[str, int]:
+    if not isinstance(value, dict):
+        raise InvalidKeyValue('client_priorities', value)
+
+    result: Dict[str, int] = {}
+    for key, priority in value.items():
+        if not isinstance(key, str) or not key.isdigit() or int(key) < 1:
+            raise InvalidKeyValue('client_priorities', value)
+        if isinstance(priority, bool) or not isinstance(priority, int):
+            raise InvalidKeyValue('client_priorities', value)
+        if not 1 <= priority <= 100:
+            raise InvalidKeyValue('client_priorities', value)
+        result[key] = priority
+    return result
+
+
 def get_acquisition_preferences() -> Dict[str, Any]:
     """Return the current acquisition policy, inserting defaults lazily."""
     _ensure_defaults()
@@ -83,7 +101,8 @@ def get_acquisition_preferences() -> Dict[str, Any]:
             'acquisition_source_preference',
             'getcomics_quality_preference',
             'pack_preference',
-            'indexer_priorities'
+            'indexer_priorities',
+            'client_priorities'
         );"""
     ).fetchall())
 
@@ -109,11 +128,19 @@ def get_acquisition_preferences() -> Dict[str, Any]:
     except (TypeError, ValueError, InvalidKeyValue):
         indexer_priorities = {}
 
+    try:
+        client_priorities = _validated_client_priority_map(
+            loads(rows.get('client_priorities', '{}'))
+        )
+    except (TypeError, ValueError, InvalidKeyValue):
+        client_priorities = {}
+
     return {
         'acquisition_source_preference': source_preference,
         'getcomics_quality_preference': quality,
         'pack_preference': pack,
-        'indexer_priorities': indexer_priorities
+        'indexer_priorities': indexer_priorities,
+        'client_priorities': client_priorities
     }
 
 
@@ -147,6 +174,11 @@ def update_acquisition_preferences(data: Mapping[str, Any]) -> Dict[str, Any]:
             _validated_priority_map(data['indexer_priorities'])
         )
 
+    if 'client_priorities' in data:
+        updates['client_priorities'] = dumps(
+            _validated_client_priority_map(data['client_priorities'])
+        )
+
     if updates:
         get_db().executemany(
             'INSERT OR REPLACE INTO config(key, value) VALUES (?, ?);',
@@ -177,6 +209,22 @@ def indexer_priority(protocol: str, indexer_id: int) -> int:
     return get_acquisition_preferences()['indexer_priorities'].get(
         key, DEFAULT_INDEXER_PRIORITY
     )
+
+
+def client_priority(client_id: int) -> int:
+    """Return configured external-client priority (1 highest, 50 default)."""
+    return get_acquisition_preferences()['client_priorities'].get(
+        str(client_id), DEFAULT_CLIENT_PRIORITY
+    )
+
+
+def remove_client_priority(client_id: int) -> None:
+    """Drop stale priority metadata after deleting an external client."""
+    preferences = get_acquisition_preferences()
+    priorities = dict(preferences['client_priorities'])
+    if priorities.pop(str(client_id), None) is None:
+        return
+    update_acquisition_preferences({'client_priorities': priorities})
 
 
 def pack_preference_rank(issue_number: Any) -> int:

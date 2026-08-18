@@ -84,6 +84,94 @@ const images = {
 };
 
 //
+// Download queue
+//
+const download_queue = new Map();
+
+function getVolumeDownloads(volume_id) {
+	return [...download_queue.values()].filter(
+		download => Number(download.volume_id) === Number(volume_id)
+	);
+};
+
+function getVolumeDownloadStatus(volume_id) {
+	const downloads = getVolumeDownloads(volume_id);
+	if (downloads.length === 0)
+		return null;
+
+	const status_priority = {
+		downloading: 0,
+		importing: 1,
+		seeding: 2,
+		paused: 3,
+		queued: 4
+	};
+	downloads.sort(
+		(a, b) => (status_priority[a.status] ?? 5)
+			- (status_priority[b.status] ?? 5)
+	);
+	const primary = downloads[0],
+		status = primary.status || 'queued',
+		details = [];
+
+	if (status === 'downloading') {
+		const progress = Number(primary.progress),
+			speed = Number(primary.speed);
+		if (primary.size === -1 && progress > 0)
+			details.push(convertSize(progress));
+		else if (Number.isFinite(progress))
+			details.push(`${Math.round(progress * 10) / 10}%`);
+
+		if (Number.isFinite(speed) && speed > 0)
+			details.push(`${convertSize(speed)}/s`);
+	};
+
+	if (downloads.length > 1)
+		details.push(`${downloads.length} downloads`);
+
+	const label = status.charAt(0).toUpperCase() + status.slice(1);
+	return {
+		status: status,
+		text: [label, ...details].join(' · ')
+	};
+};
+
+function emitDownloadQueueChanged() {
+	document.dispatchEvent(new CustomEvent(
+		'kapowarr:download-queue-changed',
+		{detail: [...download_queue.values()]}
+	));
+};
+
+function fillDownloadQueue(api_key) {
+	fetchAPI('/activity/queue', api_key)
+	.then(json => {
+		download_queue.clear();
+		json.result.forEach(download => download_queue.set(download.id, download));
+		emitDownloadQueueChanged();
+	});
+};
+
+function handleDownloadAdded(download) {
+	download_queue.set(download.id, download);
+	emitDownloadQueueChanged();
+};
+
+function handleDownloadStatus(data) {
+	const download = download_queue.get(data.id);
+	if (download === undefined)
+		return;
+
+	download_queue.set(data.id, {...download, ...data});
+	emitDownloadQueueChanged();
+};
+
+function handleDownloadEnded(data) {
+	download_queue.delete(data.id);
+	emitDownloadQueueChanged();
+};
+
+//
 // Tasks
 //
 const task_to_button = {};
@@ -248,6 +336,9 @@ function connectToWebSocket(api_key) {
 	socket.on('task_added', handleTaskAdded);
 	socket.on('task_ended', handleTaskRemoved);
 	socket.on('task_status', data => setTaskMessage(data.message));
+	socket.on('queue_added', handleDownloadAdded);
+	socket.on('queue_status', handleDownloadStatus);
+	socket.on('queue_ended', handleDownloadEnded);
 	socket.connect();
 	return socket;
 };
@@ -355,6 +446,7 @@ usingApiKey()
 .then(api_key => {
 	setTimeout(() => fillTaskQueue(api_key), 200);
 	socket = connectToWebSocket(api_key);
+	fillDownloadQueue(api_key);
 });
 
 setupLocalStorage();

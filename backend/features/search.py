@@ -4,8 +4,8 @@ from asyncio import gather, run
 from typing import Dict, List, Mapping, Sequence, Tuple, Type, Union
 
 from backend.base.definitions import (DownloadType, MatchedSearchResultData,
-                                      SearchResultData, SearchSource,
-                                      SpecialVersion)
+                                      SearchResultData, SearchResultMatchData,
+                                      SearchSource, SpecialVersion)
 from backend.base.file_extraction import refine_special_version
 from backend.base.helpers import (AsyncSession, check_overlapping_issues,
                                   extract_year_from_date, force_range,
@@ -255,6 +255,54 @@ async def search_planned_queries(
     return _dedupe_search_results(responses)
 
 
+def _match_search_result(
+    result: SearchResultData,
+    volume_data,
+    volume_issues,
+    number_to_year,
+    calculated_issue_number: Union[float, None]
+) -> SearchResultMatchData:
+    """Match a result while allowing issue searches to use covering ranges.
+
+    The shared matcher historically compares the extracted issue value directly
+    to the requested issue, so ``1-100`` fails an issue-37 search even though it
+    contains issue 37. Re-check only that range case using the requested issue
+    number for validation, while leaving the result's original range untouched
+    for queueing and pack normalization.
+    """
+    match = check_search_result_match(
+        result,
+        volume_data,
+        volume_issues,
+        number_to_year,
+        calculated_issue_number
+    )
+    if match['match'] or calculated_issue_number is None:
+        return match
+
+    issue_number = result['issue_number']
+    if not (
+        isinstance(issue_number, tuple)
+        and issue_number[0] <= calculated_issue_number <= issue_number[1]
+    ):
+        return match
+
+    adjusted_result = {
+        **result,
+        'issue_number': calculated_issue_number
+    }
+    adjusted_match = check_search_result_match(
+        adjusted_result,
+        volume_data,
+        volume_issues,
+        number_to_year,
+        calculated_issue_number
+    )
+    if adjusted_match['match']:
+        return {'match': True, 'match_issue': None}
+    return match
+
+
 def manual_search(
     volume_id: int,
     issue_id: Union[int, None] = None
@@ -322,7 +370,7 @@ def manual_search(
         results: List[MatchedSearchResultData] = [
             {
                 **result,
-                **check_search_result_match(
+                **_match_search_result(
                     result, volume_data, volume_issues,
                     number_to_year, calculated_issue_number
                 )
@@ -442,7 +490,10 @@ def auto_search(
             i.calculated_issue_number not in searchable_issue_numbers
             for i in covered_issues
         ):
-            # Part or all of what the result covers is already downloaded
+            # Part or all of what the result covers is already downloaded.
+            # Leave oversized packs to the issue-specific fallback below; it
+            # can now accept a range containing a missing issue, while avoiding
+            # giant packs when a clean volume-level combination is available.
             continue
 
         # Check that any other selected download doesn't already cover the issue
@@ -455,10 +506,10 @@ def auto_search(
         else:
             chosen_downloads.append(result)
 
-    # Find issues that have still not been covered. Might've been that the
-    # download for the issue simply did not pop up on volume search, but will
-    # when searching for the individual issue.
-    missing_issues = [
+    # Find issues that have still not been covered. A range found by one issue
+    # search can satisfy several missing issues, so consume that coverage and do
+    # not enqueue the same pack once per missing issue.
+    remaining_missing = [
         i
         for i in searchable_issues
         if not any(
@@ -468,9 +519,23 @@ def auto_search(
             for part in chosen_downloads
         )
     ]
+    chosen_links = {part['link'] for part in chosen_downloads}
 
-    for missing_issue in missing_issues:
-        chosen_downloads.extend(auto_search(volume_id, missing_issue[0]))
+    while remaining_missing:
+        missing_issue = remaining_missing.pop(0)
+        fallback_results = auto_search(volume_id, missing_issue[0])
+        for fallback in fallback_results:
+            if fallback['link'] not in chosen_links:
+                chosen_downloads.append(fallback)
+                chosen_links.add(fallback['link'])
+
+            coverage = fallback.get('issue_number')
+            if coverage is not None:
+                remaining_missing = [
+                    issue
+                    for issue in remaining_missing
+                    if not check_overlapping_issues(issue[1], coverage)
+                ]
 
     LOGGER.debug('Auto search results: %s', chosen_downloads)
     return chosen_downloads

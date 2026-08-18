@@ -92,6 +92,11 @@ def ui_blocklist():
     return render('blocklist.html')
 
 
+@ui.route('/activity/pull-list', methods=methods)
+def ui_pull_list():
+    return render('pull_list.html')
+
+
 @ui.route('/system/status', methods=methods)
 def ui_status():
     return render('status.html')

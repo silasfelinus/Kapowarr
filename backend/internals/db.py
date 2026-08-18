@@ -543,4 +543,17 @@ CREATE TABLE IF NOT EXISTS indexers(
     api_key VARCHAR(255) NOT NULL,
     enabled BOOL NOT NULL DEFAULT 1
 );
+CREATE TABLE IF NOT EXISTS pull_list_entries(
+    id INTEGER PRIMARY KEY,
+    volume_id INTEGER NOT NULL,
+    issue_number VARCHAR(20),
+    release_title VARCHAR(255) NOT NULL,
+    year INTEGER(5),
+    source VARCHAR(50) NOT NULL,
+    link TEXT NOT NULL,
+    checked_at INTEGER NOT NULL,
+
+    FOREIGN KEY (volume_id) REFERENCES volumes(id)
+        ON DELETE CASCADE
+);
 """

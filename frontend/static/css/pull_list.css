@@ -1,0 +1,44 @@
+.main-window {
+	padding: 1rem;
+}
+
+#pull-list-empty-message {
+	padding: 0 0 1rem 0;
+	color: var(--text-color);
+}
+
+.table-container {
+	overflow-x: auto;
+}
+
+table {
+	width: 100%;
+	min-width: 33.3rem;
+	table-layout: fixed;
+
+	color: var(--text-color);
+}
+
+th, td {
+	padding: .5rem .9rem;
+}
+
+.volume-column {
+	overflow: auto;
+}
+
+.issue-column {
+	width: 6rem;
+}
+
+.source-column {
+	width: 9rem;
+}
+
+.checked-column {
+	width: 11rem;
+}
+
+.pull-list-entry > * {
+	border-top: 1px solid var(--border-color);
+}

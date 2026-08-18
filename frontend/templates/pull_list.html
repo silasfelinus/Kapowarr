@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% from "base.html" import icon_button %}
+{% block title %}Pull List{% endblock %}
+{% block css %}
+	<link rel="stylesheet" href="{{ url_for('static', filename='css/pull_list.css') }}">
+{% endblock %}
+{% block js %}
+	<script src="{{ url_for('static', filename='js/pull_list.js') }}" defer></script>
+{% endblock %}
+
+{% block pre_build_rows %}
+<tr class="pull-list-entry">
+	<td class="volume-column">
+		<a></a>
+	</td>
+	<td class="issue-column"></td>
+	<td class="source-column">
+		<a target="_blank"></a>
+	</td>
+	<td class="checked-column"></td>
+</tr>
+{% endblock %}
+
+{% block main %}
+<main>
+	<section class="tool-bar-container" aria-label="Tool bar">
+		<div class="tool-bar">
+			{{ icon_button("refresh-button", "Refresh the list", "refresh.svg", "Refresh") }}
+			{{ icon_button("check-button", "Check for new releases now", "search.svg", "Check Now") }}
+		</div>
+	</section>
+	<div class="main-window">
+		<p id="pull-list-empty-message" class="hidden">
+			No wanted releases found yet. Run "Check Now" or wait for the
+			weekly scheduled check (see System &gt; Tasks) to look for new
+			releases of your monitored volumes.
+		</p>
+		<div class="table-container icon-text-color">
+			<table>
+				<thead>
+					<tr>
+						<th class="volume-column">Volume</th>
+						<th class="issue-column">Issue</th>
+						<th class="source-column">Source</th>
+						<th class="checked-column">Checked At</th>
+					</tr>
+				</thead>
+				<tbody id="pull-list"></tbody>
+			</table>
+		</div>
+	</div>
+</main>
+{% endblock main %}

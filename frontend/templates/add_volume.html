@@ -15,7 +15,9 @@
 	class="search-entry"
 	data-title=""
 	data-cover=""
-	data-comicvine_id=""
+	data-provider-id=""
+	data-external-id=""
+	data-comicvine-id=""
 	data-_translated=""
 	data-_title=""
 	data-_year=""
@@ -44,6 +46,8 @@
 		<img src="" id="add-cover" alt="">
 		<form id="add-form">
 			<input type="hidden" id="comicvine-input" value="">
+			<input type="hidden" id="provider-input" value="">
+			<input type="hidden" id="external-id-input" value="">
 			<table class="fold-table">
 				<tr>
 					<th><label for="rootfolder-input">Root Folder</label></th>
@@ -131,7 +135,7 @@
 		<section id="search-explain" aria-label="Explanation">
 			<p>It's easy to add a new volume, just start typing the name of the volume you want to add</p>
 			<br>
-			<p>You can also search using the CV ID of a volume. e.g. 'cv:4050-2127', 'cv:2127' or '4050-2127'</p>
+			<p>You can also search using a ComicVine ID, such as 'cv:4050-2127'.</p>
 		</section>
 		<section id="search-empty" class="hidden">
 			<p>No results</p>
@@ -140,8 +144,8 @@
 			<p>Searching...</p>
 		</section>
 		<section id="search-failed" class="hidden">
-			<p>The Comic Vine api key is not set or is invalid</p>
-			<p>Please set a working Comic Vine api key at Settings -> General -> Comic Vine API</p>
+			<p>No configured metadata provider could complete the search.</p>
+			<p>Check ComicVine or Metron under Settings.</p>
 		</section>
 		<section id="search-blocked" class="hidden">
 			<p>You can't add volumes before having added at least one root folder</p>

@@ -20,11 +20,12 @@
 			<h2>Providers</h2>
 			<table class="fold-table">
 				<tr>
-					<th><label for="metron-username-input">Metron</label></th>
+					<th><label for="metron-token-input">Metron</label></th>
 					<td>
+						<input id="metron-token-input" type="password" autocomplete="off" spellcheck="false" placeholder="API token (recommended)">
 						<input id="metron-username-input" autocomplete="username" spellcheck="false" placeholder="Username">
 						<input id="metron-password-input" type="password" autocomplete="current-password" spellcheck="false" placeholder="Password">
-						<p>Optional fallback metadata provider. Both fields are required to enable Metron.</p>
+						<p>Use an API token, or both username and password. Metron results appear alongside ComicVine.</p>
 					</td>
 				</tr>
 			</table>

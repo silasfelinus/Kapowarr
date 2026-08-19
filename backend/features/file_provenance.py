@@ -8,8 +8,8 @@ raw download links, magnets, or NZB URLs that may contain credentials/tokens.
 
 from __future__ import annotations
 
-from os.path import isfile
 from os import stat
+from os.path import isfile
 from time import time
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -169,3 +169,35 @@ def get_provenance_by_filepaths(
         row.pop('filepath'): row
         for row in rows
     }
+
+
+def get_volume_file_provenance(volume_id: int) -> List[Dict[str, Any]]:
+    """Return every file in a volume with nullable acquisition provenance."""
+    ensure_file_provenance_table()
+    return get_db().execute("""
+        SELECT DISTINCT
+            f.id AS file_id,
+            f.filepath,
+            f.size,
+            p.source_type,
+            p.source_name,
+            p.release_title,
+            p.web_title,
+            p.web_sub_title,
+            p.acquired_at
+        FROM files f
+        LEFT JOIN file_provenance p ON p.file_id = f.id
+        WHERE f.id IN (
+            SELECT if.file_id
+            FROM issues_files if
+            INNER JOIN issues i ON i.id = if.issue_id
+            WHERE i.volume_id = ?
+
+            UNION
+
+            SELECT vf.file_id
+            FROM volume_files vf
+            WHERE vf.volume_id = ?
+        )
+        ORDER BY f.filepath;
+    """, (volume_id, volume_id)).fetchalldict()

@@ -722,8 +722,10 @@ def api_library_import():
         ):
             raise InvalidKeyValue
 
-        import_library(data, rename_files)
-        return return_api({}, code=201)
+        result = import_library(
+            data, rename_files, continue_on_error=True
+        )
+        return return_api(result, code=201)
 
 # =====================
 # Library + Volumes

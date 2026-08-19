@@ -10,6 +10,7 @@ from backend.features.library_import_diagnostics import (
     append_review_postmortem,
     build_review_diagnostics,
 )
+from backend.features.library_import_policy import AUTO_IMPORT_MIN_MATCH_SCORE
 from backend.internals.db import DBConnection
 
 
@@ -40,13 +41,13 @@ class library_import_review_diagnostics(unittest.TestCase):
         }
 
     @staticmethod
-    def _group(year=2020, volume_number=3):
+    def _group(year=2020, volume_number=3, issue_number=1.0):
         return {
             '/library/Batman/Batman 001.cbz': {
                 'series': 'Batman',
                 'year': year,
                 'volume_number': volume_number,
-                'issue_number': 1.0,
+                'issue_number': issue_number,
                 'special_version': SpecialVersion.NORMAL,
                 'annual': False
             }
@@ -68,7 +69,10 @@ class library_import_review_diagnostics(unittest.TestCase):
 
         self.assertEqual(diagnostics['search_query'], 'batman')
         self.assertEqual(diagnostics['review_reason'], 'tie')
-        self.assertEqual(diagnostics['thresholds']['minimum_score'], 4)
+        self.assertEqual(
+            diagnostics['thresholds']['minimum_score'],
+            AUTO_IMPORT_MIN_MATCH_SCORE
+        )
         self.assertEqual(diagnostics['thresholds']['minimum_margin'], 1)
         self.assertEqual(diagnostics['decision']['best_score'], 4)
         self.assertEqual(diagnostics['decision']['runner_up_score'], 4)
@@ -97,20 +101,24 @@ class library_import_review_diagnostics(unittest.TestCase):
         parsed = diagnostics['files'][0]['parsed']
         self.assertIsNone(parsed['special_version'])
 
-    def test_weak_score_diagnostics_show_the_best_candidate(self):
+    def test_weak_score_diagnostics_show_explicit_contradiction(self):
         diagnostics = build_review_diagnostics(
-            self._group(year=None, volume_number=None),
-            [self._candidate(201)],
+            self._group(
+                year=None,
+                volume_number=None,
+                issue_number=10.0
+            ),
+            [self._candidate(201, issue_count=9)],
             only_english=True,
             review_reason='weak-score'
         )
 
-        self.assertEqual(diagnostics['decision']['best_score'], 0)
+        self.assertEqual(diagnostics['decision']['best_score'], -1)
         self.assertIsNone(diagnostics['decision']['runner_up_score'])
         self.assertIsNone(diagnostics['decision']['score_margin'])
         self.assertEqual(diagnostics['decision']['viable_candidate_count'], 1)
         self.assertEqual(diagnostics['viable_candidates'][0]['comicvine_id'], 201)
-        self.assertEqual(diagnostics['viable_candidates'][0]['score'], 0)
+        self.assertEqual(diagnostics['viable_candidates'][0]['score'], -1)
 
     def test_no_candidate_keeps_raw_search_results_for_filter_postmortem(self):
         diagnostics = build_review_diagnostics(

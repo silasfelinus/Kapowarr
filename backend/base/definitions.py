@@ -642,7 +642,12 @@ class RemoteMappingData(TypedDict):
     local_path: str
 
 
-class SearchResultData(FilenameData):
+class SearchResultAvailabilityData(TypedDict, total=False):
+    seeders: Union[int, None]
+    leechers: Union[int, None]
+
+
+class SearchResultData(FilenameData, SearchResultAvailabilityData):
     link: str
     display_title: str
     source: str

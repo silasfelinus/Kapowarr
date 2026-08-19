@@ -19,10 +19,14 @@ Current Sonarr and Radarr both expose these first-class System capabilities:
 | --- | --- | --- |
 | Status / health | Supported | Keep aligned where useful. |
 | Tasks | Supported | Keep aligned where useful. |
-| Logs | Supported by the log engine; viewer added in this parity pass | Keep capture level and viewer filtering distinct. |
-| Backup / restore | Missing | Priority follow-up: scheduled/manual database + config backup, listing/download, retention, and safe restore workflow. |
+| Logs | Supported | In-app viewer separates capture granularity from severity/search filtering and retains raw download. |
+| Backup / restore | Supported | Manual + weekly SQLite-safe backups, 28-day retention, authenticated download/delete, and validated staged restore with automatic pre-restore snapshot. |
 | Events | Missing as a dedicated System surface | Audit whether Kapowarr history/task records already cover enough; add an operational event view if not. |
 | Updates | No Sonarr/Radarr-style System surface | Evaluate against Kapowarr's container-first distribution. Do not add an in-app updater blindly; at minimum make running/latest version state understandable when it can be determined safely. |
+
+## Shared Settings vocabulary
+
+Current Sonarr and Radarr both expose settings areas for Custom Formats, Download Clients, General, Import Lists, Indexers, Media Management, Metadata, Notifications, Profiles, and Quality. Kapowarr already has direct or comic-specific equivalents for several of these. Audit the remainder deliberately rather than assuming the same shape is appropriate for comics.
 
 ## Ongoing audit process
 

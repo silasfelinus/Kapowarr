@@ -39,7 +39,7 @@ Current Sonarr and Radarr both expose settings areas for Custom Formats, Downloa
 | Metadata | Partial | ComicVine + native Metron provider identity is supported. Portable ComicInfo.xml / series metadata import-export remains a real gap. |
 | Notifications | Supported | Discord/generic webhook notifications exist and should grow only with useful event coverage. |
 | Profiles | Missing | Do not clone video quality profiles literally. Design a comic acquisition profile only if per-series bundles of format/source/upgrade rules materially reduce repetitive setup. |
-| Quality | Partial | Global source/format preferences exist. Durable per-file acquisition provenance and safe automatic upgrades are still missing, so a known-good file cannot yet be compared/replaced with Sonarr/Radarr confidence. |
+| Quality | Partial | Global source/format preferences exist, and successful acquisitions now persist per-file source type/name, release context, acquisition time, and refreshed file size without retaining raw token-bearing download URLs. This creates trustworthy comparison evidence, but no comic-specific quality score or automatic replacement policy exists yet. |
 
 ## Workflow parity audit
 
@@ -51,7 +51,7 @@ The same comparison applies outside Settings. Track these as explicit `supported
 | Wanted / missing + manual search | Supported: global Wanted, bulk acquisition and manual search are present. |
 | Calendar / release awareness | Supported / comic-shaped: weekly publisher-aware release catalogue and subscriptions are the current equivalent; audit whether a conventional date calendar would add value. |
 | Search + acquisition | Supported / expanding: GetComics, Newznab, Torznab and client routing are first-class; watched-folder import and additional lawful sources remain roadmap work. |
-| Completed-download handling | Supported / partial: torrent/Usenet lifecycle, seed-safe import and failure handling are substantial; watched-folder external import remains missing. |
+| Completed-download handling | Supported / partial: torrent/Usenet lifecycle, seed-safe import, failure handling and new durable file provenance are substantial; watched-folder external import remains missing. |
 | History + blocklist | Supported: acquisition history/blocklist stay focused, while System Events provides the operational cross-stream timeline. |
 | Portable metadata | Partial: provider-neutral IDs are durable, file-embedded metadata portability remains missing. |
 | Reader | Intentionally secondary: reader parity is not an *arr convention and should not displace aggregation priorities. |
@@ -60,7 +60,7 @@ The same comparison applies outside Settings. Track these as explicit `supported
 
 Prioritize shared expectations that reduce support friction or data-loss risk before ornamental parity:
 
-1. **Profiles + Quality** — decide whether per-series acquisition profiles are justified, and finish durable file provenance before any automatic replacement upgrades.
+1. **Profiles + Quality scoring** — with per-file provenance in place, define the small set of comic-specific signals worth scoring before deciding whether per-series acquisition profiles or automatic upgrades are justified.
 2. **Updates** — define the expected UX for Docker/container installs versus native installs without teaching Kapowarr to self-update in unsafe environments.
 3. **System navigation** — Logs, Events and Backup are visible from Status today; Import Lists is linked from Metadata settings. When the monolithic sidebar can be safely refactored, make shared System and Settings capabilities familiar sibling links without bloating the main navigation.
 4. **Import List providers** — add additional curated/publisher/list ecosystems only when they expose stable identities or can be resolved without turning list sync into a metadata-search storm.

@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Import Lists{% endblock %}
+{% block css %}
+	<link rel="stylesheet" href="{{ url_for('static', filename='css/settings.css') }}">
+	<link rel="stylesheet" href="{{ url_for('static', filename='css/settings_importlists.css') }}">
+{% endblock %}
+{% block js %}
+	<script src="{{ url_for('static', filename='js/settings_importlists.js') }}" defer></script>
+{% endblock %}
+
+{% block main %}
+<main>
+	<div class="settings-container import-lists-settings">
+		<section>
+			<div class="section-heading">
+				<div>
+					<h2>Import Lists</h2>
+					<p>Follow an external comic list and optionally add exact referenced volumes to Kapowarr automatically.</p>
+				</div>
+				<button id="sync-all-lists" type="button">Sync All</button>
+			</div>
+
+			<form id="import-list-form">
+				<input id="import-list-id" type="hidden">
+				<table class="fold-table">
+					<tr>
+						<th><label for="import-list-name">Name</label></th>
+						<td><input id="import-list-name" required maxlength="255" placeholder="My reading list"></td>
+					</tr>
+					<tr>
+						<th><label for="import-list-provider">Provider</label></th>
+						<td>
+							<select id="import-list-provider" disabled>
+								<option value="remote_cbl">Remote CBL</option>
+							</select>
+							<p>ComicRack CBL is the first provider. Automatic Add uses embedded ComicVine volume IDs only; title-only entries are never guessed.</p>
+						</td>
+					</tr>
+					<tr>
+						<th><label for="import-list-url">URL</label></th>
+						<td><input id="import-list-url" type="url" required spellcheck="false" placeholder="https://example.com/list.cbl"></td>
+					</tr>
+					<tr>
+						<th><label for="import-list-root">Root Folder</label></th>
+						<td><select id="import-list-root" required></select></td>
+					</tr>
+					<tr>
+						<th>Behavior</th>
+						<td class="checkbox-stack">
+							<label><input id="import-list-enabled" type="checkbox" checked> Enabled</label>
+							<label><input id="import-list-auto" type="checkbox"> Automatic Add</label>
+							<label><input id="import-list-monitored" type="checkbox" checked> Monitor added volumes</label>
+							<label><input id="import-list-monitor-new" type="checkbox" checked> Monitor new issues</label>
+							<label><input id="import-list-search" type="checkbox"> Search on add</label>
+						</td>
+					</tr>
+				</table>
+				<div class="form-actions">
+					<button id="save-import-list" type="submit">Add Import List</button>
+					<button id="cancel-import-list-edit" type="button" class="secondary hidden">Cancel Edit</button>
+				</div>
+				<p id="import-list-form-status" aria-live="polite"></p>
+			</form>
+
+			<div class="import-list-table-wrap">
+				<table class="import-list-table">
+					<thead>
+						<tr><th>Name</th><th>Status</th><th>Last Sync</th><th>Result</th><th>Actions</th></tr>
+					</thead>
+					<tbody id="import-list-rows"></tbody>
+				</table>
+				<p id="no-import-lists" class="hidden">No Import Lists configured.</p>
+			</div>
+		</section>
+
+		<section>
+			<h2>Exclusions</h2>
+			<p>Excluded ComicVine volumes are ignored by every Import List, matching the familiar Arr exclusion model.</p>
+			<form id="exclusion-form" class="exclusion-form">
+				<label>ComicVine Volume ID <input id="exclusion-id" type="number" min="1" required></label>
+				<label>Note <input id="exclusion-note" maxlength="500" placeholder="Optional reason"></label>
+				<button type="submit">Add Exclusion</button>
+			</form>
+			<div id="exclusion-list" class="exclusion-list"></div>
+			<p id="exclusion-status" aria-live="polite"></p>
+		</section>
+	</div>
+</main>
+{% endblock main %}

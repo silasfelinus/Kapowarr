@@ -25,6 +25,8 @@ from backend.base.helpers import (AsyncSession, Session, batched,
                                   normalise_string, normalise_year,
                                   to_full_string_cv_id, to_string_cv_id)
 from backend.base.logging import LOGGER
+from backend.features.metadata import (MetadataCapability, MetadataProvider,
+                                       MetadataProviderRegistry)
 from backend.implementations.matching import select_best_volume_result_for_file
 from backend.internals.db import get_db
 from backend.internals.settings import Settings
@@ -131,7 +133,17 @@ def _clean_description(description: str, short: bool = False) -> str:
     return result
 
 
-class ComicVine:
+@MetadataProviderRegistry.register
+class ComicVine(MetadataProvider):
+    provider_id = 'comicvine'
+    display_name = 'ComicVine'
+    capabilities = (
+        MetadataCapability.SEARCH_VOLUMES,
+        MetadataCapability.FETCH_VOLUME,
+        MetadataCapability.FETCH_VOLUMES,
+        MetadataCapability.FETCH_ISSUES,
+        MetadataCapability.COVERS
+    )
     volume_field_list = ','.join((
         'aliases',
         'count_of_issues',
@@ -280,11 +292,18 @@ class ComicVine:
         ) is not None
 
         result: VolumeMetadata = {
+            'provider_id': self.provider_id,
+            'external_id': str(volume_data['id']),
             'comicvine_id': int(volume_data['id']),
             'title': normalise_string(volume_data['name'] or ''),
             'year': normalise_year(volume_data.get('start_year', '')),
             'volume_number': volume_number,
             'cover_link': volume_data['image']['small_url'],
+            'cover_source': {
+                'provider_id': self.provider_id,
+                'external_id': str(volume_data['id']),
+                'source_url': volume_data['image']['small_url']
+            },
             'cover': None,
             'description': description,
             'site_url': volume_data['site_detail_url'],
@@ -327,6 +346,9 @@ class ComicVine:
             calculated_issue_number = 0.0
 
         result: IssueMetadata = {
+            'provider_id': self.provider_id,
+            'external_id': str(issue_data['id']),
+            'volume_external_id': str(issue_data['volume']['id']),
             'comicvine_id': int(issue_data['id']),
             'volume_id': int(issue_data['volume']['id']),
             'issue_number': issue_data['issue_number'].replace('/', '-').strip(),

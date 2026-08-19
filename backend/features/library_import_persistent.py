@@ -559,7 +559,15 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
                                     match['id'], []
                                 ).append(match)
 
-                            for volume_matches in matches_by_id.values():
+                            total_import_volumes = len(matches_by_id)
+                            for import_index, volume_matches in enumerate(
+                                matches_by_id.values(),
+                                start=1
+                            ):
+                                self._emit_persistent_status(
+                                    f'{basename(folder)}: importing volume '
+                                    f'{import_index}/{total_import_volumes}'
+                                )
                                 if not self._wait_for_metadata_slot():
                                     mark_folder_pending(self.job_id, folder)
                                     metadata_wait_stopped = True

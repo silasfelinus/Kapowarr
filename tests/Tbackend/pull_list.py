@@ -1,113 +1,118 @@
 import sqlite3
 import unittest
+from datetime import date, timedelta
 from unittest.mock import AsyncMock, patch
 
 from backend.base.definitions import WeeklyReleaseSource
 from backend.features import pull_list as pull_list_module
 from backend.features.pull_list import (GetComicsWeeklyReleases,
+                                        MylarWeeklyReleases,
                                         WeeklyReleaseSources,
-                                        check_weekly_pull_list, get_pull_list,
-                                        match_releases_to_library)
+                                        _merge_release_sources,
+                                        check_weekly_pull_list,
+                                        get_publishers, get_pull_list,
+                                        match_releases_to_library,
+                                        set_publisher_subscription)
 from backend.internals.db import KapowarrCursor
 
 
-def _release(series, issue_number='1', year=None, source='GetComics',
-             link='http://x/1'):
+def _current_week():
+    today = date.today()
+    return (today - timedelta(days=today.weekday())).isoformat()
+
+
+def _release(series, issue_number='1', year=None,
+             source='Mylar Release Provider',
+             link='http://x/1', publisher='DC Comics', comicvine_volume_id=None,
+             comicvine_issue_id=None):
     return {
         'series': series,
         'issue_number': issue_number,
         'year': year,
         'link': link,
-        'source': source
+        'source': source,
+        'publisher': publisher,
+        'release_date': date.today().isoformat(),
+        'cover_date': None,
+        'week_start': _current_week(),
+        'comicvine_volume_id': comicvine_volume_id,
+        'comicvine_issue_id': comicvine_issue_id,
+        'availability_source': None,
+        'availability_link': None
     }
 
 
-def _volume(id, title, monitored=True):
-    return {'id': id, 'title': title, 'monitored': monitored}
+def _volume(id, title, monitored=True, comicvine_id=None, year=None):
+    return {
+        'id': id,
+        'title': title,
+        'monitored': monitored,
+        'comicvine_id': comicvine_id,
+        'year': year
+    }
 
 
-# =====================
-# match_releases_to_library()
-# =====================
 class release_to_library_matching(unittest.TestCase):
     def test_exact_title_match(self):
-        releases = [_release('Batman', '123')]
-        volumes = [_volume(1, 'Batman')]
-
-        matches = match_releases_to_library(releases, volumes)
-
-        self.assertEqual(len(matches), 1)
-        self.assertEqual(matches[0]['volume_id'], 1)
-        self.assertEqual(matches[0]['volume_title'], 'Batman')
-        self.assertEqual(matches[0]['issue_number'], '123')
-        self.assertEqual(matches[0]['release_title'], 'Batman')
-
-    def test_no_match_when_title_differs(self):
-        releases = [_release('Batman', '123')]
-        volumes = [_volume(1, 'Daredevil')]
-
-        matches = match_releases_to_library(releases, volumes)
-
-        self.assertEqual(matches, [])
-
-    def test_no_monitored_volumes_returns_empty(self):
-        releases = [_release('Batman', '123')]
-
-        matches = match_releases_to_library(releases, [])
-
-        self.assertEqual(matches, [])
-
-    def test_case_and_whitespace_insensitive_match(self):
-        releases = [_release('  batman  ', '123')]
-        volumes = [_volume(1, 'Batman')]
-
-        matches = match_releases_to_library(releases, volumes)
-
-        self.assertEqual(len(matches), 1)
-
-    def test_multiple_releases_matched_independently(self):
-        releases = [
-            _release('Batman', '123'),
-            _release('Daredevil', '10'),
-            _release('Nothing Monitored', '1')
-        ]
-        volumes = [_volume(1, 'Batman'), _volume(2, 'Daredevil')]
-
-        matches = match_releases_to_library(releases, volumes)
-
-        self.assertEqual(len(matches), 2)
-        self.assertEqual(
-            {m['volume_title'] for m in matches}, {'Batman', 'Daredevil'}
+        entries = match_releases_to_library(
+            [_release('Batman', '123')], [_volume(1, 'Batman')]
         )
 
-    def test_release_only_credited_to_first_matching_volume(self):
-        releases = [_release('Batman', '123')]
-        volumes = [_volume(1, 'Batman'), _volume(2, 'Batman')]
+        self.assertEqual(entries[0]['volume_id'], 1)
+        self.assertEqual(entries[0]['volume_title'], 'Batman')
+        self.assertEqual(entries[0]['issue_number'], '123')
 
-        matches = match_releases_to_library(releases, volumes)
+    def test_unmatched_release_is_kept_in_catalogue(self):
+        entries = match_releases_to_library(
+            [_release('Batman', '123')], [_volume(1, 'Daredevil')]
+        )
 
-        # Only one match is produced, not one per monitored volume with an
-        # identical title.
-        self.assertEqual(len(matches), 1)
-        self.assertEqual(matches[0]['volume_id'], 1)
+        self.assertEqual(len(entries), 1)
+        self.assertIsNone(entries[0]['volume_id'])
+
+    def test_getcomics_is_merged_as_availability(self):
+        catalogue = _release('Batman', '123')
+        available = _release(
+            'Batman', '123', source='GetComics', publisher=None
+        )
+        available['availability_source'] = 'GetComics'
+        available['availability_link'] = 'https://getcomics.example/batman'
+
+        releases = _merge_release_sources([[catalogue], [available]])
+
+        self.assertEqual(len(releases), 1)
+        self.assertEqual(releases[0]['source'], 'Mylar Release Provider')
+        self.assertEqual(releases[0]['availability_source'], 'GetComics')
+
+    def test_comicvine_id_takes_precedence_over_title(self):
+        entries = match_releases_to_library(
+            [_release('Renamed Batman', comicvine_volume_id=4050)],
+            [_volume(1, 'Batman', comicvine_id=4050)]
+        )
+
+        self.assertEqual(entries[0]['volume_id'], 1)
+
+    def test_year_prevents_wrong_title_match(self):
+        entries = match_releases_to_library(
+            [_release('Batman', year=2025)],
+            [_volume(1, 'Batman', year=2016)]
+        )
+
+        self.assertIsNone(entries[0]['volume_id'])
 
 
-# =====================
-# WeeklyReleaseSources registry
-# =====================
 class weekly_release_sources_registry(unittest.TestCase):
-    def test_getcomics_is_registered_by_default(self):
+    def test_builtin_sources_are_registered(self):
+        self.assertIn(MylarWeeklyReleases, WeeklyReleaseSources.sources)
         self.assertIn(GetComicsWeeklyReleases, WeeklyReleaseSources.sources)
 
     def test_get_active_returns_instances(self):
         active = WeeklyReleaseSources.get_active()
-        self.assertTrue(
-            any(isinstance(s, GetComicsWeeklyReleases) for s in active)
-        )
+        self.assertTrue(any(isinstance(s, MylarWeeklyReleases) for s in active))
 
     def test_register_adds_a_new_source(self):
         class _DummySource(WeeklyReleaseSource):
-            async def fetch(self, session):
+            async def fetch(self, session, requested_date=None):
                 return []
 
         original_sources = list(WeeklyReleaseSources.sources)
@@ -118,127 +123,127 @@ class weekly_release_sources_registry(unittest.TestCase):
             WeeklyReleaseSources.sources = original_sources
 
 
-# =====================
-# check_weekly_pull_list() / get_pull_list(), with an in-memory DB
-# =====================
 class weekly_pull_list_persistence(unittest.TestCase):
     def setUp(self):
         self.connection = sqlite3.connect(':memory:')
         self.connection.row_factory = sqlite3.Row
         self.connection.executescript("""
+            CREATE TABLE root_folders(id INTEGER PRIMARY KEY, folder TEXT);
             CREATE TABLE volumes(
                 id INTEGER PRIMARY KEY,
+                comicvine_id INTEGER,
                 title VARCHAR(255) NOT NULL,
+                year INTEGER,
+                monitored BOOL NOT NULL DEFAULT 0
+            );
+            CREATE TABLE issues(
+                id INTEGER PRIMARY KEY,
+                volume_id INTEGER,
+                comicvine_id INTEGER,
+                issue_number VARCHAR(20),
+                calculated_issue_number REAL,
                 monitored BOOL NOT NULL DEFAULT 0
             );
             CREATE TABLE pull_list_entries(
                 id INTEGER PRIMARY KEY,
-                volume_id INTEGER NOT NULL,
+                volume_id INTEGER,
+                issue_id INTEGER,
+                comicvine_volume_id INTEGER,
+                comicvine_issue_id INTEGER,
                 issue_number VARCHAR(20),
                 release_title VARCHAR(255) NOT NULL,
-                year INTEGER(5),
+                publisher VARCHAR(255),
+                release_date DATE,
+                cover_date DATE,
+                week_start DATE NOT NULL,
+                year INTEGER,
                 source VARCHAR(50) NOT NULL,
                 link TEXT NOT NULL,
+                availability_source VARCHAR(50),
+                availability_link TEXT,
                 checked_at INTEGER NOT NULL
+            );
+            CREATE TABLE publisher_subscriptions(
+                publisher VARCHAR(255) PRIMARY KEY COLLATE NOCASE,
+                root_folder_id INTEGER NOT NULL,
+                auto_search BOOL NOT NULL DEFAULT 0
+            );
+            CREATE TABLE publisher_automation_history(
+                release_key VARCHAR(255) NOT NULL,
+                action VARCHAR(20) NOT NULL,
+                success BOOL NOT NULL,
+                message TEXT,
+                attempted_at INTEGER NOT NULL,
+                PRIMARY KEY (release_key, action)
             );
         """)
         self.connection.execute(
-            "INSERT INTO volumes(id, title, monitored) VALUES (1, 'Batman', 1);"
+            "INSERT INTO volumes VALUES (1, 4050, 'Batman', 2024, 1);"
+        )
+        self.connection.execute(
+            "INSERT INTO issues VALUES (10, 1, 9001, '123', 123.0, 1);"
         )
         self.connection.commit()
 
         self.get_db_patch = patch.object(
-            pull_list_module, 'get_db', side_effect=lambda *a, **k: self._cursor()
+            pull_list_module, 'get_db',
+            side_effect=lambda *a, **k: self._cursor()
         )
         self.get_db_patch.start()
 
-    def _cursor(self) -> KapowarrCursor:
-        c = KapowarrCursor(self.connection)
-        c.row_factory = sqlite3.Row
-        return c
+    def _cursor(self):
+        cursor = KapowarrCursor(self.connection)
+        cursor.row_factory = sqlite3.Row
+        return cursor
 
     def tearDown(self):
         self.get_db_patch.stop()
         self.connection.close()
 
-    def test_check_stores_matches_and_get_pull_list_reads_them_back(self):
-        releases = [_release('Batman', '123', year=2024)]
+    def _check(self, releases):
         with patch.object(
             pull_list_module, '_fetch_all_weekly_releases',
             new=AsyncMock(return_value=releases)
         ), patch.object(
             pull_list_module.Library, 'get_public_volumes',
-            return_value=[_volume(1, 'Batman')]
+            return_value=[_volume(
+                1, 'Batman', comicvine_id=4050, year=2024
+            )]
         ):
-            matches = check_weekly_pull_list()
+            return check_weekly_pull_list()
 
-        self.assertEqual(len(matches), 1)
+    def test_check_stores_full_catalogue_and_issue_match(self):
+        entries = self._check([
+            _release('Batman', '123', 2024,
+                     comicvine_volume_id=4050, comicvine_issue_id=9001),
+            _release('New Series', '1', 2026, publisher='Image Comics')
+        ])
 
-        stored = get_pull_list()
-        self.assertEqual(len(stored), 1)
-        self.assertEqual(stored[0]['volume_id'], 1)
-        self.assertEqual(stored[0]['volume_title'], 'Batman')
-        self.assertEqual(stored[0]['issue_number'], '123')
-        self.assertEqual(stored[0]['year'], 2024)
-        self.assertEqual(stored[0]['source'], 'GetComics')
+        self.assertEqual(len(entries), 2)
+        stored = get_pull_list(_current_week())
+        self.assertEqual(len(stored), 2)
+        batman = next(row for row in stored if row['release_title'] == 'Batman')
+        self.assertEqual(batman['volume_id'], 1)
+        self.assertEqual(batman['issue_id'], 10)
+        self.assertTrue(any(row['volume_id'] is None for row in stored))
 
     def test_empty_source_preserves_previous_results_and_fails(self):
-        with patch.object(
-            pull_list_module, '_fetch_all_weekly_releases',
-            new=AsyncMock(return_value=[_release('Batman', '1')])
-        ), patch.object(
-            pull_list_module.Library, 'get_public_volumes',
-            return_value=[_volume(1, 'Batman')]
+        self._check([_release('Batman')])
+        with self.assertRaisesRegex(
+            RuntimeError, 'previous pull list was kept'
         ):
-            check_weekly_pull_list()
+            self._check([])
+        self.assertEqual(len(get_pull_list(_current_week())), 1)
 
-        self.assertEqual(len(get_pull_list()), 1)
+    def test_publisher_subscription_is_returned_with_counts(self):
+        self._check([_release('Batman'), _release('Nightwing')])
+        set_publisher_subscription('DC Comics', 1, True)
 
-        # A source outage or markup break must not erase the last good list.
-        with patch.object(
-            pull_list_module, '_fetch_all_weekly_releases',
-            new=AsyncMock(return_value=[])
-        ), patch.object(
-            pull_list_module.Library, 'get_public_volumes',
-            return_value=[_volume(1, 'Batman')]
-        ):
-            with self.assertRaisesRegex(RuntimeError, 'previous pull list was kept'):
-                check_weekly_pull_list()
+        publishers = get_publishers()
 
-        self.assertEqual(len(get_pull_list()), 1)
-
-    def test_no_matches_stores_nothing(self):
-        with patch.object(
-            pull_list_module, '_fetch_all_weekly_releases',
-            new=AsyncMock(return_value=[_release('Not Monitored', '1')])
-        ), patch.object(
-            pull_list_module.Library, 'get_public_volumes',
-            return_value=[_volume(1, 'Batman')]
-        ):
-            matches = check_weekly_pull_list()
-
-        self.assertEqual(matches, [])
-        self.assertEqual(get_pull_list(), [])
-
-    def test_get_pull_list_orders_most_recently_checked_first(self):
-        self.connection.executescript("""
-            INSERT INTO volumes(id, title, monitored) VALUES (2, 'Daredevil', 1);
-            INSERT INTO pull_list_entries(
-                volume_id, issue_number, release_title, year,
-                source, link, checked_at
-            ) VALUES (1, '1', 'Batman', 2023, 'GetComics', 'http://x/1', 100);
-            INSERT INTO pull_list_entries(
-                volume_id, issue_number, release_title, year,
-                source, link, checked_at
-            ) VALUES (2, '1', 'Daredevil', 2023, 'GetComics', 'http://x/2', 200);
-        """)
-        self.connection.commit()
-
-        result = get_pull_list()
-
-        self.assertEqual(len(result), 2)
-        self.assertEqual(result[0]['volume_title'], 'Daredevil')
-        self.assertEqual(result[1]['volume_title'], 'Batman')
+        self.assertEqual(publishers[0]['publisher'], 'DC Comics')
+        self.assertEqual(publishers[0]['release_count'], 2)
+        self.assertEqual(publishers[0]['auto_search'], 1)
 
 
 if __name__ == '__main__':

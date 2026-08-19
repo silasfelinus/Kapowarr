@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from backend.base.custom_exceptions import (CVRateLimitReached,
                                             InvalidKeyValue,
                                             VolumeAlreadyAdded)
-from backend.base.definitions import (CVFileMapping, Constants, FileConstants,
+from backend.base.definitions import (Constants, CVFileMapping, FileConstants,
                                       FilenameData, MonitorScheme,
                                       SpecialVersion)
 from backend.base.file_extraction import extract_filename_data
@@ -23,8 +23,8 @@ from backend.base.logging import LOGGER
 from backend.features.library_import_policy import (
     REVIEW_REASON_NO_CANDIDATE, REVIEW_REASON_TIE, REVIEW_REASON_WEAK_SCORE,
     select_auto_import_volume_result)
+from backend.features.metadata import get_metadata_provider
 from backend.features.tasks import Task, task_library
-from backend.implementations.comicvine import ComicVine
 from backend.implementations.file_matching import scan_files
 from backend.implementations.matching import select_best_volume_result_for_file
 from backend.implementations.naming import mass_rename
@@ -33,7 +33,6 @@ from backend.implementations.volumes import Library
 from backend.internals.db import commit
 from backend.internals.db_models import FilesDB
 from backend.internals.server import TaskStatusEvent, WebSocket
-
 
 # ComicVine currently documents 200 requests per resource per hour. Continuous
 # import spaces search starts by 20 seconds (at most 180/hour) and counts API /
@@ -185,7 +184,7 @@ async def _match_file_groups(
         titles_to_groups.setdefault(series_name, []).append(group_number)
 
     cache = search_cache if search_cache is not None else {}
-    comicvine = ComicVine()
+    comicvine = get_metadata_provider()
     searches_made = 0
 
     for title in titles_to_groups:

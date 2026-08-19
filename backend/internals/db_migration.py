@@ -1308,3 +1308,66 @@ def _migrate_expand_pull_list_calendar():
     """)
 
     return
+
+
+@DatabaseMigrationHandler.register_handler(49)
+def _migrate_add_metadata_provider_identities():
+    """Add portable IDs without rewriting legacy ComicVine-backed tables."""
+    cursor = get_db()
+    cover_columns = {
+        row[1] for row in cursor.execute("PRAGMA table_info(volumes_covers);")
+    }
+    for column, definition in (
+        ('provider_id', 'VARCHAR(50)'),
+        ('external_id', 'TEXT'),
+        ('source_url', 'TEXT')
+    ):
+        if column not in cover_columns:
+            cursor.execute(
+                f'ALTER TABLE volumes_covers ADD COLUMN {column} {definition};'
+            )
+
+    cursor.executescript("""
+        CREATE TABLE IF NOT EXISTS volume_external_ids(
+            volume_id INTEGER NOT NULL,
+            provider_id VARCHAR(50) NOT NULL,
+            external_id TEXT NOT NULL,
+            source_url TEXT,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (volume_id, provider_id),
+            UNIQUE (provider_id, external_id),
+            FOREIGN KEY (volume_id) REFERENCES volumes(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS issue_external_ids(
+            issue_id INTEGER NOT NULL,
+            provider_id VARCHAR(50) NOT NULL,
+            external_id TEXT NOT NULL,
+            source_url TEXT,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (issue_id, provider_id),
+            UNIQUE (provider_id, external_id),
+            FOREIGN KEY (issue_id) REFERENCES issues(id) ON DELETE CASCADE
+        );
+
+        INSERT OR IGNORE INTO volume_external_ids(
+            volume_id, provider_id, external_id, source_url, updated_at
+        )
+        SELECT id, 'comicvine', CAST(comicvine_id AS TEXT), site_url,
+               CAST(strftime('%s', 'now') AS INTEGER)
+        FROM volumes;
+
+        INSERT OR IGNORE INTO issue_external_ids(
+            issue_id, provider_id, external_id, source_url, updated_at
+        )
+        SELECT id, 'comicvine', CAST(comicvine_id AS TEXT), NULL,
+               CAST(strftime('%s', 'now') AS INTEGER)
+        FROM issues;
+
+        UPDATE volumes_covers
+        SET provider_id = 'comicvine',
+            external_id = (
+                SELECT CAST(v.comicvine_id AS TEXT)
+                FROM volumes v WHERE v.id = volumes_covers.volume_id
+            )
+        WHERE provider_id IS NULL;
+    """)

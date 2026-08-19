@@ -731,7 +731,19 @@ class PullListEntryData(TypedDict):
     availability_link: Union[str, None]
 
 
-class IssueMetadata(TypedDict):
+class MetadataIdentity(TypedDict, total=False):
+    provider_id: str
+    external_id: str
+    volume_external_id: str
+
+
+class CoverProvenance(TypedDict):
+    provider_id: str
+    external_id: str
+    source_url: str
+
+
+class IssueMetadata(MetadataIdentity):
     comicvine_id: int
     volume_id: int
     issue_number: str
@@ -741,12 +753,13 @@ class IssueMetadata(TypedDict):
     description: str
 
 
-class VolumeMetadata(TypedDict):
+class VolumeMetadata(MetadataIdentity):
     comicvine_id: int
     title: str
     year: Union[int, None]
     volume_number: int
     cover_link: str
+    cover_source: CoverProvenance
     cover: Union[bytes, None]
     description: str
     site_url: str

@@ -37,7 +37,7 @@ class continuous_import_pacing(unittest.IsolatedAsyncioTestCase):
             'backend.features.library_import.async_sleep',
             new_callable=AsyncMock
         ) as sleep_mock, patch(
-            'backend.features.library_import.ComicVine',
+            'backend.features.library_import.get_metadata_provider',
             return_value=comicvine
         ):
             await _match_file_groups(
@@ -63,7 +63,7 @@ class continuous_import_pacing(unittest.IsolatedAsyncioTestCase):
             'backend.features.library_import.async_sleep',
             new_callable=AsyncMock
         ) as sleep_mock, patch(
-            'backend.features.library_import.ComicVine',
+            'backend.features.library_import.get_metadata_provider',
             return_value=comicvine
         ):
             await _match_file_groups(

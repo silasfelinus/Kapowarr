@@ -378,6 +378,9 @@ CREATE TABLE IF NOT EXISTS volumes(
 CREATE TABLE IF NOT EXISTS volumes_covers(
     volume_id INTEGER UNIQUE NOT NULL,
     cover BLOB,
+    provider_id VARCHAR(50),
+    external_id TEXT,
+    source_url TEXT,
     FOREIGN KEY (volume_id) REFERENCES volumes(id)
         ON DELETE CASCADE
 );
@@ -401,6 +404,30 @@ CREATE INDEX IF NOT EXISTS issues_volume_number_index
     ON issues(volume_id, calculated_issue_number);
 CREATE INDEX IF NOT EXISTS issues_volume_index
     ON issues(volume_id);
+CREATE TABLE IF NOT EXISTS volume_external_ids(
+    volume_id INTEGER NOT NULL,
+    provider_id VARCHAR(50) NOT NULL,
+    external_id TEXT NOT NULL,
+    source_url TEXT,
+    updated_at INTEGER NOT NULL,
+
+    PRIMARY KEY (volume_id, provider_id),
+    UNIQUE (provider_id, external_id),
+    FOREIGN KEY (volume_id) REFERENCES volumes(id)
+        ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS issue_external_ids(
+    issue_id INTEGER NOT NULL,
+    provider_id VARCHAR(50) NOT NULL,
+    external_id TEXT NOT NULL,
+    source_url TEXT,
+    updated_at INTEGER NOT NULL,
+
+    PRIMARY KEY (issue_id, provider_id),
+    UNIQUE (provider_id, external_id),
+    FOREIGN KEY (issue_id) REFERENCES issues(id)
+        ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS files(
     id INTEGER PRIMARY KEY,
     filepath TEXT UNIQUE NOT NULL,

@@ -460,9 +460,11 @@ class Settings(metaclass=Singleton):
                 converted_value = self.sv.proxy_password
 
         elif key == 'comicvine_api_key':
-            from backend.implementations.comicvine import ComicVine
+            from backend.features.metadata import get_metadata_provider
             converted_value = value.strip()
-            if converted_value and not ComicVine(converted_value).test_key():
+            if converted_value and not get_metadata_provider(
+                comicvine_api_key=converted_value
+            ).test_key():
                 raise InvalidKeyValue(key, value)
 
         elif key == 'download_folder':

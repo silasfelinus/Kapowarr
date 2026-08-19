@@ -31,6 +31,18 @@ test('restore requires user confirmation and reports preserved current state', (
 	assert.match(script, /\/restore/);
 });
 
+test('backup page supports restoring a previously downloaded file', () => {
+	assert.match(template, /id="backup-upload"/);
+	assert.match(template, />Restore from File<\/label>/);
+	assert.match(script, /new FormData\(\)/);
+	assert.match(script, /\/api\/system\/backups\/restore\?api_key=/);
+});
+
+test('backup API responses are decoded before using result fields', () => {
+	assert.match(script, /return response\.json\(\)/);
+	assert.match(script, /sendBackupPost\('\/system\/backups'\)/);
+});
+
 test('backup downloads remain authenticated', () => {
 	assert.match(script, /api_key=\$\{encodeURIComponent\(backup_api_key\)\}/);
 });

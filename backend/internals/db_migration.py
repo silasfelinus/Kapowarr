@@ -1371,3 +1371,133 @@ def _migrate_add_metadata_provider_identities():
             )
         WHERE provider_id IS NULL;
     """)
+
+    return
+
+
+@DatabaseMigrationHandler.register_handler(50)
+def _migrate_relax_comicvine_id_not_null():
+    """Make `comicvine_id` nullable on `volumes` and `issues`.
+
+    A volume or issue found only through a non-ComicVine provider (e.g. a
+    Metron-native series with no ComicVine cross-link) has no legal value to
+    put in `comicvine_id`. The column is kept -- not dropped -- for API and
+    on-disk compatibility; durable, provider-neutral identity lives in
+    `volume_external_ids`/`issue_external_ids` (see migration 49).
+
+    SQLite cannot `ALTER TABLE ... DROP NOT NULL` directly, so both tables
+    are rebuilt: rows are copied into a temporary table, the real table is
+    dropped and recreated with the relaxed schema, and the rows are copied
+    back in. Column sets and order are otherwise unchanged, so a plain
+    `INSERT INTO new SELECT * FROM temp` is safe.
+
+    Deliberately not `ALTER TABLE ... RENAME TO` (contrast with migration
+    48): modern SQLite silently rewrites *other* tables' FOREIGN KEY clauses
+    to point at the new name when the referenced table is renamed, which
+    would leave them dangling once the temporary name is dropped and the
+    original name is recreated. `volumes` and `issues` both have several
+    dependent tables (`volumes_covers`, `issues_files`,
+    `volume_external_ids`, `issue_external_ids`, etc.), so -- like migration
+    2's rebuild of `issues` for the very same reason -- a plain
+    `CREATE TEMPORARY TABLE ... AS SELECT` + `DROP TABLE` + `CREATE TABLE` is
+    used instead: it never touches another table's schema text, so their
+    `REFERENCES volumes(id)` / `REFERENCES issues(id)` clauses keep resolving
+    correctly once the real table is recreated under the same name.
+
+    Idempotent/restart-safe: each table's `notnull` flag on `comicvine_id` is
+    checked via `PRAGMA table_info` first, so re-running this after an
+    interruption (or on a database that already has the relaxed schema)
+    rebuilds only what still needs it -- or does nothing at all.
+    """
+    cursor = get_db()
+
+    def _is_not_null(table: str) -> bool:
+        # .fetchall() (rather than iterating the cursor lazily) matters
+        # here: `any(...)` short-circuits as soon as it finds the
+        # comicvine_id row, which -- without fully consuming the result
+        # set first -- leaves this PRAGMA's statement unfinalized on the
+        # cursor. Since `cursor` is reused below for the DROP/CREATE of
+        # this very table, that unfinalized statement makes SQLite raise
+        # "database table is locked" on the rebuild.
+        return any(
+            row[1] == 'comicvine_id' and row[3]
+            for row in cursor.execute(f"PRAGMA table_info({table});").fetchall()
+        )
+
+    volumes_notnull = _is_not_null('volumes')
+    issues_notnull = _is_not_null('issues')
+
+    if not volumes_notnull and not issues_notnull:
+        # Already migrated (e.g. this handler ran to completion in a prior,
+        # interrupted attempt, before the database version was persisted).
+        return
+
+    script = "PRAGMA foreign_keys = OFF;\nBEGIN;\n"
+
+    if volumes_notnull:
+        script += """
+        CREATE TEMPORARY TABLE temp_volumes_50 AS SELECT * FROM volumes;
+        DROP TABLE volumes;
+
+        CREATE TABLE volumes(
+            id INTEGER PRIMARY KEY,
+            comicvine_id INTEGER,
+            title VARCHAR(255) NOT NULL,
+            alt_title VARCHAR(255),
+            year INTEGER(5),
+            publisher VARCHAR(255),
+            volume_number INTEGER(8) DEFAULT 1,
+            description TEXT,
+            site_url TEXT NOT NULL DEFAULT "",
+            monitored BOOL NOT NULL DEFAULT 0,
+            monitor_new_issues BOOL NOT NULL DEFAULT 1,
+            root_folder INTEGER NOT NULL,
+            folder TEXT,
+            custom_folder BOOL NOT NULL DEFAULT 0,
+            last_cv_fetch INTEGER(8) DEFAULT 0,
+            special_version VARCHAR(255),
+            special_version_locked BOOL NOT NULL DEFAULT 0,
+
+            FOREIGN KEY (root_folder) REFERENCES root_folders(id)
+        );
+
+        INSERT INTO volumes SELECT * FROM temp_volumes_50;
+
+        DROP TABLE temp_volumes_50;
+        """
+
+    if issues_notnull:
+        script += """
+        CREATE TEMPORARY TABLE temp_issues_50 AS SELECT * FROM issues;
+        DROP TABLE issues;
+
+        CREATE TABLE issues(
+            id INTEGER PRIMARY KEY,
+            volume_id INTEGER NOT NULL,
+            comicvine_id INTEGER UNIQUE,
+            issue_number VARCHAR(20) NOT NULL,
+            calculated_issue_number FLOAT(20) NOT NULL,
+            title VARCHAR(255),
+            date VARCHAR(10),
+            description TEXT,
+            monitored BOOL NOT NULL DEFAULT 1,
+
+            FOREIGN KEY (volume_id) REFERENCES volumes(id)
+                ON DELETE CASCADE
+        );
+
+        INSERT INTO issues SELECT * FROM temp_issues_50;
+
+        DROP TABLE temp_issues_50;
+
+        CREATE INDEX IF NOT EXISTS issues_volume_number_index
+            ON issues(volume_id, calculated_issue_number);
+        CREATE INDEX IF NOT EXISTS issues_volume_index
+            ON issues(volume_id);
+        """
+
+    script += "\nCOMMIT;\nPRAGMA foreign_keys = ON;\n"
+
+    cursor.executescript(script)
+
+    return

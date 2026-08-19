@@ -302,12 +302,22 @@ class VolumeNotMatched(KapowarrException):
 class VolumeAlreadyAdded(KapowarrException):
     "The volume that is desired to be added is already added"
 
-    def __init__(self, comicvine_id: int, volume_id: int) -> None:
+    def __init__(
+        self,
+        comicvine_id: Union[int, None],
+        volume_id: int,
+        provider_id: str = 'comicvine',
+        external_id: Union[str, int, None] = None
+    ) -> None:
         self.comicvine_id = comicvine_id
         self.volume_id = volume_id
+        self.provider_id = provider_id
+        self.external_id = (
+            external_id if external_id is not None else comicvine_id
+        )
         LOGGER.warning(
             "The volume that is desired to be added is already added: "
-            f"CV {comicvine_id} and ID {volume_id}"
+            f"{provider_id} {self.external_id} and ID {volume_id}"
         )
         return
 
@@ -318,7 +328,9 @@ class VolumeAlreadyAdded(KapowarrException):
             "error": self.__class__.__name__,
             "result": {
                 "comicvine_id": self.comicvine_id,
-                "volume_id": self.volume_id
+                "volume_id": self.volume_id,
+                "provider_id": self.provider_id,
+                "external_id": self.external_id
             }
         }
 

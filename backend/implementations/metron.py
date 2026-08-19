@@ -147,18 +147,32 @@ class Metron(MetadataProvider):
             await self._get(f'series/{item["id"]}')
             for item in summaries
         ]
-        # The current library schema still requires a compatibility CV ID.
-        # Metron-native records become addable when that final legacy column is
-        # made nullable; until then, hiding them avoids a broken Add action.
-        results = [self._volume(item) for item in details if item.get('cv_id')]
+        # Metron-native results (no ComicVine cross-link) are fully addable:
+        # their durable identity lives in volume_external_ids, not in the
+        # (now nullable) comicvine_id column, so nothing needs to be hidden.
+        results = [self._volume(item) for item in details]
+
+        cursor = get_db()
+
         cv_ids = [item['comicvine_id'] for item in results if item['comicvine_id']]
-        added = dict(get_db().execute(
+        cv_added = dict(cursor.execute(
             f'SELECT comicvine_id, id FROM volumes WHERE comicvine_id IN ({",".join("?" for _ in cv_ids)})',
             cv_ids
         )) if cv_ids else {}
+
+        metron_ids = [item['external_id'] for item in results]
+        placeholders = ",".join("?" for _ in metron_ids)
+        metron_added = dict(cursor.execute(
+            "SELECT external_id, volume_id FROM volume_external_ids "
+            f"WHERE provider_id = 'metron' AND external_id IN ({placeholders})",
+            metron_ids
+        )) if metron_ids else {}
+
         for item in results:
-            if item['comicvine_id']:
-                item['already_added'] = added.get(item['comicvine_id'])
+            if item['comicvine_id'] and item['comicvine_id'] in cv_added:
+                item['already_added'] = cv_added[item['comicvine_id']]
+            else:
+                item['already_added'] = metron_added.get(item['external_id'])
         return results
 
     async def fetch_volume(self, external_id: Union[str, int]) -> VolumeMetadata:
@@ -187,11 +201,10 @@ class Metron(MetadataProvider):
             summaries = await self._all('issue', {'series_id': external_id})
             for summary in summaries:
                 issue = await self._get(f'issue/{summary["id"]}')
-                # The legacy issue table still requires a ComicVine ID. Keep
-                # Metron-native issues visible in search, but do not invent a
-                # compatibility identity during library refresh.
-                if issue.get('cv_id'):
-                    results.append(self._issue(issue))
+                # issues.comicvine_id is nullable, so a Metron-native issue
+                # (no ComicVine cross-link) is stored with its Metron
+                # identity in issue_external_ids and comicvine_id left NULL.
+                results.append(self._issue(issue))
         return results
 
     async def fetch_volume_by_comicvine_id(self, cv_id: int) -> VolumeMetadata:

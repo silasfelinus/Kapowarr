@@ -221,7 +221,7 @@ class Issue:
     def delete(self) -> None:
         """Delete the issue from the database"""
         LOGGER.debug(
-            "Deleting issue %d with CV ID %d",
+            "Deleting issue %d with CV ID %s",
             self.id, self.get_data().comicvine_id
         )
         FilesDB.delete_issue_linked_files(self.id)
@@ -1089,19 +1089,24 @@ class Library:
     @classmethod
     def add(
         cls,
-        comicvine_id: int,
+        comicvine_id: Union[int, None],
         root_folder_id: int,
         monitored: bool,
         monitor_scheme: MonitorScheme = MonitorScheme.ALL,
         monitor_new_issues: bool = True,
         volume_folder: Union[str, None] = None,
         special_version: Union[SpecialVersion, None] = None,
-        auto_search: bool = False
+        auto_search: bool = False,
+        provider_id: str = 'comicvine',
+        external_id: Union[str, int, None] = None
     ) -> int:
         """Add a volume to the library.
 
         Args:
-            comicvine_id (int): The CV ID of the volume.
+            comicvine_id (Union[int, None]): The CV ID of the volume. Required
+                (and used as the primary lookup) when `provider_id` is
+                `'comicvine'`; may be `None` for a Metron-native volume that
+                has no ComicVine cross-link.
 
             root_folder_id (int): The ID of the rootfolder in which
                 the volume folder will be.
@@ -1128,6 +1133,18 @@ class Library:
                 after adding it.
                 Defaults to False.
 
+            provider_id (str, optional): The metadata provider to add the
+                volume from. Give `'comicvine'` (the default) to add by
+                `comicvine_id`. Give any other registered provider ID (e.g.
+                `'metron'`) to add a volume natively by `external_id`,
+                without requiring a ComicVine cross-link.
+                Defaults to `'comicvine'`.
+
+            external_id (Union[str, int, None], optional): The ID of the
+                volume on `provider_id`. Required when `provider_id` is not
+                `'comicvine'`; ignored otherwise.
+                Defaults to None.
+
         Raises:
             RootFolderNotFound: The root folder with the given ID was not found.
             VolumeFolderInvalid: The volume folder is the parent or child of
@@ -1142,8 +1159,9 @@ class Library:
 
         LOGGER.info(
             'Adding a volume to the library: '
-            'CV ID %d, RF ID %d, M %s, MS %s, MNI %s, VF %s, SV %s',
-            comicvine_id,
+            'Provider %s, Identity %s, RF ID %d, M %s, MS %s, MNI %s, VF %s, SV %s',
+            provider_id,
+            comicvine_id if provider_id == 'comicvine' else external_id,
             root_folder_id,
             monitored,
             monitor_scheme.value,
@@ -1152,15 +1170,46 @@ class Library:
             special_version
         )
 
-        potential_volume_id = cls._cv_to_id(comicvine_id)
-        if potential_volume_id:
-            raise VolumeAlreadyAdded(comicvine_id, potential_volume_id)
+        if provider_id == 'comicvine':
+            if comicvine_id is None:
+                raise InvalidKeyValue('comicvine_id', comicvine_id)
+
+            potential_volume_id = cls._cv_to_id(comicvine_id)
+            if potential_volume_id:
+                raise VolumeAlreadyAdded(comicvine_id, potential_volume_id)
+
+        else:
+            if external_id is None:
+                raise InvalidKeyValue('external_id', external_id)
+
+            potential_volume_id = MetadataIdentityStore.resolve(
+                'volume', provider_id, external_id
+            )
+            if potential_volume_id:
+                raise VolumeAlreadyAdded(
+                    comicvine_id, potential_volume_id, provider_id, external_id
+                )
 
         # Raises RootFolderNotFound when ID is invalid
         root_folder = RootFolders().get_one(root_folder_id)
 
-        from backend.features.metadata import fetch_volume_with_fallback
-        vd = run(fetch_volume_with_fallback(comicvine_id))
+        if provider_id == 'comicvine':
+            from backend.features.metadata import fetch_volume_with_fallback
+            vd = run(fetch_volume_with_fallback(comicvine_id))
+        else:
+            vd = run(get_metadata_provider(provider_id).fetch_volume(external_id))
+
+        if provider_id != 'comicvine' and vd['comicvine_id'] is not None:
+            # Metron returned an explicit ComicVine cross-link for this
+            # series. Guard against silently creating a second, colliding
+            # volume for a series that was already added through ComicVine
+            # directly (its issues would collide on the still-UNIQUE
+            # issues.comicvine_id column).
+            cv_potential_volume_id = cls._cv_to_id(vd['comicvine_id'])
+            if cv_potential_volume_id:
+                raise VolumeAlreadyAdded(
+                    vd['comicvine_id'], cv_potential_volume_id
+                )
 
         cursor = get_db()
         with cursor:
@@ -1220,8 +1269,11 @@ class Library:
                 {
                     "volume_id": volume_id,
                     "cover": vd["cover"],
-                    "provider_id": vd.get("provider_id", "comicvine"),
-                    "external_id": vd.get("external_id", str(comicvine_id)),
+                    "provider_id": vd.get("provider_id", provider_id),
+                    "external_id": vd.get(
+                        "external_id",
+                        external_id if provider_id != 'comicvine' else comicvine_id
+                    ),
                     "source_url": vd.get("cover_source", {}).get("source_url")
                 }
             )
@@ -1260,23 +1312,33 @@ class Library:
 
             MetadataIdentityStore.set(
                 'volume', volume_id,
-                vd.get('provider_id', 'comicvine'),
-                vd.get('external_id', comicvine_id),
+                vd.get('provider_id', provider_id),
+                vd.get(
+                    'external_id',
+                    external_id if provider_id != 'comicvine' else comicvine_id
+                ),
                 source_url=vd['site_url']
             )
+            # Keyed by calculated_issue_number (unique within one volume's
+            # issue list, and always present) rather than comicvine_id: a
+            # Metron-native issue has no comicvine_id to key on, and several
+            # such issues would all collide on the same `None` key.
             issue_metadata = {
-                issue['comicvine_id']: issue
+                issue['calculated_issue_number']: issue
                 for issue in vd['issues'] or []
-                if issue['comicvine_id'] is not None
             }
             for issue in cursor.execute(
-                "SELECT id, comicvine_id FROM issues WHERE volume_id = ?;",
+                "SELECT id, comicvine_id, calculated_issue_number "
+                "FROM issues WHERE volume_id = ?;",
                 (volume_id,)
             ):
-                MetadataIdentityStore.set(
-                    'issue', issue['id'], 'comicvine', issue['comicvine_id']
+                if issue['comicvine_id'] is not None:
+                    MetadataIdentityStore.set(
+                        'issue', issue['id'], 'comicvine', issue['comicvine_id']
+                    )
+                provider_issue = issue_metadata.get(
+                    issue['calculated_issue_number']
                 )
-                provider_issue = issue_metadata.get(issue['comicvine_id'])
                 if provider_issue and provider_issue.get('provider_id'):
                     MetadataIdentityStore.set(
                         'issue', issue['id'], provider_issue['provider_id'],
@@ -1313,7 +1375,10 @@ class Library:
             TaskHandler().add(task)
 
         LOGGER.info(
-            f'Added volume with CV ID {comicvine_id} and ID {volume_id}'
+            'Added volume with %s ID %s and ID %d',
+            provider_id,
+            comicvine_id if provider_id == 'comicvine' else external_id,
+            volume_id
         )
         return volume_id
 
@@ -1396,6 +1461,250 @@ def determine_special_version(volume_id: int) -> SpecialVersion:
     return SpecialVersion.NORMAL
 
 
+def _refresh_metron_native_volumes(
+    rows: List[Tuple[int, int]],
+    current_time: datetime,
+    thirty_days_ago: datetime,
+    allow_skipping: bool,
+    single_volume_requested: bool
+) -> List[int]:
+    """Refresh volumes that have no ComicVine cross-link (`comicvine_id` is
+    `NULL`), using their Metron identity (from `volume_external_ids`)
+    instead of the legacy `comicvine_id` column that the rest of
+    `refresh_and_scan` is keyed on.
+
+    Args:
+        rows (List[Tuple[int, int]]): `(volume_id, last_cv_fetch)` pairs of
+            candidate volumes. Callers are expected to have already applied
+            the `last_cv_fetch <= ...` staleness filter that the ComicVine
+            path applies via SQL; this function applies the second-tier
+            "unchanged issue count and fetched within 30 days" skip, the
+            same as the ComicVine path does for `filtered_volume_datas`.
+
+        current_time (datetime): Shared with the ComicVine refresh path.
+
+        thirty_days_ago (datetime): Shared with the ComicVine refresh path.
+
+        allow_skipping (bool): Skip volumes with an unchanged issue count
+            that were fetched in the last 30 days, same as the ComicVine
+            path.
+
+        single_volume_requested (bool): Whether `refresh_and_scan` was asked
+            to refresh one specific volume, in which case the issue-count
+            skip does not apply (matches the ComicVine path).
+
+    Returns:
+        List[int]: IDs of the volumes that were actually refreshed (i.e.
+            not skipped and not failed).
+    """
+    from backend.implementations.metron import MetronError
+
+    try:
+        metron = get_metadata_provider('metron')
+    except (MetronError, KeyError) as e:
+        LOGGER.debug(
+            "Skipping refresh of %d Metron-native volume(s): %s",
+            len(rows), e
+        )
+        return []
+
+    cursor = get_db()
+    refreshed_ids: List[int] = []
+
+    for volume_id, last_cv_fetch in rows:
+        external_id = MetadataIdentityStore.get(
+            'volume', volume_id
+        ).get('metron')
+        if not external_id:
+            LOGGER.warning(
+                "Volume %d has neither a ComicVine ID nor a Metron identity; "
+                "skipping refresh",
+                volume_id
+            )
+            continue
+
+        try:
+            vd = run(metron.fetch_volume(external_id))
+        except MetronError as e:
+            LOGGER.warning(
+                "Failed to refresh Metron-native volume %d: %s",
+                volume_id, e
+            )
+            continue
+
+        if not single_volume_requested and allow_skipping:
+            current_issue_count: int = cursor.execute(
+                "SELECT COUNT(*) FROM issues WHERE volume_id = ?;",
+                (volume_id,)
+            ).exists() or 0
+
+            if (
+                current_issue_count == vd["issue_count"]
+                and last_cv_fetch > thirty_days_ago.timestamp()
+            ):
+                continue
+
+        cursor.execute(
+            """
+            UPDATE volumes
+            SET
+                comicvine_id = :comicvine_id,
+                title = :title,
+                alt_title = :alt_title,
+                year = :year,
+                publisher = :publisher,
+                volume_number = :volume_number,
+                description = :description,
+                site_url = :site_url,
+                last_cv_fetch = :last_cv_fetch
+            WHERE id = :id;
+            """,
+            {
+                # A Metron series can gain (or keep) an explicit ComicVine
+                # cross-link on refresh; dual-write it just like `add` does.
+                # It stays NULL for a volume that remains Metron-only.
+                "comicvine_id": vd["comicvine_id"],
+                "title": vd["title"],
+                "alt_title": (vd["aliases"] or [None])[0],
+                "year": vd["year"],
+                "publisher": vd["publisher"],
+                "volume_number": vd["volume_number"],
+                "description": vd["description"],
+                "site_url": vd["site_url"],
+                "last_cv_fetch": current_time.timestamp(),
+                "id": volume_id
+            }
+        )
+
+        cursor.execute(
+            """
+            UPDATE volumes_covers
+            SET
+                cover = :cover,
+                provider_id = :provider_id,
+                external_id = :external_id,
+                source_url = :source_url
+            WHERE volume_id = :volume_id;
+            """,
+            {
+                "volume_id": volume_id,
+                "cover": vd["cover"],
+                "provider_id": vd.get("provider_id", "metron"),
+                "external_id": vd.get("external_id", external_id),
+                "source_url": vd.get("cover_link")
+            }
+        )
+
+        if vd["comicvine_id"] is not None:
+            MetadataIdentityStore.set(
+                'volume', volume_id, 'comicvine', vd["comicvine_id"]
+            )
+
+        commit()
+
+        monitor_new_issues = bool(cursor.execute(
+            "SELECT monitor_new_issues FROM volumes WHERE id = ?;",
+            (volume_id,)
+        ).exists())
+
+        for isd in vd["issues"] or []:
+            existing_issue_id = MetadataIdentityStore.resolve(
+                'issue', 'metron', isd['external_id']
+            )
+            if existing_issue_id is None and isd['comicvine_id'] is not None:
+                # Not seen under its Metron identity yet, but it may already
+                # exist under a ComicVine cross-link (e.g. added natively
+                # through ComicVine, only now cross-linked by Metron).
+                existing_issue_id = cursor.execute(
+                    "SELECT id FROM issues WHERE comicvine_id = ? LIMIT 1;",
+                    (isd['comicvine_id'],)
+                ).exists()
+
+            if existing_issue_id is not None:
+                cursor.execute(
+                    """
+                    UPDATE issues
+                    SET
+                        comicvine_id = :comicvine_id,
+                        issue_number = :issue_number,
+                        calculated_issue_number = :calculated_issue_number,
+                        title = :title,
+                        date = :date,
+                        description = :description
+                    WHERE id = :id;
+                    """,
+                    {
+                        "comicvine_id": isd["comicvine_id"],
+                        "issue_number": isd["issue_number"],
+                        "calculated_issue_number":
+                            isd["calculated_issue_number"] or 0.0,
+                        "title": isd["title"],
+                        "date": isd["date"],
+                        "description": isd["description"],
+                        "id": existing_issue_id
+                    }
+                )
+                issue_id = existing_issue_id
+            else:
+                issue_id = cursor.execute(
+                    """
+                    INSERT INTO issues(
+                        volume_id, comicvine_id, issue_number,
+                        calculated_issue_number, title, date, description,
+                        monitored
+                    ) VALUES (
+                        :volume_id, :comicvine_id, :issue_number,
+                        :calculated_issue_number, :title, :date,
+                        :description, :monitored
+                    );
+                    """,
+                    {
+                        "volume_id": volume_id,
+                        "comicvine_id": isd["comicvine_id"],
+                        "issue_number": isd["issue_number"],
+                        "calculated_issue_number":
+                            isd["calculated_issue_number"] or 0.0,
+                        "title": isd["title"],
+                        "date": isd["date"],
+                        "description": isd["description"],
+                        "monitored": monitor_new_issues
+                    }
+                ).lastrowid
+
+            MetadataIdentityStore.set(
+                'issue', issue_id, 'metron', isd['external_id']
+            )
+            if isd["comicvine_id"] is not None:
+                MetadataIdentityStore.set(
+                    'issue', issue_id, 'comicvine', isd["comicvine_id"]
+                )
+
+        # Deliberately not deleting issues that vanished from the Metron
+        # response here (contrast with the ComicVine path below): this is a
+        # newer, less-travelled path, and silently deleting library data on
+        # it is a bigger risk than leaving a stale issue behind until the
+        # next successful refresh notices it's gone.
+
+        commit()
+
+        cursor.execute(
+            """
+            UPDATE volumes
+            SET special_version = :special_version
+            WHERE id = :id AND special_version_locked = 0;
+            """,
+            {
+                "special_version": determine_special_version(volume_id),
+                "id": volume_id
+            }
+        )
+        commit()
+
+        refreshed_ids.append(volume_id)
+
+    return refreshed_ids
+
+
 def refresh_and_scan(
     volume_id: Union[int, None] = None,
     update_websocket: bool = False,
@@ -1448,11 +1757,52 @@ def refresh_and_scan(
             )
         )
 
+    candidate_rows = cursor.fetchall()
+    if volume_id and not candidate_rows:
+        # No such volume (or it didn't meet the staleness filter above,
+        # which can't happen for a single explicit volume_id lookup, so in
+        # practice this means the volume doesn't exist). Matches the
+        # original behaviour of silently no-op'ing in this case.
+        return
+
+    # Volumes without a ComicVine cross-link (comicvine_id IS NULL) cannot be
+    # looked up by CV ID; they're refreshed separately, by their Metron
+    # identity, below.
     cv_to_id_fetch: Dict[int, Tuple[int, int]] = {
         e["comicvine_id"]: (e["id"], e["last_cv_fetch"])
-        for e in cursor
+        for e in candidate_rows
+        if e["comicvine_id"] is not None
     }
+    metron_native_rows: List[Tuple[int, int]] = [
+        (e["id"], e["last_cv_fetch"])
+        for e in candidate_rows
+        if e["comicvine_id"] is None
+    ]
+
+    refreshed_metron_ids: List[int] = []
+    if metron_native_rows:
+        refreshed_metron_ids = _refresh_metron_native_volumes(
+            metron_native_rows,
+            current_time,
+            thirty_days_ago,
+            allow_skipping,
+            single_volume_requested=bool(volume_id)
+        )
+
     if not cv_to_id_fetch:
+        if volume_id:
+            scan_files(volume_id, update_websocket=update_websocket)
+        elif refreshed_metron_ids:
+            v_ids = [
+                (vol_id, [], False, update_websocket)
+                for vol_id in refreshed_metron_ids
+            ]
+            with PortablePool(max_processes=min(
+                Constants.DB_MAX_CONCURRENT_CONNECTIONS,
+                len(v_ids)
+            )) as pool:
+                pool.starmap(scan_files, v_ids)
+            FilesDB.delete_unmatched_files()
         return
 
     # Update volumes
@@ -1467,7 +1817,7 @@ def refresh_and_scan(
             FROM volumes v
             LEFT JOIN issues i
             ON v.id = i.volume_id
-            WHERE v.last_cv_fetch <= ?
+            WHERE v.last_cv_fetch <= ? AND v.comicvine_id IS NOT NULL
             GROUP BY v.id;
             """,
             (one_day_ago.timestamp(),)
@@ -1535,7 +1885,12 @@ def refresh_and_scan(
     commit()
 
     # Update issues
-    issue_datas = run(cv.fetch_issues(
+    # NOTE: `cv` (an undefined name) was fixed to `get_metadata_provider()`
+    # here as an incidental fix while touching this function for t-056: this
+    # line raised `NameError` unconditionally whenever any ComicVine-keyed
+    # volume needed a refresh, since nothing in this module ever defined a
+    # module-level `cv`.
+    issue_datas = run(get_metadata_provider().fetch_issues(
         tuple(vd["comicvine_id"] for vd in filtered_volume_datas)
     ))
     monitor_issues_volume_ids: Set[int] = set(first_of_subarrays(cursor.execute(
@@ -1647,8 +2002,10 @@ def refresh_and_scan(
 
     else:
         v_ids = [
-            (v[0], [], False, update_websocket)
-            for v in cv_to_id_fetch.values()
+            (vol_id, [], False, update_websocket)
+            for vol_id in (
+                [v[0] for v in cv_to_id_fetch.values()] + refreshed_metron_ids
+            )
         ]
         total_count = len(v_ids)
 

@@ -354,9 +354,13 @@ CREATE TABLE IF NOT EXISTS root_folders(
     id INTEGER PRIMARY KEY,
     folder VARCHAR(254) UNIQUE NOT NULL
 );
+-- comicvine_id is nullable: a volume added from a provider without a
+-- ComicVine cross-link (e.g. a Metron-native volume) has no legal value to
+-- put here. The column is kept for API/on-disk compatibility; durable,
+-- provider-neutral identity lives in volume_external_ids (see migration 49).
 CREATE TABLE IF NOT EXISTS volumes(
     id INTEGER PRIMARY KEY,
-    comicvine_id INTEGER NOT NULL,
+    comicvine_id INTEGER,
     title VARCHAR(255) NOT NULL,
     alt_title VARCHAR(255),
     year INTEGER(5),
@@ -386,10 +390,13 @@ CREATE TABLE IF NOT EXISTS volumes_covers(
 );
 CREATE INDEX IF NOT EXISTS volumes_covers_volume_id_index
     ON volumes_covers(volume_id);
+-- comicvine_id is nullable for the same reason as volumes.comicvine_id
+-- above (see migration 50). UNIQUE still holds: SQLite treats each NULL as
+-- distinct, so any number of Metron-native issues may have a NULL value here.
 CREATE TABLE IF NOT EXISTS issues(
     id INTEGER PRIMARY KEY,
     volume_id INTEGER NOT NULL,
-    comicvine_id INTEGER NOT NULL UNIQUE,
+    comicvine_id INTEGER UNIQUE,
     issue_number VARCHAR(20) NOT NULL,
     calculated_issue_number FLOAT(20) NOT NULL,
     title VARCHAR(255),

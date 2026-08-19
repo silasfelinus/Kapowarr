@@ -27,6 +27,8 @@ const SearchEls = {
 		title: document.querySelector('#add-window h2'),
 		cover: document.querySelector('#add-cover'),
 		cv_input: document.querySelector('#comicvine-input'),
+		provider_id_input: document.querySelector('#provider-id-input'),
+		external_id_input: document.querySelector('#external-id-input'),
 		monitor_volume_input: document.querySelector('#monitor-volume-input'),
 		monitor_issues_input: document.querySelector('#monitor-issues-input'),
 		monitoring_scheme: document.querySelector('#monitoring-scheme-input'),
@@ -63,7 +65,9 @@ function buildResults(results, api_key) {
             ? `${result.title} (${result.year})`
             : result.title;
 		entry.dataset.cover = result.cover_link;
-		entry.dataset.comicvine_id = result.comicvine_id;
+		entry.dataset.comicvine_id = result.comicvine_id ?? '';
+		entry.dataset.provider_id = result.provider_id;
+		entry.dataset.external_id = result.external_id;
 		entry.dataset._translated = result.translated;
 		entry.dataset._title = result.title;
 		entry.dataset._year = result.year || '';
@@ -73,7 +77,7 @@ function buildResults(results, api_key) {
 
 		// Only allow adding volume if it isn't already added
 		if (result.already_added === null)
-			entry.onclick = e => showAddWindow(result.comicvine_id, api_key);
+			entry.onclick = e => showAddWindow(result.provider_id, result.external_id, api_key);
 
 		entry.querySelector('img').src = result.cover_link;
 
@@ -375,12 +379,15 @@ function fillRootFolderInput(api_key) {
 	});
 };
 
-function showAddWindow(comicvine_id, api_key) {
+function showAddWindow(provider_id, external_id, api_key) {
 	const volume_data = document.querySelector(
-		`button[data-comicvine_id="${comicvine_id}"]`
+		`button[data-provider_id="${provider_id}"][data-external_id="${external_id}"]`
 	).dataset;
+	const comicvine_id = volume_data.comicvine_id !== '' ? volume_data.comicvine_id : null;
 	const body = {
-		'comicvine_id': volume_data.comicvine_id,
+		'comicvine_id': comicvine_id,
+		'provider_id': provider_id,
+		'external_id': external_id,
 		'title': volume_data._title,
 		'year': volume_data._year || null,
 		'volume_number': volume_data._volume_number,
@@ -397,7 +404,9 @@ function showAddWindow(comicvine_id, api_key) {
 
 	SearchEls.window.title.innerText = volume_data.title;
 	SearchEls.window.cover.src = volume_data.cover;
-	SearchEls.window.cv_input.value = comicvine_id;
+	SearchEls.window.cv_input.value = comicvine_id || '';
+	SearchEls.window.provider_id_input.value = provider_id;
+	SearchEls.window.external_id_input.value = external_id;
     SearchEls.window.special_state_input.value = "auto";
 	
 	const monitoring_pref = getLocalStorage(
@@ -411,9 +420,13 @@ function showAddWindow(comicvine_id, api_key) {
 function addVolume() {
 	showLoadWindow("add-window");
 	const volume_folder = SearchEls.window.volume_folder_input.value;
+	const provider_id = SearchEls.window.provider_id_input.value;
+	const external_id = SearchEls.window.external_id_input.value;
 
 	const data = {
-		'comicvine_id': parseInt(SearchEls.window.cv_input.value),
+		'comicvine_id': SearchEls.window.cv_input.value ? parseInt(SearchEls.window.cv_input.value) : null,
+		'provider_id': provider_id,
+		'external_id': external_id,
 		'root_folder_id': parseInt(SearchEls.window.root_folder_input.value),
 		'monitor': SearchEls.window.monitor_volume_input.value === "true",
 		'monitoring_scheme': SearchEls.window.monitoring_scheme.value,
@@ -425,7 +438,7 @@ function addVolume() {
 	if (
 		volume_folder !== ''
 		&& volume_folder !== document.querySelector(
-			`button[data-comicvine_id="${data.comicvine_id}"]`
+			`button[data-provider_id="${provider_id}"][data-external_id="${external_id}"]`
 		).dataset._volume_folder
 	) {
 		// Custom volume folder
@@ -444,7 +457,7 @@ function addVolume() {
 		.then(response => response.json())
 		.then(json => {
 			const entry = document.querySelector(
-				`button[data-comicvine_id="${data.comicvine_id}"]`
+				`button[data-provider_id="${provider_id}"][data-external_id="${external_id}"]`
 			);
 			addAlreadyAdded(entry, json.result.id);
 			closeWindow();

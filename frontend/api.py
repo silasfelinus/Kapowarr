@@ -746,7 +746,6 @@ def api_volumes_search():
     elif request.method == 'POST':
         data: Dict[str, Any] = request.get_json()
         for key in (
-            'comicvine_id',
             'title', 'year', 'volume_number',
             'publisher'
         ):
@@ -755,7 +754,8 @@ def api_volumes_search():
 
         vd = VolumeData(
             id=0,
-            comicvine_id=data['comicvine_id'],
+            # `None` for a Metron-native volume with no ComicVine cross-link.
+            comicvine_id=data.get('comicvine_id'),
             title=data['title'],
             alt_title=data['title'],
             year=data['year'],
@@ -796,8 +796,14 @@ def api_volumes():
         data: dict = request.get_json()
 
         comicvine_id = data.get('comicvine_id')
-        if comicvine_id is None:
-            raise KeyNotFound('comicvine_id')
+        provider_id = data.get('provider_id') or 'comicvine'
+        external_id = data.get('external_id')
+
+        if provider_id == 'comicvine':
+            if comicvine_id is None:
+                raise KeyNotFound('comicvine_id')
+        elif external_id is None:
+            raise KeyNotFound('external_id')
 
         root_folder_id = data.get('root_folder_id')
         if root_folder_id is None:
@@ -840,7 +846,9 @@ def api_volumes():
             monitor_new_issues,
             volume_folder,
             sv,
-            auto_search
+            auto_search,
+            provider_id=provider_id,
+            external_id=external_id
         )
         volume_info = Library.get_volume(volume_id).get_public_data()
         return return_api(volume_info, code=201)

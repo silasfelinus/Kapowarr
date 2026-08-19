@@ -1,7 +1,8 @@
+import sqlite3
 import unittest
 from unittest.mock import Mock, patch
 
-from backend.features import import_lists
+from backend.features import import_list_task, import_lists
 from backend.features.import_list_task import ImportListSync
 from backend.features.tasks import task_library
 
@@ -144,6 +145,50 @@ class remote_cbl_import_lists(unittest.TestCase):
         self.assertIs(task_library['import_list_sync'], ImportListSync)
         self.assertEqual(import_lists.IMPORT_LIST_SYNC_INTERVAL_SECONDS, 43200)
         self.assertEqual(import_lists.IMPORT_LIST_CV_RESOURCE_DELAY, 30.0)
+
+    def test_ensure_interval_preserves_existing_next_run(self):
+        connection = sqlite3.connect(':memory:')
+        self.addCleanup(connection.close)
+        connection.execute(
+            'CREATE TABLE task_intervals('
+            'task_name PRIMARY KEY, interval INTEGER NOT NULL, '
+            'next_run INTEGER NOT NULL);'
+        )
+        cursor = connection.cursor()
+
+        with patch.object(
+            import_list_task, 'get_db', return_value=cursor
+        ), patch.object(
+            import_list_task, 'commit', side_effect=connection.commit
+        ):
+            import_list_task.ensure_import_list_interval()
+            first = connection.execute(
+                'SELECT interval, next_run FROM task_intervals '
+                'WHERE task_name = ?;',
+                (ImportListSync.action,),
+            ).fetchone()
+            self.assertEqual(
+                first[0],
+                import_lists.IMPORT_LIST_SYNC_INTERVAL_SECONDS,
+            )
+
+            connection.execute(
+                'UPDATE task_intervals SET next_run = 12345 '
+                'WHERE task_name = ?;',
+                (ImportListSync.action,),
+            )
+            connection.commit()
+            import_list_task.ensure_import_list_interval()
+            second = connection.execute(
+                'SELECT interval, next_run FROM task_intervals '
+                'WHERE task_name = ?;',
+                (ImportListSync.action,),
+            ).fetchone()
+
+        self.assertEqual(
+            second,
+            (import_lists.IMPORT_LIST_SYNC_INTERVAL_SECONDS, 12345),
+        )
 
 
 if __name__ == '__main__':

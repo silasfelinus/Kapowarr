@@ -1236,3 +1236,75 @@ def _migrate_add_pull_list_entries():
     """)
 
     return
+
+
+@DatabaseMigrationHandler.register_handler(48)
+def _migrate_expand_pull_list_calendar():
+    get_db().executescript("""
+        PRAGMA foreign_keys = OFF;
+        BEGIN;
+
+        ALTER TABLE pull_list_entries RENAME TO old_pull_list_entries;
+
+        CREATE TABLE pull_list_entries(
+            id INTEGER PRIMARY KEY,
+            volume_id INTEGER,
+            issue_id INTEGER,
+            comicvine_volume_id INTEGER,
+            comicvine_issue_id INTEGER,
+            issue_number VARCHAR(20),
+            release_title VARCHAR(255) NOT NULL,
+            publisher VARCHAR(255),
+            release_date DATE,
+            cover_date DATE,
+            week_start DATE NOT NULL,
+            year INTEGER(5),
+            source VARCHAR(50) NOT NULL,
+            link TEXT NOT NULL,
+            availability_source VARCHAR(50),
+            availability_link TEXT,
+            checked_at INTEGER NOT NULL,
+
+            FOREIGN KEY (volume_id) REFERENCES volumes(id)
+                ON DELETE SET NULL,
+            FOREIGN KEY (issue_id) REFERENCES issues(id)
+                ON DELETE SET NULL
+        );
+
+        INSERT INTO pull_list_entries(
+            volume_id, issue_number, release_title, year, source, link,
+            availability_source, availability_link, week_start, checked_at
+        )
+        SELECT
+            volume_id, issue_number, release_title, year, source, link,
+            source, link,
+            date('now', '-' || ((strftime('%w', 'now') + 6) % 7) || ' days'),
+            checked_at
+        FROM old_pull_list_entries;
+
+        DROP TABLE old_pull_list_entries;
+
+        CREATE TABLE publisher_subscriptions(
+            publisher VARCHAR(255) PRIMARY KEY COLLATE NOCASE,
+            root_folder_id INTEGER NOT NULL,
+            auto_search BOOL NOT NULL DEFAULT 0,
+
+            FOREIGN KEY (root_folder_id) REFERENCES root_folders(id)
+                ON DELETE RESTRICT
+        );
+
+        CREATE TABLE publisher_automation_history(
+            release_key VARCHAR(255) NOT NULL,
+            action VARCHAR(20) NOT NULL,
+            success BOOL NOT NULL,
+            message TEXT,
+            attempted_at INTEGER NOT NULL,
+
+            PRIMARY KEY (release_key, action)
+        );
+
+        COMMIT;
+        PRAGMA foreign_keys = ON;
+    """)
+
+    return

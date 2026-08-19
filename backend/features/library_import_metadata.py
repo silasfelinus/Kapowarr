@@ -15,12 +15,15 @@ from __future__ import annotations
 from json import load
 from os.path import basename, join, normpath, sep, splitext
 from re import fullmatch, search
+from tempfile import TemporaryDirectory
 from typing import Any, Dict, List, Optional
 from xml.etree.ElementTree import ParseError, fromstring
 from zipfile import BadZipFile, ZipFile
 
 from backend.base.definitions import FileConstants, FilenameData, SpecialVersion
 from backend.base.file_extraction import extract_filename_data
+from backend.base.files import list_files
+from backend.base.helpers import run_rar
 from backend.base.logging import LOGGER
 from backend.implementations.matching import match_title
 
@@ -248,42 +251,118 @@ def _load_sidecar_comicinfo(folder: str) -> Optional[Dict[str, Any]]:
     return _parse_comicinfo(content, path)
 
 
+def _archive_member_basename(member: str) -> str:
+    """Return an archive member basename independent of archive path syntax."""
+    return member.replace('\\', '/').rsplit('/', 1)[-1]
+
+
+def _read_rar_comicinfo(filepath: str) -> Optional[Dict[str, Any]]:
+    """Read one ComicInfo member from a CBR/RAR without modifying the archive.
+
+    Kapowarr's bundled RAR executable first lists members. Only the selected
+    ComicInfo member is extracted into an isolated temporary directory. The
+    extracted metadata is still subject to the same 64 KiB read ceiling used by
+    ZIP/CBZ and sidecar metadata.
+    """
+    try:
+        listing = run_rar(['lb', filepath])
+    except (KeyError, OSError):
+        return None
+    if listing.returncode != 0:
+        return None
+
+    member = next((
+        name.strip()
+        for name in listing.stdout.splitlines()
+        if (
+            name.strip()
+            and _archive_member_basename(name.strip()).casefold()
+            == COMICINFO_FILENAME.casefold()
+        )
+    ), None)
+    if member is None:
+        return None
+
+    with TemporaryDirectory() as temp_folder:
+        try:
+            extraction = run_rar([
+                'e',
+                '-inul',
+                '-o+',
+                filepath,
+                member,
+                temp_folder + sep,
+            ])
+        except (KeyError, OSError):
+            return None
+        if extraction.returncode != 0:
+            return None
+
+        extracted = next((
+            path
+            for path in list_files(temp_folder)
+            if basename(path).casefold() == COMICINFO_FILENAME.casefold()
+        ), None)
+        if extracted is None:
+            return None
+
+        try:
+            with open(extracted, 'rb') as comicinfo_file:
+                content = comicinfo_file.read(MAX_COMICINFO_BYTES + 1)
+        except OSError:
+            return None
+        if len(content) > MAX_COMICINFO_BYTES:
+            LOGGER.warning(
+                'Ignoring oversized embedded ComicInfo metadata: %s!%s',
+                filepath,
+                member,
+            )
+            return None
+
+    return _parse_comicinfo(content, f'{filepath}!{member}')
+
+
 def _load_embedded_comicinfo(
     group: Optional[Dict[str, FilenameData]],
 ) -> Optional[Dict[str, Any]]:
-    """Inspect CBZ/ZIP members for exact ComicInfo volume identity."""
+    """Inspect supported comic archives for exact ComicInfo volume identity."""
     if not group:
         return None
 
     candidates: List[Dict[str, Any]] = []
     for filepath in group:
-        if splitext(filepath)[1].lower() not in ('.cbz', '.zip'):
-            continue
-        try:
-            with ZipFile(filepath, 'r') as archive:
-                info = next((
-                    entry
-                    for entry in archive.infolist()
-                    if basename(entry.filename).casefold()
-                    == COMICINFO_FILENAME.casefold()
-                ), None)
-                if info is None:
-                    continue
-                if info.file_size > MAX_COMICINFO_BYTES:
-                    LOGGER.warning(
-                        'Ignoring oversized embedded ComicInfo metadata: %s!%s',
-                        filepath,
-                        info.filename,
-                    )
-                    continue
-                content = archive.read(info)
-        except (BadZipFile, OSError, RuntimeError, ValueError):
+        extension = splitext(filepath)[1].lower()
+        if extension in ('.cbz', '.zip'):
+            try:
+                with ZipFile(filepath, 'r') as archive:
+                    info = next((
+                        entry
+                        for entry in archive.infolist()
+                        if _archive_member_basename(entry.filename).casefold()
+                        == COMICINFO_FILENAME.casefold()
+                    ), None)
+                    if info is None:
+                        continue
+                    if info.file_size > MAX_COMICINFO_BYTES:
+                        LOGGER.warning(
+                            'Ignoring oversized embedded ComicInfo metadata: %s!%s',
+                            filepath,
+                            info.filename,
+                        )
+                        continue
+                    content = archive.read(info)
+            except (BadZipFile, OSError, RuntimeError, ValueError):
+                continue
+
+            metadata = _parse_comicinfo(
+                content,
+                f'{filepath}!{info.filename}',
+            )
+        elif extension in ('.cbr', '.rar'):
+            metadata = _read_rar_comicinfo(filepath)
+        else:
             continue
 
-        metadata = _parse_comicinfo(
-            content,
-            f'{filepath}!{info.filename}',
-        )
         if metadata is not None:
             candidates.append(metadata)
 

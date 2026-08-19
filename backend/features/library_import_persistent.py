@@ -36,6 +36,10 @@ from backend.features.library_import_metadata import (
     is_library_import_artifact,
     select_local_series_metadata,
 )
+from backend.features.library_import_normalization import (
+    folder_search_query,
+    normalize_import_filename_data,
+)
 from backend.features.library_import_policy import (
     REVIEW_REASON_NO_CANDIDATE,
     REVIEW_REASON_TIE,
@@ -55,6 +59,7 @@ from backend.features.library_import_state import (
     mark_job_paused,
     mark_job_running,
 )
+from backend.features.metadata import get_metadata_provider
 from backend.features.tasks import Task, task_library
 from backend.internals.server import TaskStatusEvent, WebSocket
 
@@ -66,6 +71,14 @@ from backend.internals.server import TaskStatusEvent, WebSocket
 # This also closes the old fast-path hole where trusted Mylar cvinfo/series.json
 # skipped the paced search and could then hammer volume/issue metadata requests.
 CONTINUOUS_IMPORT_CV_RESOURCE_DELAY = 30.0
+
+# A folder containing many differently parsed series is often an organizer
+# longbox rather than one volume per directory. Before spending one paced search
+# per parsed title, try the clean folder name once and reuse that result pool for
+# any groups it can resolve confidently. Unresolved groups still get their own
+# normal search, so this optimization cannot turn a broad result miss into a
+# false "no candidate" hold.
+LARGE_FOLDER_SHARED_SEARCH_MIN_TITLES = 8
 
 
 class PersistentContinuousLibraryImport(ContinuousLibraryImport):
@@ -152,20 +165,96 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
         """Pace ComicVine volume/issue fetch starts independently of searches."""
         return self._wait_for_resource_slot('last_metadata_started')
 
+    def _shared_search_results(
+        self,
+        folder: str,
+        title_count: int
+    ) -> Optional[Tuple[str, List[Any]]]:
+        """Search a large organizer folder once before title-by-title fallback."""
+        query = folder_search_query(folder)
+        if not query:
+            return None
+
+        if query in self.search_cache:
+            return query, self.search_cache[query]
+
+        self._emit_persistent_status(
+            f'{basename(folder)}: shared search for {title_count} parsed titles'
+        )
+        if not self._wait_for_resource_slot('last_started'):
+            return None
+
+        results = asyncio_run(get_metadata_provider().search_volumes(query))
+        # The folder query is itself a legitimate exact title query when a group
+        # has the same series name, so retaining it under its own key is safe.
+        self.search_cache[query] = results
+        return query, results
+
     def _match_search_groups(
         self,
-        search_groups: Dict[int, Dict[str, FilenameData]]
-    ) -> Optional[Dict[int, Dict[str, Any]]]:
-        """Match groups with a stop-aware delay before each uncached CV search."""
+        search_groups: Dict[int, Dict[str, FilenameData]],
+        folder: str
+    ) -> Optional[Tuple[Dict[int, Dict[str, Any]], Dict[str, List[Any]]]]:
+        """Match groups with stop-aware pacing and large-folder result reuse.
+
+        Returns the matches plus a folder-local search cache for run-context
+        scoring. Broad folder results are not persisted under unrelated title
+        keys, preventing a later folder from accidentally reusing an incomplete
+        broad result set as though it were an exact-title search.
+        """
         title_to_groups: Dict[str, Dict[int, Dict[str, FilenameData]]] = {}
         for group_number, files in search_groups.items():
             title = next(iter(files.values()))['series'].lower()
             title_to_groups.setdefault(title, {})[group_number] = files
 
         searched_matches: Dict[int, Dict[str, Any]] = {}
-        for title, title_groups in title_to_groups.items():
+        context_cache: Dict[str, List[Any]] = {}
+        pending_titles = dict(title_to_groups)
+        total_titles = len(title_to_groups)
+
+        if total_titles >= LARGE_FOLDER_SHARED_SEARCH_MIN_TITLES:
+            shared = self._shared_search_results(folder, total_titles)
+            if shared is None:
+                if self._should_stop():
+                    return None
+            else:
+                shared_query, shared_results = shared
+                for title, title_groups in list(pending_titles.items()):
+                    # Evaluate this title against the already-fetched broad pool
+                    # without inserting that pool into the persistent exact-title
+                    # cache unless the broad query actually equals the title.
+                    temporary_cache = {title: shared_results}
+                    matches = asyncio_run(_match_file_groups(
+                        title_groups,
+                        only_english=True,
+                        request_delay=0.0,
+                        search_cache=temporary_cache,
+                        require_confident_match=True
+                    ))
+                    if matches and all(
+                        match.get('id') is not None
+                        for match in matches.values()
+                    ):
+                        searched_matches.update(matches)
+                        context_cache[title] = shared_results
+                        pending_titles.pop(title)
+                    elif title == shared_query:
+                        # This *is* the exact query for this title. Preserve it so
+                        # the fallback below does not spend the same request twice.
+                        context_cache[title] = shared_results
+
+        already_resolved = total_titles - len(pending_titles)
+        for offset, (title, title_groups) in enumerate(
+            pending_titles.items(),
+            start=1
+        ):
             if self._should_stop():
                 return None
+
+            self._emit_persistent_status(
+                f'{basename(folder)}: matching title '
+                f'{already_resolved + offset}/{total_titles} · {title[:80]}'
+            )
 
             # Cached titles spend no request budget, so only gate a title when
             # the shared cache proves that a real provider search will start.
@@ -181,8 +270,9 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
                 require_confident_match=True
             ))
             searched_matches.update(matches)
+            context_cache[title] = self.search_cache.get(title, [])
 
-        return searched_matches
+        return searched_matches, context_cache
 
     def _emit_persistent_status(self, detail: str = '') -> None:
         if self.job_id is None:
@@ -366,6 +456,7 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
                     folder_files = self._load_folder_files(folder)
                 else:
                     folder_files = filter_library_import_files(folder_files)
+                folder_files = normalize_import_filename_data(folder_files)
 
                 # A folder can disappear, move, become fully imported, or turn
                 # out to contain only artwork/cache files while a job is paused.
@@ -396,16 +487,18 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
                             )
                         )
                         if search_groups:
-                            searched_matches = self._match_search_groups(
-                                search_groups
+                            search_result = self._match_search_groups(
+                                search_groups,
+                                folder
                             )
-                            if searched_matches is None:
+                            if search_result is None:
                                 mark_folder_pending(self.job_id, folder)
                                 break
+                            searched_matches, context_search_cache = search_result
                             searched_matches = apply_series_run_context(
                                 search_groups,
                                 searched_matches,
-                                self.search_cache,
+                                context_search_cache,
                                 only_english=True,
                             )
                             group_to_cv.update(searched_matches)

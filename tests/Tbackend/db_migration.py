@@ -114,6 +114,10 @@ class migration_completion(unittest.TestCase):
             return_value=49
         ), patch.object(
             db_migration,
+            'iter_commit',
+            side_effect=lambda iterable: iterable
+        ), patch.object(
+            db_migration,
             'get_db',
             return_value=cursor
         ):

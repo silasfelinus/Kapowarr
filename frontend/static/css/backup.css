@@ -21,6 +21,13 @@ main {
 	line-height: 1.4;
 }
 
+.backup-header-actions {
+	display: flex;
+	gap: .5rem;
+	align-items: center;
+	flex-wrap: wrap;
+}
+
 .backup-note,
 #backup-status {
 	font-size: .9rem;
@@ -110,8 +117,13 @@ main {
 		flex-direction: column;
 	}
 
-	#backup-now {
-		align-self: stretch;
+	.backup-header-actions {
+		align-items: stretch;
+		flex-direction: column;
+	}
+
+	.backup-header-actions > * {
+		text-align: center;
 	}
 
 	.backup-table th:nth-child(3),

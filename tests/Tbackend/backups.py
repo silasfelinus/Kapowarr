@@ -10,6 +10,7 @@ from zipfile import ZipFile
 
 from backend.base.definitions import Constants
 from backend.features import backups
+from backend.features.tasks import task_library
 from backend.internals.db import DBConnection
 from backend.internals.db_migration import DatabaseMigrationHandler
 
@@ -55,6 +56,18 @@ class BackupTest(unittest.TestCase):
             return connection.execute('SELECT value FROM marker;').fetchone()[0]
         finally:
             connection.close()
+
+    def test_backup_task_is_registered_with_shared_task_scheduler(self):
+        self.assertIs(
+            task_library[backups.DatabaseBackup.action],
+            backups.DatabaseBackup,
+        )
+        self.assertEqual(backups.AUTO_BACKUP_INTERVAL_SECONDS, 7 * 86_400)
+
+    def test_scheduler_adapter_enrolls_persistent_interval(self):
+        with patch.object(backups, 'ensure_backup_interval') as ensure:
+            backups.BackupScheduler().start(object())
+        ensure.assert_called_once_with()
 
     def test_backup_folder_follows_configured_database_folder(self):
         DBConnection.file = os.path.join(self.temp.name, Constants.DB_NAME)

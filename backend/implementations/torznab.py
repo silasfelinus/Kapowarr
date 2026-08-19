@@ -58,9 +58,28 @@ def _ensure_table() -> None:
             base_url TEXT NOT NULL,
             api_key VARCHAR(255) NOT NULL,
             categories VARCHAR(255) NOT NULL DEFAULT '7030',
+            category_filter_enabled BOOL NOT NULL DEFAULT 0,
             enabled BOOL NOT NULL DEFAULT 1
         );
     """)
+
+    columns = {
+        row['name']
+        for row in get_db().execute(
+            'PRAGMA table_info(torznab_indexers);'
+        ).fetchalldict()
+    }
+    if 'category_filter_enabled' not in columns:
+        # Before this flag existed, every feed was silently given 7030. Treat
+        # that legacy built-in value as automatic/unfiltered, while retaining
+        # clearly customized category lists as explicit filters.
+        get_db().executescript("""
+            ALTER TABLE torznab_indexers ADD COLUMN
+                category_filter_enabled BOOL NOT NULL DEFAULT 0;
+            UPDATE torznab_indexers
+            SET category_filter_enabled = 1
+            WHERE TRIM(categories) NOT IN ('', '7030');
+        """)
     return
 
 
@@ -227,13 +246,18 @@ class TorznabIndexer:
         return self._categories
 
     @property
+    def category_filter_enabled(self) -> bool:
+        return self._category_filter_enabled
+
+    @property
     def enabled(self) -> bool:
         return self._enabled
 
     def __init__(self, indexer_id: int) -> None:
         _ensure_table()
         data = get_db().execute("""
-            SELECT id, title, base_url, api_key, categories, enabled
+            SELECT id, title, base_url, api_key, categories,
+                   category_filter_enabled, enabled
             FROM torznab_indexers
             WHERE id = ?
             LIMIT 1;
@@ -246,6 +270,7 @@ class TorznabIndexer:
         self._base_url = data['base_url']
         self._api_key = data['api_key']
         self._categories = data['categories']
+        self._category_filter_enabled = bool(data['category_filter_enabled'])
         self._enabled = bool(data['enabled'])
 
     def get_data(self) -> Dict[str, Any]:
@@ -255,6 +280,7 @@ class TorznabIndexer:
             'base_url': self.base_url,
             'api_key': self.api_key,
             'categories': self.categories,
+            'category_filter_enabled': self.category_filter_enabled,
             'enabled': self.enabled,
             'protocol': 'torznab'
         }
@@ -267,6 +293,7 @@ class TorznabIndexer:
                 base_url = :base_url,
                 api_key = :api_key,
                 categories = :categories,
+                category_filter_enabled = :category_filter_enabled,
                 enabled = :enabled
             WHERE id = :id;
         """, {**formatted, 'id': self.id})
@@ -274,6 +301,7 @@ class TorznabIndexer:
         self._base_url = formatted['base_url']
         self._api_key = formatted['api_key']
         self._categories = formatted['categories']
+        self._category_filter_enabled = formatted['category_filter_enabled']
         self._enabled = formatted['enabled']
 
     def delete(self) -> None:
@@ -301,6 +329,9 @@ class TorznabIndexers:
             'base_url': normalise_base_url(data['base_url']),
             'api_key': data['api_key'],
             'categories': categories.strip(),
+            'category_filter_enabled': bool(
+                data.get('category_filter_enabled', False)
+            ),
             'enabled': bool(data.get('enabled', True))
         }
 
@@ -338,7 +369,8 @@ class TorznabIndexers:
         base_url: str,
         api_key: str,
         categories: str = DEFAULT_COMIC_CATEGORIES,
-        enabled: bool = True
+        enabled: bool = True,
+        category_filter_enabled: bool = False
     ) -> TorznabIndexer:
         _ensure_table()
         data = TorznabIndexers._format_data({
@@ -346,13 +378,16 @@ class TorznabIndexers:
             'base_url': base_url,
             'api_key': api_key,
             'categories': categories,
+            'category_filter_enabled': category_filter_enabled,
             'enabled': enabled
         })
         indexer_id = get_db().execute("""
             INSERT INTO torznab_indexers(
-                title, base_url, api_key, categories, enabled
+                title, base_url, api_key, categories,
+                category_filter_enabled, enabled
             ) VALUES (
-                :title, :base_url, :api_key, :categories, :enabled
+                :title, :base_url, :api_key, :categories,
+                :category_filter_enabled, :enabled
             );
         """, data).lastrowid
         return TorznabIndexer(indexer_id)
@@ -395,7 +430,7 @@ async def search_torznab_indexer(
         'apikey': indexer.api_key,
         'extended': '1'
     }
-    if indexer.categories:
+    if indexer.category_filter_enabled and indexer.categories:
         params['cat'] = indexer.categories
 
     body = await session.get_text(

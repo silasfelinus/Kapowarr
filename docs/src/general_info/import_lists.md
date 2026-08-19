@@ -43,7 +43,7 @@ Use **Sync** on one list or **Sync All** for an immediate refresh. Once an Impor
 
 When Automatic Add needs ComicVine metadata, Kapowarr spaces new volume-add metadata starts by 30 seconds and shares that pacing clock across lists in the same sync run. This prevents multiple lists from creating a burst of add-time metadata requests.
 
-The CBL document itself is fetched through Kapowarr's normal web-request session, which can use FlareSolverr for supported Cloudflare-protected web flows. ComicVine metadata API traffic remains separate from FlareSolverr.
+The CBL document itself is fetched through Kapowarr's normal web-request session. That shared request machinery can consult FlareSolverr when a supported web request encounters Cloudflare protection. FlareSolverr does not increase or bypass ComicVine API quotas, so ComicVine metadata activity still needs its own pacing.
 
 ## Current scope
 

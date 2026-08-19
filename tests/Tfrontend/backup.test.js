@@ -42,7 +42,11 @@ test('system status exposes backup management', () => {
 });
 
 test('startup applies staged restore before setup_db and stops backup scheduler', () => {
-	assert.ok(startup.indexOf('apply_pending_restore()') < startup.indexOf('setup_db()'));
+	const restore_call = startup.indexOf('\n        apply_pending_restore()\n');
+	const setup_call = startup.indexOf('\n        setup_db()\n');
+	assert.notEqual(restore_call, -1);
+	assert.notEqual(setup_call, -1);
+	assert.ok(restore_call < setup_call);
 	assert.match(startup, /backup_scheduler\.start\(SERVER\.app\)/);
 	assert.match(startup, /backup_scheduler\.stop\(\)/);
 });

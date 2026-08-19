@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Logs{% endblock %}
+{% block css %}
+	<link rel="stylesheet" href="{{ url_for('static', filename='css/logs.css') }}">
+{% endblock %}
+{% block js %}
+	<script src="{{ url_for('static', filename='js/logs.js') }}" defer></script>
+{% endblock %}
+
+{% block main %}
+<main>
+	<section class="logs-toolbar" aria-label="Log controls">
+		<div class="logs-controls">
+			<label>
+				<span>Capture</span>
+				<select id="log-capture-level">
+					<option value="20">Info</option>
+					<option value="10">Debug</option>
+				</select>
+			</label>
+			<label>
+				<span>Show</span>
+				<select id="log-view-level">
+					<option value="DEBUG">Debug +</option>
+					<option value="INFO" selected>Info +</option>
+					<option value="WARNING">Warnings +</option>
+					<option value="ERROR">Errors +</option>
+				</select>
+			</label>
+			<label class="log-search-label">
+				<span>Search</span>
+				<input id="log-search" type="search" placeholder="message, source, thread…" spellcheck="false">
+			</label>
+			<label class="auto-refresh-label">
+				<input id="log-auto-refresh" type="checkbox">
+				<span>Auto refresh</span>
+			</label>
+		</div>
+		<div class="logs-actions">
+			<button id="refresh-logs" type="button">Refresh</button>
+			<a id="download-logs" href="">Download</a>
+		</div>
+	</section>
+
+	<section class="logs-help" aria-label="Logging help">
+		<p>
+			<strong>Capture</strong> controls what Kapowarr writes from now on.
+			<strong>Show</strong> only filters what is already recorded. Debug is useful for troubleshooting;
+			switch capture back to Info when you are done.
+		</p>
+		<p id="logs-status" aria-live="polite"></p>
+	</section>
+
+	<section class="logs-table-wrap" aria-label="Application logs">
+		<table class="logs-table">
+			<thead>
+				<tr>
+					<th>Time</th>
+					<th>Level</th>
+					<th>Source</th>
+					<th>Message</th>
+				</tr>
+			</thead>
+			<tbody id="log-rows"></tbody>
+		</table>
+		<p id="logs-empty" class="hidden">No log entries match these filters.</p>
+	</section>
+</main>
+{% endblock main %}

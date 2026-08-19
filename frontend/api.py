@@ -23,6 +23,7 @@ from backend.features.download_queue import (DownloadHandler,
 from backend.features.library_import import (import_library,
                                              propose_library_import)
 from backend.features.mass_edit import run_mass_editor_action
+from backend.features.metadata import search_metadata_with_fallback
 from backend.features.pull_list import (act_on_release,
                                         delete_publisher_subscription,
                                         get_publishers, get_pull_list,
@@ -36,7 +37,6 @@ from backend.implementations.blocklist import (add_to_blocklist,
                                                delete_blocklist_entry,
                                                get_blocklist,
                                                get_blocklist_entry)
-from backend.implementations.comicvine import ComicVine
 from backend.implementations.conversion import preview_mass_convert
 from backend.implementations.converters import ConvertersManager
 from backend.implementations.credentials import Credentials
@@ -738,7 +738,7 @@ def api_library_import():
 def api_volumes_search():
     if request.method == 'GET':
         query = extract_key(request, 'query')
-        search_results = run(ComicVine().search_volumes(query))
+        search_results = run(search_metadata_with_fallback(query))
         for r in search_results:
             del r["cover"] # type: ignore
         return return_api(search_results)

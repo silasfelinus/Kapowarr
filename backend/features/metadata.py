@@ -79,6 +79,8 @@ class MetadataProviderRegistry:
             # Import the built-in lazily to avoid settings/database import cycles.
             if provider_id == 'comicvine':
                 from backend.implementations import comicvine  # noqa: F401
+            elif provider_id == 'metron':
+                from backend.implementations import metron  # noqa: F401
         try:
             provider = cls._providers[provider_id]
         except KeyError:
@@ -89,6 +91,8 @@ class MetadataProviderRegistry:
     def capabilities(cls) -> Dict[str, Tuple[MetadataCapability, ...]]:
         if 'comicvine' not in cls._providers:
             from backend.implementations import comicvine  # noqa: F401
+        if 'metron' not in cls._providers:
+            from backend.implementations import metron  # noqa: F401
         return {
             provider_id: provider.capabilities
             for provider_id, provider in cls._providers.items()
@@ -159,3 +163,65 @@ def get_metadata_provider(
     provider_id: str = 'comicvine', **kwargs
 ) -> MetadataProvider:
     return MetadataProviderRegistry.get(provider_id, **kwargs)
+
+
+def _metron_is_configured() -> bool:
+    from backend.internals.settings import Settings
+    settings = Settings().get_settings()
+    return bool(settings.metron_username and settings.metron_password)
+
+
+async def search_metadata_with_fallback(query: str) -> List[VolumeMetadata]:
+    """Search ComicVine, falling back only after an availability failure."""
+    from backend.base.custom_exceptions import (CVRateLimitReached,
+                                                InvalidComicVineApiKey)
+    try:
+        return await get_metadata_provider().search_volumes(query)
+    except (CVRateLimitReached, InvalidComicVineApiKey):
+        if not _metron_is_configured():
+            raise
+        return await get_metadata_provider('metron').search_volumes(query)
+
+
+async def fetch_volume_with_fallback(cv_id: int) -> VolumeMetadata:
+    """Fetch a CV-linked volume from Metron if ComicVine is unavailable."""
+    from backend.base.custom_exceptions import (CVRateLimitReached,
+                                                InvalidComicVineApiKey)
+    try:
+        return await get_metadata_provider().fetch_volume(cv_id)
+    except (CVRateLimitReached, InvalidComicVineApiKey):
+        if not _metron_is_configured():
+            raise
+        metron = get_metadata_provider('metron')
+        return await metron.fetch_volume_by_comicvine_id(cv_id)  # type: ignore
+
+
+async def fetch_volumes_with_fallback(
+    cv_ids: Sequence[int]
+) -> List[VolumeMetadata]:
+    """Bulk variant of :func:`fetch_volume_with_fallback`."""
+    from backend.base.custom_exceptions import (CVRateLimitReached,
+                                                InvalidComicVineApiKey)
+    try:
+        volumes = await get_metadata_provider().fetch_volumes(cv_ids)
+    except (CVRateLimitReached, InvalidComicVineApiKey):
+        if not _metron_is_configured():
+            raise
+        metron = get_metadata_provider('metron')
+        return await metron.fetch_volumes_by_comicvine_ids(cv_ids)  # type: ignore
+
+    if not _metron_is_configured():
+        return volumes
+
+    returned_ids = {
+        volume['comicvine_id']
+        for volume in volumes
+        if volume['comicvine_id'] is not None
+    }
+    missing_ids = [cv_id for cv_id in cv_ids if cv_id not in returned_ids]
+    if missing_ids:
+        metron = get_metadata_provider('metron')
+        volumes.extend(
+            await metron.fetch_volumes_by_comicvine_ids(missing_ids)  # type: ignore
+        )
+    return volumes

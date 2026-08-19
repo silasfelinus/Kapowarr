@@ -72,6 +72,8 @@ class PublicSettingsValues:
     auth_password: str = ''
 
     comicvine_api_key: str = ''
+    metron_username: str = ''
+    metron_password: str = ''
     api_key: str = ''
     flaresolverr_base_url: str = ''
 
@@ -143,7 +145,10 @@ class PublicSettingsValues:
             return result
 
         for k, v in result.items():
-            if k in ("auth_username", "auth_password", "proxy_password") and v:
+            if k in (
+                "auth_username", "auth_password", "proxy_password",
+                "metron_username", "metron_password"
+            ) and v:
                 result[k] = Constants.CREDENTIAL_REPLACEMENT
 
             if isinstance(v, BaseEnum):
@@ -466,6 +471,12 @@ class Settings(metaclass=Singleton):
                 comicvine_api_key=converted_value
             ).test_key():
                 raise InvalidKeyValue(key, value)
+
+        elif key in ('metron_username', 'metron_password'):
+            if value == Constants.CREDENTIAL_REPLACEMENT:
+                converted_value = getattr(self.sv, key)
+            else:
+                converted_value = value.strip()
 
         elif key == 'download_folder':
             from backend.implementations.root_folders import RootFolders

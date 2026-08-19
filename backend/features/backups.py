@@ -39,7 +39,9 @@ BACKUP_RETENTION_DAYS = 28
 
 
 def get_backup_folder() -> str:
-    folder = folder_path(BACKUP_FOLDER)
+    # Follow the configured database location so Docker/custom DB folders keep
+    # their backups on the same persistent storage as Kapowarr.db.
+    folder = join(dirname(DBConnection.file), BACKUP_FOLDER)
     create_folder(folder)
     return folder
 

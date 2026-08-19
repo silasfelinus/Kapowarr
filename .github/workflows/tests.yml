@@ -35,3 +35,7 @@ jobs:
           mkdir db
           python -m unittest discover -s ./tests -p '*.py'
         name: Run Tests
+
+      - run: node --test tests/Tfrontend/*.test.js
+        name: Run frontend tests
+        if: matrix.python-version == '3.12'

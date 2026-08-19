@@ -119,6 +119,13 @@ class Constants:
     weekly-releases post to parse.
     """
 
+    MYLAR_RELEASES_URL = "https://talkhard.notaninja.party/newcomics.php"
+    """
+    Community release-calendar endpoint used by Mylar for its weekly pull
+    list. It supplies publisher, ship-date and ComicVine identifiers; download
+    availability remains a separate concern.
+    """
+
     MEGA_API_URL = "https://eu.api.mega.co.nz/cs"
     "The base URL of the Mega API"
 
@@ -691,20 +698,32 @@ class WeeklyReleaseData(TypedDict):
     "Link to the source post/page the release was found on"
     source: str
     "Display name of the weekly-release source (e.g. 'GetComics')"
+    publisher: Union[str, None]
+    release_date: Union[str, None]
+    cover_date: Union[str, None]
+    week_start: str
+    comicvine_volume_id: Union[int, None]
+    comicvine_issue_id: Union[int, None]
+    availability_source: Union[str, None]
+    availability_link: Union[str, None]
 
 
 class PullListEntryData(TypedDict):
-    """A `WeeklyReleaseData` that matched a monitored library volume,
-    ready to store/display as a "wanted addition" (see
-    `backend.features.pull_list`).
-    """
-    volume_id: int
-    volume_title: str
+    """A calendar release, optionally matched to the local library."""
+    volume_id: Union[int, None]
+    volume_title: Union[str, None]
     issue_number: Union[str, None]
     release_title: str
     year: Union[int, None]
     source: str
     link: str
+    publisher: Union[str, None]
+    release_date: Union[str, None]
+    week_start: str
+    comicvine_volume_id: Union[int, None]
+    comicvine_issue_id: Union[int, None]
+    availability_source: Union[str, None]
+    availability_link: Union[str, None]
 
 
 class IssueMetadata(TypedDict):
@@ -1073,11 +1092,17 @@ class WeeklyReleaseSource(ABC):
     """
 
     @abstractmethod
-    async def fetch(self, session: 'AsyncSession') -> List[WeeklyReleaseData]:
+    async def fetch(
+        self,
+        session: 'AsyncSession',
+        requested_date: Any = None
+    ) -> List[WeeklyReleaseData]:
         """Fetch and parse this week's releases.
 
         Args:
             session (AsyncSession): The session to use for the fetch.
+            requested_date (date, optional): Week to fetch. Sources without
+                historical data can return an empty list for other weeks.
 
         Returns:
             List[WeeklyReleaseData]: The releases found. Empty (rather than

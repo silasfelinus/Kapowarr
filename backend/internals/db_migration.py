@@ -84,8 +84,8 @@ class DatabaseMigrationHandler:
             cls.handlers[start_version]()
             s.update({"database_version": start_version + 1})
 
-        get_db().execute("VACUUM;")
         s.clear_cache()
+        LOGGER.info("Database migration complete")
 
         return
 

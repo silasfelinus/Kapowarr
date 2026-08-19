@@ -56,6 +56,13 @@ class BackupTest(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_backup_folder_follows_configured_database_folder(self):
+        DBConnection.file = os.path.join(self.temp.name, Constants.DB_NAME)
+        self.assertEqual(
+            backups.get_backup_folder(),
+            os.path.join(self.temp.name, backups.BACKUP_FOLDER),
+        )
+
     def test_validates_kapowarr_database_and_rejects_future_schema(self):
         current = os.path.join(self.temp.name, 'current.db')
         future = os.path.join(self.temp.name, 'future.db')

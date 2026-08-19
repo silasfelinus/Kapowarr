@@ -15,6 +15,7 @@ from backend.base.definitions import (BlocklistReason, DownloadState,
 from backend.base.files import (delete_file_folder, rename_file,
                                 set_detected_extension)
 from backend.base.logging import LOGGER
+from backend.features.file_provenance import record_download_file_provenance
 from backend.features.pack_normalization import (
     normalize_downloaded_range_pack,
     prune_downloaded_range_files,
@@ -346,6 +347,7 @@ class PostProcessor:
         rename_with_proper_extension,
         add_file_to_database,
         convert_file,
+        record_download_file_provenance,
         set_file_properties
     ]
 
@@ -434,6 +436,7 @@ class PostProcessorTorrentsComplete(PostProcessor):
         add_to_history,
         move_torrent_to_dest,
         convert_file,
+        record_download_file_provenance,
         set_file_properties
     ]
 
@@ -448,6 +451,7 @@ class PostProcessorTorrentsCopy(PostProcessor):
         add_to_history,
         copy_file_torrent,
         convert_file,
+        record_download_file_provenance,
         set_file_properties,
         reset_file_link
     ]

@@ -1,9 +1,12 @@
 import os
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from backend.features.library_import_metadata import (
+    MAX_COMICINFO_BYTES,
     load_local_series_metadata,
     select_local_series_metadata,
 )
@@ -79,6 +82,87 @@ class comicinfo_library_import(unittest.TestCase):
         self.assertIsNotNone(metadata)
         self.assertEqual(metadata['comicvine_id'], 12345)
         self.assertIn('!ComicInfo.xml', metadata['path'])
+
+    def test_embedded_cbr_and_rar_comicinfo_use_bundled_rar_reader(self):
+        for extension in ('.cbr', '.rar'):
+            with self.subTest(extension=extension), tempfile.TemporaryDirectory() as folder:
+                comic = os.path.join(folder, 'Batman 001' + extension)
+                open(comic, 'wb').close()
+                group = {comic: self._file_data()}
+                calls = []
+
+                def fake_rar(args):
+                    calls.append(args)
+                    if args[0] == 'lb':
+                        return SimpleNamespace(
+                            returncode=0,
+                            stdout='metadata\\ComicInfo.xml\n001.jpg\n',
+                        )
+                    self.assertEqual(args[0], 'e')
+                    self.assertEqual(args[4], 'metadata\\ComicInfo.xml')
+                    with open(
+                        os.path.join(args[-1], 'ComicInfo.xml'),
+                        'wb',
+                    ) as handle:
+                        handle.write(self._comicinfo())
+                    return SimpleNamespace(returncode=0, stdout='')
+
+                with patch(
+                    'backend.features.library_import_metadata.run_rar',
+                    side_effect=fake_rar,
+                ):
+                    metadata = select_local_series_metadata(folder, group)
+
+                self.assertIsNotNone(metadata)
+                self.assertEqual(metadata['comicvine_id'], 12345)
+                self.assertEqual(calls[0], ['lb', comic])
+                self.assertEqual(calls[1][0:4], ['e', '-inul', '-o+', comic])
+                self.assertIn('!metadata\\ComicInfo.xml', metadata['path'])
+
+    def test_rar_comicinfo_extraction_failure_is_ignored(self):
+        with tempfile.TemporaryDirectory() as folder:
+            comic = os.path.join(folder, 'Batman 001.cbr')
+            open(comic, 'wb').close()
+            group = {comic: self._file_data()}
+
+            def fake_rar(args):
+                if args[0] == 'lb':
+                    return SimpleNamespace(
+                        returncode=0,
+                        stdout='ComicInfo.xml\n',
+                    )
+                return SimpleNamespace(returncode=3, stdout='')
+
+            with patch(
+                'backend.features.library_import_metadata.run_rar',
+                side_effect=fake_rar,
+            ):
+                self.assertIsNone(load_local_series_metadata(folder, group))
+
+    def test_oversized_rar_comicinfo_is_not_loaded(self):
+        with tempfile.TemporaryDirectory() as folder:
+            comic = os.path.join(folder, 'Batman 001.rar')
+            open(comic, 'wb').close()
+            group = {comic: self._file_data()}
+
+            def fake_rar(args):
+                if args[0] == 'lb':
+                    return SimpleNamespace(
+                        returncode=0,
+                        stdout='ComicInfo.xml\n',
+                    )
+                with open(
+                    os.path.join(args[-1], 'ComicInfo.xml'),
+                    'wb',
+                ) as handle:
+                    handle.write(b'x' * (MAX_COMICINFO_BYTES + 1))
+                return SimpleNamespace(returncode=0, stdout='')
+
+            with patch(
+                'backend.features.library_import_metadata.run_rar',
+                side_effect=fake_rar,
+            ):
+                self.assertIsNone(load_local_series_metadata(folder, group))
 
     def test_embedded_comicinfo_title_still_must_match_the_filename_group(self):
         with tempfile.TemporaryDirectory() as folder:

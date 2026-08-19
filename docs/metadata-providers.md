@@ -43,4 +43,4 @@ Provider credentials and enable/fallback policy are intentionally not stored in 
 
 ## Portability direction
 
-Provider-neutral database identity is now durable, and Library Import can consume exact ComicVine identity from Mylar sidecars and standard ComicInfo `Web` URLs. The next portability work is file-level write-back that preserves useful third-party metadata rather than overwriting it blindly, plus embedded ComicInfo intake for CBR/RAR archives.
+Provider-neutral database identity is durable, and Library Import can consume exact ComicVine identity from Mylar sidecars and standard ComicInfo `Web` URLs beside files or embedded in CBZ/ZIP/CBR/RAR archives. The next portability work is preservation-aware file-level write-back so Kapowarr-managed libraries become more self-describing without blindly replacing richer third-party metadata.

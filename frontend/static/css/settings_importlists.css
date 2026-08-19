@@ -1,0 +1,184 @@
+.import-lists-settings {
+	max-width: 78rem;
+}
+
+.import-lists-settings section + section {
+	margin-top: 2rem;
+	padding-top: 1.5rem;
+	border-top: 1px solid var(--border-color);
+}
+
+.section-heading {
+	display: flex;
+	align-items: start;
+	justify-content: space-between;
+	gap: 1rem;
+}
+
+.section-heading h2,
+.import-lists-settings h2 {
+	margin-bottom: .35rem;
+}
+
+.section-heading p,
+.import-lists-settings section > p {
+	margin-top: 0;
+}
+
+.section-heading button,
+.form-actions button,
+.exclusion-form button,
+.import-list-actions button,
+.exclusion-entry button {
+	min-height: 2.25rem;
+	border: 1px solid var(--border-color);
+	border-radius: 4px;
+	padding: .4rem .7rem;
+	background: var(--accent-color);
+	color: var(--nav-background-color);
+	font-weight: 600;
+	cursor: pointer;
+}
+
+#import-list-form {
+	margin-top: 1rem;
+}
+
+#import-list-form input:not([type="checkbox"]),
+#import-list-form select,
+.exclusion-form input {
+	width: min(100%, 42rem);
+}
+
+.checkbox-stack {
+	display: flex;
+	flex-wrap: wrap;
+	gap: .75rem 1.25rem;
+}
+
+.checkbox-stack label {
+	display: flex;
+	align-items: center;
+	gap: .4rem;
+	white-space: nowrap;
+}
+
+.form-actions {
+	display: flex;
+	gap: .6rem;
+	margin-top: .8rem;
+}
+
+.form-actions .secondary,
+.import-list-actions .secondary,
+.exclusion-entry button {
+	background: var(--nav-background-color);
+	color: var(--text-color);
+}
+
+.import-list-table-wrap {
+	margin-top: 1.25rem;
+	overflow-x: auto;
+	border: 1px solid var(--border-color);
+	border-radius: 4px;
+}
+
+.import-list-table {
+	width: 100%;
+	border-collapse: collapse;
+}
+
+.import-list-table th,
+.import-list-table td {
+	padding: .55rem .65rem;
+	text-align: left;
+	vertical-align: top;
+	border-bottom: 1px solid var(--border-color);
+}
+
+.import-list-table tr:last-child td {
+	border-bottom: 0;
+}
+
+.import-list-name {
+	font-weight: 600;
+}
+
+.import-list-url {
+	max-width: 28rem;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: .85rem;
+}
+
+.import-list-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: .35rem;
+}
+
+.sync-error {
+	color: var(--error-color);
+	font-size: .85rem;
+	max-width: 28rem;
+	overflow-wrap: anywhere;
+}
+
+.exclusion-form {
+	display: flex;
+	align-items: end;
+	gap: .7rem;
+	flex-wrap: wrap;
+}
+
+.exclusion-form label {
+	display: flex;
+	flex-direction: column;
+	gap: .25rem;
+}
+
+.exclusion-list {
+	display: flex;
+	flex-direction: column;
+	gap: .45rem;
+	margin-top: 1rem;
+}
+
+.exclusion-entry {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 1rem;
+	padding: .55rem .65rem;
+	border: 1px solid var(--border-color);
+	border-radius: 4px;
+}
+
+.exclusion-entry p {
+	margin: 0;
+}
+
+.exclusion-entry small {
+	display: block;
+	margin-top: .15rem;
+}
+
+@media (max-width: 700px) {
+	.section-heading,
+	.exclusion-entry {
+		align-items: stretch;
+		flex-direction: column;
+	}
+
+	.section-heading button,
+	.form-actions button,
+	.exclusion-form button {
+		width: 100%;
+	}
+
+	.checkbox-stack {
+		flex-direction: column;
+		gap: .5rem;
+	}
+}

@@ -12,9 +12,8 @@ from os import listdir, remove, replace
 from os.path import basename, dirname, exists, getmtime, getsize, isfile, join
 from shutil import copyfileobj
 from tempfile import NamedTemporaryFile, TemporaryDirectory
-from threading import Timer
 from time import time
-from typing import TYPE_CHECKING, Any, Dict, List, Union
+from typing import Any, Dict, List
 from zipfile import ZIP_DEFLATED, BadZipFile, ZipFile
 
 from backend.base.definitions import Constants
@@ -22,9 +21,6 @@ from backend.base.files import create_folder, folder_path
 from backend.base.helpers import Singleton, get_version_from_pyproject
 from backend.base.logging import LOGGER
 from backend.internals.db import DBConnection, commit, get_db
-
-if TYPE_CHECKING:
-    from flask import Flask
 
 BACKUP_FOLDER = 'Backups'
 BACKUP_RE = re.compile(
@@ -35,6 +31,7 @@ BACKUP_MANIFEST_MEMBER = 'manifest.json'
 PENDING_RESTORE_SUFFIX = '.restore'
 SECONDS_PER_DAY = 86_400
 AUTO_BACKUP_INTERVAL_DAYS = 7
+AUTO_BACKUP_INTERVAL_SECONDS = AUTO_BACKUP_INTERVAL_DAYS * SECONDS_PER_DAY
 BACKUP_RETENTION_DAYS = 28
 
 
@@ -283,46 +280,66 @@ def apply_pending_restore() -> bool:
     return True
 
 
+# Register automatic backups with Kapowarr's existing persistent interval-task
+# machinery instead of creating a private scheduler. This makes the backup job
+# visible on System > Tasks and preserves next_run across process/container restarts.
+from backend.features.tasks import Task, task_library  # noqa: E402
+from backend.internals.server import TaskStatusEvent, WebSocket  # noqa: E402
+
+
+class DatabaseBackup(Task):
+    """Create the scheduled weekly database backup."""
+
+    stop = False
+    message = ''
+    action = 'database_backup'
+    display_title = 'Database Backup'
+    category = ''
+
+    @property
+    def volume_id(self) -> None:
+        return None
+
+    @property
+    def issue_id(self) -> None:
+        return None
+
+    def __init__(self) -> None:
+        return
+
+    def run(self) -> None:
+        self.message = 'Creating database backup'
+        WebSocket().emit(TaskStatusEvent(self.message))
+        create_backup()
+        return
+
+
+task_library[DatabaseBackup.action] = DatabaseBackup
+
+
+def ensure_backup_interval() -> None:
+    """Ensure the persistent weekly task exists without resetting its next run."""
+    current_time = round(time())
+    get_db().execute(
+        """
+        INSERT INTO task_intervals(task_name, interval, next_run)
+        VALUES (?, ?, ?)
+        ON CONFLICT(task_name) DO UPDATE SET interval = excluded.interval;
+        """,
+        (DatabaseBackup.action, AUTO_BACKUP_INTERVAL_SECONDS, current_time)
+    )
+    commit()
+
+
 class BackupScheduler(metaclass=Singleton):
-    """Small daemon timer for the familiar weekly automatic backup cadence."""
+    """Compatibility adapter that enrolls backups in TaskHandler scheduling."""
 
-    timer: Union[Timer, None] = None
-    app: Union['Flask', None] = None
-
-    def start(self, app: 'Flask') -> None:
-        self.stop()
-        self.app = app
-
-        normal_backups = [
-            backup
-            for backup in list_backups()
-            if backup['kind'] == 'backup'
-        ]
-        last_backup = normal_backups[0]['created_at'] if normal_backups else time()
-        interval = AUTO_BACKUP_INTERVAL_DAYS * SECONDS_PER_DAY
-        delay = max(1, round(last_backup + interval - time()))
-        self._schedule(delay)
-        LOGGER.debug('Next automatic database backup in %d seconds', delay)
-
-    def _schedule(self, delay: int) -> None:
-        self.timer = Timer(delay, self._run)
-        self.timer.name = 'BackupScheduler'
-        self.timer.daemon = True
-        self.timer.start()
-
-    def _run(self) -> None:
-        try:
-            if self.app is None:
-                return
-            with self.app.app_context():
-                create_backup()
-        except Exception:
-            LOGGER.exception('Automatic database backup failed')
-        finally:
-            if self.app is not None:
-                self._schedule(AUTO_BACKUP_INTERVAL_DAYS * SECONDS_PER_DAY)
+    def start(self, app: Any) -> None:
+        # Called after setup_db() and before TaskHandler.handle_intervals().
+        # ``app`` is retained in the signature so Kapowarr's lifecycle call site
+        # stays simple while scheduling is delegated to the persistent task table.
+        ensure_backup_interval()
 
     def stop(self) -> None:
-        if self.timer is not None:
-            self.timer.cancel()
-            self.timer = None
+        # TaskHandler owns and stops the shared interval timer.
+        return

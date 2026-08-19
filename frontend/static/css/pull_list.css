@@ -2,8 +2,76 @@
 	padding: 1rem;
 }
 
+.calendar-heading,
+.week-navigation,
+.release-filters,
+.pagination,
+.publisher-rule {
+	display: flex;
+	align-items: center;
+	gap: .6rem;
+}
+
+.calendar-heading {
+	justify-content: space-between;
+	margin-bottom: 1rem;
+}
+
+.week-navigation strong {
+	margin-left: .5rem;
+}
+
+.release-filters {
+	flex-wrap: wrap;
+	margin: 1rem 0;
+}
+
+.release-filters input,
+.release-filters select,
+.publisher-rules select {
+	min-height: 2.2rem;
+	padding: .3rem .5rem;
+}
+
+#release-search {
+	min-width: min(24rem, 100%);
+}
+
+.publisher-rules {
+	padding: 1rem;
+	border: 1px solid var(--border-color);
+	border-radius: .4rem;
+	background: var(--background-color);
+}
+
+.publisher-rules h2 {
+	margin-top: 0;
+}
+
+#publisher-rule-list {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr));
+	gap: .5rem 1rem;
+	margin-top: 1rem;
+}
+
+.publisher-rule {
+	padding-top: .5rem;
+	border-top: 1px solid var(--border-color);
+}
+
+.publisher-rule-name {
+	flex: 1;
+	font-weight: 600;
+}
+
+.publisher-rule-count {
+	color: var(--text-color);
+	font-size: .85rem;
+}
+
 #pull-list-empty-message {
-	padding: 0 0 1rem 0;
+	padding: 1rem 0;
 	color: var(--text-color);
 }
 
@@ -13,32 +81,74 @@
 
 table {
 	width: 100%;
-	min-width: 33.3rem;
+	min-width: 70rem;
 	table-layout: fixed;
-
 	color: var(--text-color);
 }
 
 th, td {
-	padding: .5rem .9rem;
+	padding: .55rem .7rem;
+	text-align: left;
 }
 
-.volume-column {
-	overflow: auto;
+.date-column {
+	width: 7rem;
+}
+
+.publisher-column {
+	width: 11rem;
+}
+
+.title-column {
+	overflow-wrap: anywhere;
 }
 
 .issue-column {
-	width: 6rem;
+	width: 5rem;
 }
 
-.source-column {
-	width: 9rem;
+.library-column,
+.source-column,
+.availability-column {
+	width: 8rem;
 }
 
-.checked-column {
-	width: 11rem;
+.source-explanation {
+	margin: -.35rem 0 1rem;
+	color: var(--text-color);
+}
+
+.action-column {
+	width: 10rem;
+}
+
+.action-column button + button {
+	margin-left: .35rem;
+}
+
+.automation-warning {
+	display: block;
+	margin-bottom: .3rem;
+	color: var(--error-color);
+	font-size: .8rem;
 }
 
 .pull-list-entry > * {
 	border-top: 1px solid var(--border-color);
+}
+
+.pagination {
+	justify-content: center;
+	margin-top: 1rem;
+}
+
+@media (max-width: 720px) {
+	.calendar-heading {
+		align-items: flex-start;
+		flex-direction: column;
+	}
+
+	.week-navigation {
+		flex-wrap: wrap;
+	}
 }

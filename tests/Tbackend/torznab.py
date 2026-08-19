@@ -59,7 +59,28 @@ class torznab_registry(unittest.TestCase):
         second = tz.TorznabIndexers.get_one(first.id)
         self.assertEqual(second.base_url, 'http://prowlarr.local/1/api')
         self.assertEqual(second.categories, '7030')
+        self.assertFalse(second.category_filter_enabled)
         self.assertEqual(second.get_data()['protocol'], 'torznab')
+
+    def test_upgrade_keeps_custom_categories_as_an_explicit_filter(self):
+        self.connection.executescript("""
+            CREATE TABLE torznab_indexers(
+                id INTEGER PRIMARY KEY,
+                title VARCHAR(255) NOT NULL,
+                base_url TEXT NOT NULL,
+                api_key VARCHAR(255) NOT NULL,
+                categories VARCHAR(255) NOT NULL DEFAULT '7030',
+                enabled BOOL NOT NULL DEFAULT 1
+            );
+            INSERT INTO torznab_indexers(
+                title, base_url, api_key, categories
+            ) VALUES ('Custom', 'http://p/1/api', 'k', '7020,7030');
+        """)
+
+        indexer = tz.TorznabIndexers.get_one(1)
+
+        self.assertTrue(indexer.category_filter_enabled)
+        self.assertEqual(indexer.categories, '7020,7030')
 
     def test_multiple_enabled_feeds_are_supported(self):
         tz.TorznabIndexers.add('Prowlarr', 'http://p/1/api', 'k')
@@ -81,13 +102,14 @@ class _FakeSession:
         return self.body
 
 
-def _indexer(categories='7030'):
+def _indexer(categories='7030', category_filter_enabled=False):
     result = tz.TorznabIndexer.__new__(tz.TorznabIndexer)
     result._id = 4
     result._title = 'Prowlarr'
     result._base_url = 'https://prowlarr.example/1/api'
     result._api_key = 'secret'
     result._categories = categories
+    result._category_filter_enabled = category_filter_enabled
     result._enabled = True
     return result
 
@@ -120,7 +142,38 @@ class torznab_search(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(source_id, 4)
         self.assertEqual(title, 'Batman (2016) 042')
-        self.assertEqual(session.calls[0][1]['cat'], '7030')
+        self.assertNotIn('cat', session.calls[0][1])
+
+    async def test_explicit_category_filter_is_sent(self):
+        session = _FakeSession('<rss><channel /></rss>')
+
+        await tz.search_torznab_indexer(
+            session,
+            _indexer('7020,7030', category_filter_enabled=True),
+            'Gwar Orgasmageddon'
+        )
+
+        self.assertEqual(session.calls[0][1]['cat'], '7020,7030')
+
+    async def test_reported_prowlarr_torrent_is_parsed_unfiltered(self):
+        body = '''<rss xmlns:torznab="http://torznab.com/schemas/2015/feed">
+          <channel><item>
+            <title>Gwar Orgasmageddon (2017) (digital Empire)</title>
+            <enclosure url="https://prowlarr.example/7/api?t=get&amp;id=gwar" type="application/x-bittorrent" />
+          </item></channel>
+        </rss>'''
+        session = _FakeSession(body)
+
+        results = await tz.search_torznab_indexer(
+            session, _indexer(), 'Gwar Orgasmageddon'
+        )
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(
+            results[0]['display_title'],
+            'Gwar Orgasmageddon (2017) (digital Empire)'
+        )
+        self.assertNotIn('cat', session.calls[0][1])
 
     async def test_infohash_without_enclosure_builds_magnet(self):
         body = '''<rss xmlns:torznab="http://torznab.com/schemas/2015/feed">

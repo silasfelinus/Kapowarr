@@ -12,13 +12,12 @@ from __future__ import annotations
 from asyncio import run as asyncio_run
 from glob import escape as glob_escape
 from os.path import basename, isfile, splitext
-from time import sleep
+from time import monotonic, sleep
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from backend.base.custom_exceptions import CVRateLimitReached
 from backend.base.definitions import CVFileMapping, FilenameData
 from backend.features.library_import import (
-    CONTINUOUS_IMPORT_CV_DELAY,
     CONTINUOUS_IMPORT_RATE_LIMIT_BACKOFF,
     ContinuousLibraryImport,
     _collect_unimported_files,
@@ -58,6 +57,15 @@ from backend.features.library_import_state import (
 )
 from backend.features.tasks import Task, task_library
 from backend.internals.server import TaskStatusEvent, WebSocket
+
+
+# ComicVine documents a per-resource hourly limit. Continuous import uses a
+# deliberately lower ceiling than that advertised maximum so ordinary Kapowarr
+# activity still has headroom. Search requests and the metadata fetches triggered
+# by Library.add() use independent clocks because they hit different resources.
+# This also closes the old fast-path hole where trusted Mylar cvinfo/series.json
+# skipped the paced search and could then hammer volume/issue metadata requests.
+CONTINUOUS_IMPORT_CV_RESOURCE_DELAY = 30.0
 
 
 class PersistentContinuousLibraryImport(ContinuousLibraryImport):
@@ -100,6 +108,23 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
         # TaskHandler's process-shutdown signal. They intentionally have
         # different persistence semantics at the end of run().
         return self.stop_requested or self.stop
+
+    def _wait_for_metadata_slot(self) -> bool:
+        """Pace ComicVine volume/issue fetch starts independently of searches."""
+        last_started = self.cv_request_clock.get('last_metadata_started')
+        if last_started is not None:
+            elapsed = monotonic() - last_started
+            remaining_delay = max(
+                CONTINUOUS_IMPORT_CV_RESOURCE_DELAY - elapsed,
+                0.0
+            )
+            if remaining_delay:
+                sleep(remaining_delay)
+                if self._should_stop():
+                    return False
+
+        self.cv_request_clock['last_metadata_started'] = monotonic()
+        return True
 
     def _emit_persistent_status(self, detail: str = '') -> None:
         if self.job_id is None:
@@ -316,7 +341,7 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
                             searched_matches = asyncio_run(_match_file_groups(
                                 search_groups,
                                 only_english=True,
-                                request_delay=CONTINUOUS_IMPORT_CV_DELAY,
+                                request_delay=CONTINUOUS_IMPORT_CV_RESOURCE_DELAY,
                                 search_cache=self.search_cache,
                                 require_confident_match=True,
                                 request_clock=self.cv_request_clock
@@ -377,12 +402,30 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
                             )
 
                         imported_volumes = 0
+                        metadata_wait_stopped = False
                         if matches:
-                            import_library(matches, rename_files=False)
-                            imported_volumes = len({
-                                match['id']
-                                for match in matches
-                            })
+                            matches_by_id: Dict[int, List[CVFileMapping]] = {}
+                            for match in matches:
+                                matches_by_id.setdefault(
+                                    match['id'], []
+                                ).append(match)
+
+                            for volume_matches in matches_by_id.values():
+                                if not self._wait_for_metadata_slot():
+                                    mark_folder_pending(self.job_id, folder)
+                                    metadata_wait_stopped = True
+                                    break
+
+                                import_result = import_library(
+                                    volume_matches,
+                                    rename_files=False
+                                )
+                                imported_volumes += len(
+                                    import_result['imported']
+                                )
+
+                        if metadata_wait_stopped:
+                            break
 
                         mark_folder_result(
                             self.job_id,

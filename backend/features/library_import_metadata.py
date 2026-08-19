@@ -48,11 +48,13 @@ def _comicvine_id(value: Any) -> Optional[int]:
         result = int(value)
         return result if result > 0 else None
 
-    # ComicVine object references are often written as ``4050-12345`` where
-    # 4050 identifies a volume resource and the trailing number is its id.
-    if value.startswith('4050-') and value[5:].isdigit():
-        result = int(value[5:])
-        return result if result > 0 else None
+    # ComicVine uses ``4050-N`` for volume resources. Older Mylar libraries can
+    # still contain the historical ``49-N`` volume form, which Mylar itself
+    # continues to accept while scanning cvinfo files.
+    for prefix in ('4050-', '49-'):
+        if value.startswith(prefix) and value[len(prefix):].isdigit():
+            result = int(value[len(prefix):])
+            return result if result > 0 else None
 
     return None
 
@@ -60,16 +62,17 @@ def _comicvine_id(value: Any) -> Optional[int]:
 def _comicvine_id_from_cvinfo(value: str) -> Optional[int]:
     """Read a ComicVine *volume* id from Mylar/ComicRack ``cvinfo`` text.
 
-    Mylar normally writes the full ComicVine volume URL, while other tools may
-    leave either ``4050-NNNN`` or the bare numeric id. Issue URLs (``4000``) and
-    story-arc URLs (``4045``) are intentionally rejected.
+    Mylar normally writes the full ComicVine volume URL, while older libraries
+    may contain the historical ``49-NNNN`` form. ``4050-NNNN`` and bare numeric
+    ids are accepted too. Issue URLs (``4000``) and story-arc URLs (``4045``)
+    are intentionally rejected.
     """
     value = value.strip()
     direct = _comicvine_id(value)
     if direct is not None:
         return direct
 
-    match = search(r'(?:^|/)(?:4050-)(\d+)(?:/|$)', value)
+    match = search(r'(?:^|/)(?:4050|49)-(\d+)(?:/|$)', value)
     if match is None:
         return None
 
@@ -277,6 +280,15 @@ def select_local_series_metadata(
             title_agrees = False
 
     if not title_agrees:
+        LOGGER.info(
+            'Library import found local %s ComicVine ID %s in %s but did not '
+            'apply it to parsed series %r because it did not safely match %r',
+            metadata.get('source', 'metadata'),
+            metadata['comicvine_id'],
+            folder,
+            group_series,
+            metadata['name'],
+        )
         return None
 
     return metadata

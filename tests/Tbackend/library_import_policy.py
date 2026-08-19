@@ -10,13 +10,14 @@ from backend.features.library_import_policy import (
 class continuous_import_policy(unittest.TestCase):
     @staticmethod
     def _group(
+        series='Batman',
         year=2020,
         volume_number=2,
         issue_number=1.0
     ) -> Dict[str, FilenameData]:
         return {
-            'Batman 001.cbz': {
-                'series': 'Batman',
+            f'{series} 001.cbz': {
+                'series': series,
                 'year': year,
                 'volume_number': volume_number,
                 'special_version': None,
@@ -28,13 +29,14 @@ class continuous_import_policy(unittest.TestCase):
     @staticmethod
     def _volume(
         comicvine_id: int,
+        title='Batman',
         year=2020,
         volume_number=2,
         issue_count=1
     ) -> VolumeMetadata:
         return {
             'comicvine_id': comicvine_id,
-            'title': 'Batman',
+            'title': title,
             'year': year,
             'volume_number': volume_number,
             'cover_link': '',
@@ -59,7 +61,7 @@ class continuous_import_policy(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(reason, REVIEW_REASON_TIE)
 
-    def test_one_point_lead_is_now_accepted(self):
+    def test_one_point_lead_is_accepted(self):
         winner = self._volume(1, year=2020, volume_number=2, issue_count=1)
         runner_up = self._volume(
             2,
@@ -77,10 +79,59 @@ class continuous_import_policy(unittest.TestCase):
         self.assertEqual(result, winner)
         self.assertIsNone(reason)
 
-    def test_weak_single_candidate_still_requires_review(self):
+    def test_unique_viable_candidate_with_sparse_evidence_is_accepted(self):
+        winner = self._volume(
+            1,
+            year=2020,
+            volume_number=1,
+            issue_count=12
+        )
+
         result, reason = select_auto_import_volume_result(
-            self._group(year=None, volume_number=2, issue_number=1.0),
-            [self._volume(1, year=2020, volume_number=2, issue_count=1)],
+            self._group(year=None, volume_number=None, issue_number=None),
+            [winner],
+            only_english=True
+        )
+
+        self.assertEqual(result, winner)
+        self.assertIsNone(reason)
+
+    def test_far_year_rerelease_is_accepted_when_it_is_the_unique_viable_title(self):
+        winner = self._volume(
+            1,
+            title='Lost Girls',
+            year=2026,
+            volume_number=1,
+            issue_count=3
+        )
+
+        result, reason = select_auto_import_volume_result(
+            self._group(
+                series='Lost Girls',
+                year=2006,
+                volume_number=None,
+                issue_number=1.0
+            ),
+            [winner],
+            only_english=True
+        )
+
+        self.assertEqual(result, winner)
+        self.assertIsNone(reason)
+
+    def test_explicit_issue_count_contradiction_still_requires_review(self):
+        result, reason = select_auto_import_volume_result(
+            self._group(
+                year=None,
+                volume_number=None,
+                issue_number=10.0
+            ),
+            [self._volume(
+                1,
+                year=2020,
+                volume_number=1,
+                issue_count=9
+            )],
             only_english=True
         )
 

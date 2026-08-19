@@ -76,6 +76,17 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
         self.job_id = job_id
         return
 
+    def request_stop(self) -> None:
+        """Acknowledge a user stop immediately, then exit at the next safe check."""
+        super().request_stop()
+        if 'stop requested' not in self.message.lower():
+            if self.message:
+                self.message += ' · stop requested; pausing safely'
+            else:
+                self.message = 'Continuous import · stop requested; pausing safely'
+            WebSocket().emit(TaskStatusEvent(self.message))
+        return
+
     @classmethod
     def restore_running_job(
         cls
@@ -109,6 +120,17 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
         # different persistence semantics at the end of run().
         return self.stop_requested or self.stop
 
+    def _interruptible_wait(self, seconds: float) -> bool:
+        """Sleep in short slices so a user pause is observed promptly."""
+        remaining = max(float(seconds), 0.0)
+        while remaining > 0:
+            if self._should_stop():
+                return False
+            step = min(1.0, remaining)
+            sleep(step)
+            remaining -= step
+        return not self._should_stop()
+
     def _wait_for_metadata_slot(self) -> bool:
         """Pace ComicVine volume/issue fetch starts independently of searches."""
         last_started = self.cv_request_clock.get('last_metadata_started')
@@ -118,11 +140,11 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
                 CONTINUOUS_IMPORT_CV_RESOURCE_DELAY - elapsed,
                 0.0
             )
-            if remaining_delay:
-                sleep(remaining_delay)
-                if self._should_stop():
-                    return False
+            if remaining_delay and not self._interruptible_wait(remaining_delay):
+                return False
 
+        if self._should_stop():
+            return False
         self.cv_request_clock['last_metadata_started'] = monotonic()
         return True
 

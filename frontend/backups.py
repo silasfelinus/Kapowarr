@@ -5,8 +5,9 @@
 from flask import send_file
 
 from backend.base.custom_exceptions import InvalidKeyValue
-from backend.features.backups import (create_backup, delete_backup,
-                                      get_backup, list_backups, stage_restore)
+from backend.features.backups import (create_backup, delete_backup, get_backup,
+                                      get_backup_path, list_backups,
+                                      stage_restore)
 from backend.internals.server import Server
 from frontend.api import api, auth, error_handler, return_api
 from frontend.ui import render, ui
@@ -44,9 +45,8 @@ def api_backup(filename: str):
         delete_backup(filename)
         return return_api({})
 
-    from backend.features.backups import _backup_path
     return send_file(
-        _backup_path(filename),
+        get_backup_path(filename),
         mimetype='application/zip',
         as_attachment=True,
         download_name=backup['filename'],

@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, call, patch
 
 from backend.features.library_import import _match_file_groups
 from backend.features.library_import_persistent import (
@@ -82,7 +82,7 @@ class continuous_import_pacing(unittest.IsolatedAsyncioTestCase):
         comicvine.search_volumes.assert_awaited_once_with('batman')
         self.assertEqual(clock['last_started'], 50.0)
 
-    def test_metadata_fetch_clock_paces_cvinfo_fast_path(self):
+    def test_metadata_fetch_clock_paces_cvinfo_fast_path_in_short_slices(self):
         importer = PersistentContinuousLibraryImport()
         importer.cv_request_clock['last_metadata_started'] = 100.0
 
@@ -95,8 +95,11 @@ class continuous_import_pacing(unittest.IsolatedAsyncioTestCase):
             allowed = importer._wait_for_metadata_slot()
 
         self.assertTrue(allowed)
-        sleep_mock.assert_called_once_with(
-            CONTINUOUS_IMPORT_CV_RESOURCE_DELAY - 12.0
+        expected_delay = CONTINUOUS_IMPORT_CV_RESOURCE_DELAY - 12.0
+        self.assertEqual(sleep_mock.call_count, int(expected_delay))
+        self.assertEqual(
+            sleep_mock.call_args_list,
+            [call(1.0)] * int(expected_delay)
         )
         self.assertEqual(
             importer.cv_request_clock['last_metadata_started'],
@@ -121,7 +124,7 @@ class continuous_import_pacing(unittest.IsolatedAsyncioTestCase):
             50.0
         )
 
-    def test_stop_requested_during_metadata_wait_does_not_start_request(self):
+    def test_stop_requested_during_metadata_wait_is_seen_within_one_slice(self):
         importer = PersistentContinuousLibraryImport()
         importer.cv_request_clock['last_metadata_started'] = 100.0
 
@@ -134,10 +137,31 @@ class continuous_import_pacing(unittest.IsolatedAsyncioTestCase):
         ), patch(
             'backend.features.library_import_persistent.sleep',
             side_effect=request_stop
-        ):
+        ) as sleep_mock:
             allowed = importer._wait_for_metadata_slot()
 
         self.assertFalse(allowed)
+        sleep_mock.assert_called_once_with(1.0)
+        self.assertEqual(
+            importer.cv_request_clock['last_metadata_started'],
+            100.0
+        )
+
+    def test_stop_requested_before_metadata_wait_never_sleeps_or_starts_request(self):
+        importer = PersistentContinuousLibraryImport()
+        importer.cv_request_clock['last_metadata_started'] = 100.0
+        importer.stop_requested = True
+
+        with patch(
+            'backend.features.library_import_persistent.monotonic',
+            return_value=112.0
+        ), patch(
+            'backend.features.library_import_persistent.sleep'
+        ) as sleep_mock:
+            allowed = importer._wait_for_metadata_slot()
+
+        self.assertFalse(allowed)
+        sleep_mock.assert_not_called()
         self.assertEqual(
             importer.cv_request_clock['last_metadata_started'],
             100.0

@@ -1,10 +1,8 @@
 import unittest
 from unittest.mock import Mock, patch
 
-from backend.features.library_import import (
-    ContinuousLibraryImport,
-    _match_file_groups,
-)
+from backend.features.library_import import (ContinuousLibraryImport,
+                                             _match_file_groups)
 from backend.features.library_import_policy import REVIEW_REASON_TIE
 from backend.features.tasks import TaskHandler
 
@@ -37,7 +35,7 @@ class continuous_import_review_snapshot(unittest.IsolatedAsyncioTestCase):
         comicvine.search_volumes = Mock()
 
         with patch(
-            'backend.features.library_import.ComicVine',
+            'backend.features.library_import.get_metadata_provider',
             return_value=comicvine
         ), patch(
             'backend.features.library_import.select_auto_import_volume_result',

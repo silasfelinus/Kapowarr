@@ -3,11 +3,11 @@
 """Local filesystem evidence for Continuous Library Import.
 
 An organized library often already contains stronger identity evidence than a
-filename search can recover. Mylar-style ``series.json`` and ``cvinfo`` files,
-for example, carry the ComicVine volume id beside the files they describe. This
-module keeps that evidence local and conservative: metadata is only trusted for
-the folder that owns it, and never blindly inherited by child folders or
-unrelated titles.
+filename search can recover. Mylar-style ``series.json``/``cvinfo`` files and
+standard ``ComicInfo.xml`` metadata can carry a ComicVine volume URL beside or
+inside the files they describe. This module keeps that evidence local and
+conservative: metadata is only trusted for the folder/group that owns it, and
+never blindly inherited by child folders or unrelated titles.
 """
 
 from __future__ import annotations
@@ -15,7 +15,9 @@ from __future__ import annotations
 from json import load
 from os.path import basename, join, normpath, sep, splitext
 from re import fullmatch, search
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
+from xml.etree.ElementTree import ParseError, fromstring
+from zipfile import BadZipFile, ZipFile
 
 from backend.base.definitions import FileConstants, FilenameData, SpecialVersion
 from backend.base.file_extraction import extract_filename_data
@@ -24,7 +26,9 @@ from backend.implementations.matching import match_title
 
 
 LOCAL_METADATA_FILENAMES = ('series.json', 'metadata.json')
-CVINFO_FILENAMES = ('cvinfo', 'cvinfo.txt')
+CVINFO_FILENAMES = ('cvinfo', 'cvinfo.txt', 'cvinfo.xml')
+COMICINFO_FILENAME = 'ComicInfo.xml'
+MAX_COMICINFO_BYTES = 64 * 1024
 LOCAL_COMICVINE_ID_KEYS = (
     'comicid',
     'comicvine_id',
@@ -60,19 +64,23 @@ def _comicvine_id(value: Any) -> Optional[int]:
 
 
 def _comicvine_id_from_cvinfo(value: str) -> Optional[int]:
-    """Read a ComicVine *volume* id from Mylar/ComicRack ``cvinfo`` text.
+    """Read a ComicVine *volume* id from sidecar text or a URL.
 
     Mylar normally writes the full ComicVine volume URL, while older libraries
     may contain the historical ``49-NNNN`` form. ``4050-NNNN`` and bare numeric
     ids are accepted too. Issue URLs (``4000``) and story-arc URLs (``4045``)
-    are intentionally rejected.
+    are intentionally rejected. XML delimiters are tolerated so legacy
+    ``cvinfo.xml`` can be inspected without pretending it is ComicInfo.
     """
     value = value.strip()
     direct = _comicvine_id(value)
     if direct is not None:
         return direct
 
-    match = search(r'(?:^|/)(?:4050|49)-(\d+)(?:/|$)', value)
+    match = search(
+        r'(?:^|/|>)(?:4050|49)-(\d+)(?=/|<|$)',
+        value,
+    )
     if match is None:
         return None
 
@@ -87,6 +95,14 @@ def _metadata_mapping(payload: Any) -> Optional[Dict[str, Any]]:
     if isinstance(metadata, dict):
         return metadata
     return payload
+
+
+def _optional_positive_int(value: Any) -> Optional[int]:
+    try:
+        result = int(value)
+    except (TypeError, ValueError):
+        return None
+    return result if result > 0 else None
 
 
 def _load_json_series_metadata(folder: str) -> Optional[Dict[str, Any]]:
@@ -116,27 +132,9 @@ def _load_json_series_metadata(folder: str) -> Optional[Dict[str, Any]]:
         if comicvine_id is None or name is None:
             continue
 
-        year = metadata.get('year')
-        try:
-            year = int(year) if year not in (None, '') else None
-        except (TypeError, ValueError):
-            year = None
-
-        volume_number = metadata.get('volume')
-        try:
-            volume_number = (
-                int(volume_number)
-                if volume_number not in (None, '')
-                else None
-            )
-        except (TypeError, ValueError):
-            volume_number = None
-
-        issue_count = metadata.get('total_issues')
-        try:
-            issue_count = int(issue_count) if issue_count not in (None, '') else None
-        except (TypeError, ValueError):
-            issue_count = None
+        year = _optional_positive_int(metadata.get('year'))
+        volume_number = _optional_positive_int(metadata.get('volume'))
+        issue_count = _optional_positive_int(metadata.get('total_issues'))
 
         return {
             'comicvine_id': comicvine_id,
@@ -152,19 +150,17 @@ def _load_json_series_metadata(folder: str) -> Optional[Dict[str, Any]]:
 
 
 def _load_cvinfo_metadata(folder: str) -> Optional[Dict[str, Any]]:
-    """Load Mylar/ComicRack ``cvinfo`` and derive the local series label.
-
-    ``cvinfo`` itself intentionally contains little more than a ComicVine id.
-    The owning folder supplies the title/year evidence used later to ensure the
-    id is not accidentally inherited by a different series in an organizer
-    folder.
-    """
+    """Load Mylar/ComicRack ``cvinfo`` and derive the local series label."""
     for filename in CVINFO_FILENAMES:
         path = join(folder, filename)
         try:
             with open(path, 'r', encoding='utf-8-sig') as cvinfo_file:
-                value = cvinfo_file.read(4096)
+                value = cvinfo_file.read(MAX_COMICINFO_BYTES + 1)
         except (OSError, UnicodeError):
+            continue
+
+        if len(value) > MAX_COMICINFO_BYTES:
+            LOGGER.warning('Ignoring oversized local metadata file: %s', path)
             continue
 
         comicvine_id = _comicvine_id_from_cvinfo(value)
@@ -198,34 +194,167 @@ def _load_cvinfo_metadata(folder: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def load_local_series_metadata(folder: str) -> Optional[Dict[str, Any]]:
+def _parse_comicinfo(
+    content: bytes,
+    source_path: str,
+) -> Optional[Dict[str, Any]]:
+    """Return exact volume identity from standard ComicInfo metadata.
+
+    ComicInfo has no dedicated ComicVine ID field. The standard ``Web`` field is
+    therefore trusted only when it contains an actual ComicVine *volume* URL.
+    Series/year/volume/count remain supporting metadata, never a synthesized ID.
+    """
+    if len(content) > MAX_COMICINFO_BYTES:
+        return None
+    try:
+        root = fromstring(content)
+    except (ParseError, ValueError):
+        return None
+
+    if root.tag.rsplit('}', 1)[-1] != 'ComicInfo':
+        return None
+
+    fields = {
+        child.tag.rsplit('}', 1)[-1]: (child.text or '').strip()
+        for child in root
+    }
+    name = fields.get('Series', '').strip()
+    web = fields.get('Web', '').strip()
+    comicvine_id = _comicvine_id_from_cvinfo(web)
+    if not name or comicvine_id is None:
+        return None
+
+    return {
+        'comicvine_id': comicvine_id,
+        'name': name,
+        'year': _optional_positive_int(fields.get('Year')),
+        'volume_number': _optional_positive_int(fields.get('Volume')),
+        'issue_count': _optional_positive_int(fields.get('Count')),
+        'source': COMICINFO_FILENAME,
+        'path': source_path,
+    }
+
+
+def _load_sidecar_comicinfo(folder: str) -> Optional[Dict[str, Any]]:
+    path = join(folder, COMICINFO_FILENAME)
+    try:
+        with open(path, 'rb') as comicinfo_file:
+            content = comicinfo_file.read(MAX_COMICINFO_BYTES + 1)
+    except OSError:
+        return None
+    if len(content) > MAX_COMICINFO_BYTES:
+        LOGGER.warning('Ignoring oversized ComicInfo metadata file: %s', path)
+        return None
+    return _parse_comicinfo(content, path)
+
+
+def _load_embedded_comicinfo(
+    group: Optional[Dict[str, FilenameData]],
+) -> Optional[Dict[str, Any]]:
+    """Inspect CBZ/ZIP members for exact ComicInfo volume identity."""
+    if not group:
+        return None
+
+    candidates: List[Dict[str, Any]] = []
+    for filepath in group:
+        if splitext(filepath)[1].lower() not in ('.cbz', '.zip'):
+            continue
+        try:
+            with ZipFile(filepath, 'r') as archive:
+                info = next((
+                    entry
+                    for entry in archive.infolist()
+                    if basename(entry.filename).casefold()
+                    == COMICINFO_FILENAME.casefold()
+                ), None)
+                if info is None:
+                    continue
+                if info.file_size > MAX_COMICINFO_BYTES:
+                    LOGGER.warning(
+                        'Ignoring oversized embedded ComicInfo metadata: %s!%s',
+                        filepath,
+                        info.filename,
+                    )
+                    continue
+                content = archive.read(info)
+        except (BadZipFile, OSError, RuntimeError, ValueError):
+            continue
+
+        metadata = _parse_comicinfo(
+            content,
+            f'{filepath}!{info.filename}',
+        )
+        if metadata is not None:
+            candidates.append(metadata)
+
+    if not candidates:
+        return None
+
+    ids = {candidate['comicvine_id'] for candidate in candidates}
+    if len(ids) > 1:
+        LOGGER.warning(
+            'Conflicting embedded ComicInfo volume identities: %s',
+            ', '.join(
+                f"{candidate['path']} -> {candidate['comicvine_id']}"
+                for candidate in candidates
+            ),
+        )
+        return None
+
+    result = dict(candidates[0])
+    if len(candidates) > 1:
+        result['corroborated_by'] = f'{len(candidates) - 1} other ComicInfo file(s)'
+    return result
+
+
+def load_local_series_metadata(
+    folder: str,
+    group: Optional[Dict[str, FilenameData]] = None,
+) -> Optional[Dict[str, Any]]:
     """Load local metadata that explicitly identifies a ComicVine volume.
 
-    Rich JSON metadata is preferred when present. A Mylar/ComicRack ``cvinfo``
-    file is also accepted. If independent local sidecars disagree on the exact
-    ComicVine id, neither is trusted for unattended import.
+    Mylar JSON/cvinfo and standard ComicInfo evidence are accepted only when
+    they identify an exact ComicVine volume. If independent local sources
+    disagree on that ID, none are trusted for unattended import.
     """
-    json_metadata = _load_json_series_metadata(folder)
-    cvinfo_metadata = _load_cvinfo_metadata(folder)
+    candidates = [
+        metadata
+        for metadata in (
+            _load_json_series_metadata(folder),
+            _load_sidecar_comicinfo(folder),
+            _load_embedded_comicinfo(group),
+            _load_cvinfo_metadata(folder),
+        )
+        if metadata is not None
+    ]
+    if not candidates:
+        return None
 
-    if json_metadata is not None and cvinfo_metadata is not None:
-        if json_metadata['comicvine_id'] != cvinfo_metadata['comicvine_id']:
-            LOGGER.warning(
-                'Conflicting local ComicVine metadata in %s: %s -> %s, %s -> %s',
-                folder,
-                json_metadata['source'],
-                json_metadata['comicvine_id'],
-                cvinfo_metadata['source'],
-                cvinfo_metadata['comicvine_id'],
-            )
-            return None
+    ids = {metadata['comicvine_id'] for metadata in candidates}
+    if len(ids) > 1:
+        LOGGER.warning(
+            'Conflicting local ComicVine metadata in %s: %s',
+            folder,
+            ', '.join(
+                f"{metadata['source']} -> {metadata['comicvine_id']}"
+                for metadata in candidates
+            ),
+        )
+        return None
 
-        # Keep the richer JSON fields, but record that cvinfo corroborated it.
-        result = dict(json_metadata)
-        result['corroborated_by'] = cvinfo_metadata['source']
-        return result
-
-    return json_metadata or cvinfo_metadata
+    # Prefer richer series-level JSON, then ComicInfo, then bare cvinfo. All
+    # candidates have already agreed on the exact external identity.
+    result = dict(candidates[0])
+    corroborators = [
+        metadata['source']
+        for metadata in candidates[1:]
+    ]
+    if corroborators:
+        existing = result.get('corroborated_by')
+        if existing:
+            corroborators.insert(0, str(existing))
+        result['corroborated_by'] = ', '.join(corroborators)
+    return result
 
 
 def _series_is_low_information(series: str) -> bool:
@@ -241,17 +370,13 @@ def select_local_series_metadata(
 ) -> Optional[Dict[str, Any]]:
     """Return trusted local volume identity for one filename group.
 
-    A sidecar belongs only to its own folder. We accept it when the parsed group
-    title agrees with the sidecar/folder title. For low-information filenames
-    such as ``1970_04.pdf``, the folder title may establish that agreement
-    instead. This intentionally does *not* map a clearly named, different
-    series in an organizer folder to the organizer's sidecar.
-
-    File years are *not* required to match the series start year. Many organized
-    libraries put each issue's publication year in the filename; later issues
-    therefore legitimately differ from a volume's ComicVine start year.
+    A sidecar/archive metadata record belongs only to its own folder/group. We
+    accept it when the parsed group title agrees with the local metadata title.
+    For low-information filenames such as ``1970_04.pdf``, the folder title may
+    establish that agreement instead. File years are *not* required to equal a
+    series start year because issue publication years legitimately drift.
     """
-    metadata = load_local_series_metadata(folder)
+    metadata = load_local_series_metadata(folder, group)
     if metadata is None or not group:
         return None
 

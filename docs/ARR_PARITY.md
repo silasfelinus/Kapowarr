@@ -36,7 +36,7 @@ Current Sonarr and Radarr both expose settings areas for Custom Formats, Downloa
 | Import Lists | Supported / expanding | Remote ComicRack CBL lists provide the first comic-native Import List provider with Enabled, Automatic Add, Root Folder, monitor/search-on-add behavior, global ComicVine exclusions, manual sync and persistent 12-hour sync. Automatic Add deliberately requires exact embedded ComicVine volume IDs; title-only CBL entries remain unresolved rather than triggering fuzzy searches. Add more useful list providers as real comic ecosystems justify them. |
 | Indexers | Supported | Newznab and Torznab/Prowlarr/Jackett feeds support enable/disable, categories where explicit, and priority. |
 | Media Management | Supported | Naming, root folders, deleted-issue behavior, file dates, chmod/chown, conversion/extraction and format preference are already substantial. |
-| Metadata | Partial | ComicVine + native Metron provider identity is supported. Portable ComicInfo.xml / series metadata import-export remains a real gap. |
+| Metadata | Partial / improving | ComicVine + native Metron provider identity is supported. Library Import now consumes Mylar JSON/cvinfo/cvinfo.xml and standard ComicInfo.xml beside files or embedded in CBZ/ZIP when ComicInfo's `Web` field contains an exact ComicVine volume URL. Portable metadata **export/write-back** and richer provider-neutral ComicInfo identity remain gaps. |
 | Notifications | Supported | Discord/generic webhook notifications exist and should grow only with useful event coverage. |
 | Profiles | Missing | Do not clone video quality profiles literally. Design a comic acquisition profile only if per-series bundles of format/source/upgrade rules materially reduce repetitive setup. |
 | Quality | Partial | Global source/format preferences exist, and successful acquisitions persist per-file source type/name, release context, acquisition time, and refreshed file size without retaining raw token-bearing download URLs. A read-only quality explanation now reports only evidence-backed traits: format preference position, source-protocol preference position, and explicit GetComics HD/SD labels when provenance supports them. Unknown evidence stays unknown and there is deliberately no aggregate score or automatic replacement policy yet. |
@@ -53,7 +53,7 @@ The same comparison applies outside Settings. Track these as explicit `supported
 | Search + acquisition | Supported / expanding: GetComics, Newznab, Torznab and client routing are first-class; watched-folder import and additional lawful sources remain roadmap work. |
 | Completed-download handling | Supported / partial: torrent/Usenet lifecycle, seed-safe import, failure handling and durable file provenance are substantial; watched-folder external import remains missing. |
 | History + blocklist | Supported: acquisition history/blocklist stay focused, while System Events provides the operational cross-stream timeline. |
-| Portable metadata | Partial: provider-neutral IDs are durable, file-embedded metadata portability remains missing. |
+| Portable metadata | Partial: provider-neutral database IDs are durable and ComicInfo exact identity can now be consumed during import, but Kapowarr does not yet write portable ComicInfo/series metadata back out. |
 | Reader | Intentionally secondary: reader parity is not an *arr convention and should not displace aggregation priorities. |
 
 ## Next parity audits
@@ -61,9 +61,9 @@ The same comparison applies outside Settings. Track these as explicit `supported
 Prioritize shared expectations that reduce support friction or data-loss risk before ornamental parity:
 
 1. **Profiles + Quality policy** — use the new explainable traits to decide whether an aggregate comic-quality policy is actually justified. Do not make larger files or unknown evidence implicitly better/worse, and do not enable automatic replacement until comparison rules and rollback semantics are explicit.
-2. **Updates** — define the expected UX for Docker/container installs versus native installs without teaching Kapowarr to self-update in unsafe environments.
-3. **System navigation** — Logs, Events and Backup are visible from Status today; Import Lists is linked from Metadata settings. When the monolithic sidebar can be safely refactored, make shared System and Settings capabilities familiar sibling links without bloating the main navigation.
-4. **Import List providers** — add additional curated/publisher/list ecosystems only when they expose stable identities or can be resolved without turning list sync into a metadata-search storm.
+2. **Portable metadata export** — now that import consumes useful ComicInfo/Mylar identities, define safe write-back so Kapowarr-managed libraries remain portable without overwriting richer third-party metadata carelessly.
+3. **Updates** — define the expected UX for Docker/container installs versus native installs without teaching Kapowarr to self-update in unsafe environments.
+4. **System navigation** — Logs, Events and Backup are visible from Status today; Import Lists is linked from Metadata settings. When the monolithic sidebar can be safely refactored, make shared System and Settings capabilities familiar sibling links without bloating the main navigation.
 
 ## Ongoing audit process
 

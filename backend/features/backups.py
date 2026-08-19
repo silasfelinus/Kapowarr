@@ -8,19 +8,23 @@ import json
 import re
 import sqlite3
 from datetime import datetime
-from os import listdir, remove, replace, stat
+from os import listdir, remove, replace
 from os.path import basename, dirname, exists, getmtime, getsize, isfile, join
 from shutil import copyfileobj
 from tempfile import NamedTemporaryFile, TemporaryDirectory
+from threading import Timer
 from time import time
-from typing import Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List, Union
 from zipfile import ZIP_DEFLATED, BadZipFile, ZipFile
 
 from backend.base.definitions import Constants
 from backend.base.files import create_folder, folder_path
-from backend.base.helpers import get_version_from_pyproject
+from backend.base.helpers import Singleton, get_version_from_pyproject
 from backend.base.logging import LOGGER
 from backend.internals.db import DBConnection, commit, get_db
+
+if TYPE_CHECKING:
+    from flask import Flask
 
 BACKUP_FOLDER = 'Backups'
 BACKUP_RE = re.compile(
@@ -30,6 +34,8 @@ BACKUP_DB_MEMBER = Constants.DB_NAME
 BACKUP_MANIFEST_MEMBER = 'manifest.json'
 PENDING_RESTORE_SUFFIX = '.restore'
 SECONDS_PER_DAY = 86_400
+AUTO_BACKUP_INTERVAL_DAYS = 7
+BACKUP_RETENTION_DAYS = 28
 
 
 def get_backup_folder() -> str:
@@ -38,7 +44,7 @@ def get_backup_folder() -> str:
     return folder
 
 
-def _backup_path(filename: str) -> str:
+def get_backup_path(filename: str) -> str:
     if basename(filename) != filename or not BACKUP_RE.fullmatch(filename):
         raise ValueError('Invalid backup filename')
 
@@ -84,7 +90,10 @@ def _validate_database_file(filepath: str) -> int:
         connection.close()
 
 
-def _validate_backup_archive(filepath: str) -> Dict[str, Any]:
+def _read_backup_manifest(
+    filepath: str,
+    verify_crc: bool = False,
+) -> Dict[str, Any]:
     try:
         with ZipFile(filepath, 'r') as archive:
             names = set(archive.namelist())
@@ -92,7 +101,7 @@ def _validate_backup_archive(filepath: str) -> Dict[str, Any]:
                 raise ValueError('Backup archive has no Kapowarr database')
             if not names.issubset({BACKUP_DB_MEMBER, BACKUP_MANIFEST_MEMBER}):
                 raise ValueError('Backup archive contains unexpected files')
-            if archive.testzip() is not None:
+            if verify_crc and archive.testzip() is not None:
                 raise ValueError('Backup archive is corrupt')
 
             manifest: Dict[str, Any] = {}
@@ -151,7 +160,7 @@ def create_backup(prefix: str = 'backup') -> Dict[str, Any]:
                 json.dumps(manifest, indent=2, sort_keys=True)
             )
 
-        _validate_backup_archive(temp_zip)
+        _read_backup_manifest(temp_zip, verify_crc=True)
         replace(temp_zip, final_path)
 
     LOGGER.info('Created database backup: %s', filename)
@@ -160,8 +169,8 @@ def create_backup(prefix: str = 'backup') -> Dict[str, Any]:
 
 
 def get_backup(filename: str) -> Dict[str, Any]:
-    path = _backup_path(filename)
-    manifest = _validate_backup_archive(path)
+    path = get_backup_path(filename)
+    manifest = _read_backup_manifest(path)
     return {
         'filename': filename,
         'created_at': int(manifest.get('created_at') or getmtime(path)),
@@ -187,17 +196,14 @@ def list_backups() -> List[Dict[str, Any]]:
 
 
 def delete_backup(filename: str) -> None:
-    path = _backup_path(filename)
+    path = get_backup_path(filename)
     remove(path)
     LOGGER.info('Deleted database backup: %s', filename)
 
 
 def prune_backups() -> None:
-    """Delete backup archives older than the configured retention window."""
-    from backend.internals.settings import Settings
-
-    retention = Settings().sv.backup_retention_days * SECONDS_PER_DAY
-    cutoff = time() - retention
+    """Delete backup archives older than the familiar 28-day *arr window."""
+    cutoff = time() - (BACKUP_RETENTION_DAYS * SECONDS_PER_DAY)
     for backup in list_backups():
         path = join(get_backup_folder(), backup['filename'])
         if getmtime(path) < cutoff:
@@ -207,8 +213,8 @@ def prune_backups() -> None:
 
 def stage_restore(filename: str) -> Dict[str, Any]:
     """Validate a saved backup, preserve current state, and stage it for restart."""
-    source = _backup_path(filename)
-    _validate_backup_archive(source)
+    source = get_backup_path(filename)
+    _read_backup_manifest(source, verify_crc=True)
 
     pre_restore = create_backup(prefix='pre-restore')
     staged_path = DBConnection.file + PENDING_RESTORE_SUFFIX
@@ -273,3 +279,48 @@ def apply_pending_restore() -> bool:
     replace(staged, database)
     LOGGER.warning('Applied staged database restore before startup')
     return True
+
+
+class BackupScheduler(metaclass=Singleton):
+    """Small daemon timer for the familiar weekly automatic backup cadence."""
+
+    timer: Union[Timer, None] = None
+    app: Union['Flask', None] = None
+
+    def start(self, app: 'Flask') -> None:
+        self.stop()
+        self.app = app
+
+        normal_backups = [
+            backup
+            for backup in list_backups()
+            if backup['kind'] == 'backup'
+        ]
+        last_backup = normal_backups[0]['created_at'] if normal_backups else time()
+        interval = AUTO_BACKUP_INTERVAL_DAYS * SECONDS_PER_DAY
+        delay = max(1, round(last_backup + interval - time()))
+        self._schedule(delay)
+        LOGGER.debug('Next automatic database backup in %d seconds', delay)
+
+    def _schedule(self, delay: int) -> None:
+        self.timer = Timer(delay, self._run)
+        self.timer.name = 'BackupScheduler'
+        self.timer.daemon = True
+        self.timer.start()
+
+    def _run(self) -> None:
+        try:
+            if self.app is None:
+                return
+            with self.app.app_context():
+                create_backup()
+        except Exception:
+            LOGGER.exception('Automatic database backup failed')
+        finally:
+            if self.app is not None:
+                self._schedule(AUTO_BACKUP_INTERVAL_DAYS * SECONDS_PER_DAY)
+
+    def stop(self) -> None:
+        if self.timer is not None:
+            self.timer.cancel()
+            self.timer = None

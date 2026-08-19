@@ -436,11 +436,17 @@ function stopContinuousImport(api_key) {
 	continuousStopRequested = true;
 	LIEls.buttons.continuous_stop.disabled = true;
 	LIEls.continuous.status.innerText =
-		'Stop requested. Finishing the current folder safely...';
+		'Stop requested. Pausing as soon as the current operation can exit safely...';
 
-	refreshContinuousReviewCache(api_key, task_id)
-	.catch(() => continuousReviewCache)
-	.then(() => sendAPI('DELETE', `/system/tasks/${task_id}`, api_key))
+	// Stop is the primary action. Do not make it wait behind a potentially slow
+	// details snapshot. Once the backend has acknowledged the cooperative stop,
+	// refreshing held-review details is best-effort only; the durable job state
+	// remains the source of truth.
+	sendAPI('DELETE', `/system/tasks/${task_id}`, api_key)
+	.then(() => {
+		refreshContinuousReviewCache(api_key, task_id)
+		.catch(() => continuousReviewCache);
+	})
 	.catch(e => {
 		continuousStopRequested = false;
 		LIEls.buttons.continuous_stop.disabled = false;

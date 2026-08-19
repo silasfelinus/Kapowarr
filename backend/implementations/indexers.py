@@ -54,7 +54,7 @@ from json import loads as json_loads
 from os.path import splitext
 from re import search as re_search
 from typing import Any, Dict, List, Mapping, Union
-from urllib.parse import urlencode
+from urllib.parse import urlsplit
 
 from aiohttp import ClientError
 from requests import RequestException
@@ -86,6 +86,21 @@ INDEXER_TEST_TIMEOUT = 10.0 # seconds
 # bound -- it goes through `AsyncSession`, which already bounds every
 # request via `Constants.REQUEST_TIMEOUT`/its own retry cycle, same as
 # `getcomics.py`'s `__purify_link` doing the analogous per-link fetch.
+
+
+def newznab_api_url(base_url: str) -> str:
+    """Return the actual Newznab endpoint for a configured URL.
+
+    Native indexers are commonly configured with a host URL and expose their
+    API at ``/api``. Prowlarr and similar aggregators instead give users a
+    complete per-indexer feed URL, such as ``/1/api`` or
+    ``/api/v1/indexer/1/newznab``. Appending another ``/api`` to those URLs
+    makes every test and search request miss the real endpoint.
+    """
+    path = urlsplit(base_url).path.rstrip('/').lower()
+    if path.endswith('/api') or path.endswith('/newznab'):
+        return base_url
+    return f'{base_url}/api'
 
 
 def _parse_content_disposition_filename(header_value: str) -> Union[str, None]:
@@ -128,7 +143,7 @@ def _test_bounded(base_url: str, api_key: str) -> bool:
     def _run() -> bool:
         with Session() as session:
             r = session.get(
-                f"{base_url}/api",
+                newznab_api_url(base_url),
                 params={"t": "caps", "apikey": api_key, "o": "json"},
                 timeout=INDEXER_TEST_TIMEOUT
             )
@@ -372,17 +387,17 @@ async def search_indexer(
             `search_getcomics()`'s `quiet_fail=True` -- one broken indexer
             shouldn't fail a search that combines results from several.
     """
-    url = (
-        f"{indexer.base_url}/api?"
-        + urlencode({
+    body = await session.get_text(
+        newznab_api_url(indexer.base_url),
+        params={
             "t": "search",
             "q": query,
             "apikey": indexer.api_key,
             "o": "json",
             "extended": "1"
-        })
+        },
+        quiet_fail=True
     )
-    body = await session.get_text(url, quiet_fail=True)
     if not body:
         return []
 

@@ -21,7 +21,8 @@ def api_torznab_indexers():
         data.get('base_url'),
         data.get('api_key'),
         data.get('categories', '7030'),
-        data.get('enabled', True)
+        data.get('enabled', True),
+        data.get('category_filter_enabled', False)
     ).get_data()
     return return_api(result, code=201)
 

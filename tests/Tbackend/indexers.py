@@ -12,7 +12,7 @@ from backend.base.definitions import (DownloadSource,
 from backend.implementations import indexers as indexers_module
 from backend.implementations.indexers import (
     Indexer, Indexers, _extract_item_link, _parse_content_disposition_filename,
-    create_nzb_download, search_indexer)
+    create_nzb_download, newznab_api_url, search_indexer)
 from backend.internals.db import KapowarrCursor
 
 
@@ -41,6 +41,28 @@ class content_disposition_parsing(unittest.TestCase):
 
     def test_unparseable_header(self):
         self.assertIsNone(_parse_content_disposition_filename('attachment'))
+
+
+class newznab_endpoint_formatting(unittest.TestCase):
+    def test_native_host_gets_api_path(self):
+        self.assertEqual(
+            newznab_api_url('https://api.nzbgeek.info'),
+            'https://api.nzbgeek.info/api'
+        )
+
+    def test_prowlarr_legacy_feed_is_used_as_supplied(self):
+        self.assertEqual(
+            newznab_api_url('https://prowlarr.example/7/api'),
+            'https://prowlarr.example/7/api'
+        )
+
+    def test_prowlarr_modern_feed_is_used_as_supplied(self):
+        self.assertEqual(
+            newznab_api_url(
+                'https://prowlarr.example/api/v1/indexer/7/newznab'
+            ),
+            'https://prowlarr.example/api/v1/indexer/7/newznab'
+        )
 
 
 class newznab_item_link_extraction(unittest.TestCase):
@@ -205,7 +227,7 @@ class _FakeAsyncSession:
         self.calls = []
 
     async def get_text(self, url, params={}, headers={}, quiet_fail=False):
-        self.calls.append(url)
+        self.calls.append((url, params, quiet_fail))
         return self._body
 
 
@@ -220,6 +242,31 @@ def _fake_indexer() -> Indexer:
 
 
 class search_indexer_parsing(unittest.IsolatedAsyncioTestCase):
+    async def test_queries_full_prowlarr_feed_without_appending_api(self):
+        indexer = _fake_indexer()
+        indexer._title = 'Prowlarr NZB'
+        indexer._base_url = (
+            'https://prowlarr.example/api/v1/indexer/7/newznab'
+        )
+        body = (
+            '{"channel": {"item": {'
+            '"title": "Gwar - Orgasmageddon (2017) (digital-Empire)", '
+            '"link": "https://prowlarr.example/download/1"}}}'
+        )
+        session = _FakeAsyncSession(body)
+
+        results = await search_indexer(
+            session, indexer, 'Gwar Orgasmageddon'
+        )
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(
+            results[0]['display_title'],
+            'Gwar - Orgasmageddon (2017) (digital-Empire)'
+        )
+        self.assertEqual(session.calls[0][0], indexer.base_url)
+        self.assertEqual(session.calls[0][1]['q'], 'Gwar Orgasmageddon')
+
     async def test_parses_list_of_items(self):
         body = (
             '{"channel": {"item": ['

@@ -38,8 +38,10 @@ function toggleIndexer(api_key, key, button) {
 			enabled: !indexer.enabled
 		};
 
-	if (indexer.protocol === 'torznab')
+	if (indexer.protocol === 'torznab') {
 		data.categories = indexer.categories;
+		data.category_filter_enabled = indexer.category_filter_enabled;
+	};
 
 	button.disabled = true;
 	sendAPI('PUT', `${indexer.endpoint}/${indexer.id}`, api_key, {}, data)
@@ -128,6 +130,7 @@ function showAddIndexer() {
 	document.querySelector('#add-base-url-input').value = '';
 	document.querySelector('#add-api-key-input').value = '';
 	document.querySelector('#add-categories-input').value = '7030';
+	document.querySelector('#add-category-filter-input').checked = false;
 	document.querySelector('#add-priority-input').value = 50;
 	document.querySelector('#add-enabled-input').checked = true;
 	toggleTorznabFields('add', 'newznab');
@@ -172,8 +175,10 @@ function saveAddIndexer() {
 			api_key: document.querySelector('#add-api-key-input').value,
 			enabled: document.querySelector('#add-enabled-input').checked
 		};
-		if (protocol === 'torznab')
+		if (protocol === 'torznab') {
 			data.categories = document.querySelector('#add-categories-input').value;
+			data.category_filter_enabled = document.querySelector('#add-category-filter-input').checked;
+		};
 
 		sendAPI('POST', endpointFor(protocol), api_key, {}, data)
 		.then(response => response.json())
@@ -215,6 +220,7 @@ function loadEditIndexer(api_key, key) {
 		document.querySelector('#edit-base-url-input').value = data.base_url;
 		document.querySelector('#edit-api-key-input').value = data.api_key;
 		document.querySelector('#edit-categories-input').value = data.categories || '7030';
+		document.querySelector('#edit-category-filter-input').checked = data.category_filter_enabled || false;
 		document.querySelector('#edit-priority-input').value = data.priority;
 		document.querySelector('#edit-enabled-input').checked = data.enabled;
 		toggleTorznabFields('edit', data.protocol);
@@ -262,8 +268,10 @@ function saveEditIndexer() {
 			api_key: document.querySelector('#edit-api-key-input').value,
 			enabled: document.querySelector('#edit-enabled-input').checked
 		};
-		if (protocol === 'torznab')
+		if (protocol === 'torznab') {
 			data.categories = document.querySelector('#edit-categories-input').value;
+			data.category_filter_enabled = document.querySelector('#edit-category-filter-input').checked;
+		};
 
 		sendAPI('PUT', `${endpointFor(protocol)}/${id}`, api_key, {}, data)
 		.then(() => {

@@ -167,6 +167,50 @@ class continuous_import_pacing(unittest.IsolatedAsyncioTestCase):
             100.0
         )
 
+    def test_stop_during_search_pacing_does_not_start_another_provider_search(self):
+        importer = PersistentContinuousLibraryImport()
+        importer.cv_request_clock['last_started'] = 100.0
+
+        def request_stop(_seconds):
+            importer.stop_requested = True
+
+        with patch(
+            'backend.features.library_import_persistent.monotonic',
+            return_value=112.0
+        ), patch(
+            'backend.features.library_import_persistent.sleep',
+            side_effect=request_stop
+        ) as sleep_mock, patch(
+            'backend.features.library_import_persistent._match_file_groups',
+            new_callable=AsyncMock
+        ) as match_mock:
+            result = importer._match_search_groups(self._group())
+
+        self.assertIsNone(result)
+        sleep_mock.assert_called_once_with(1.0)
+        match_mock.assert_not_awaited()
+        self.assertEqual(
+            importer.cv_request_clock['last_started'],
+            100.0
+        )
+
+    def test_cached_search_title_skips_pacing_but_still_honors_stop(self):
+        importer = PersistentContinuousLibraryImport()
+        importer.search_cache['batman'] = []
+        importer.stop_requested = True
+
+        with patch(
+            'backend.features.library_import_persistent.sleep'
+        ) as sleep_mock, patch(
+            'backend.features.library_import_persistent._match_file_groups',
+            new_callable=AsyncMock
+        ) as match_mock:
+            result = importer._match_search_groups(self._group())
+
+        self.assertIsNone(result)
+        sleep_mock.assert_not_called()
+        match_mock.assert_not_awaited()
+
 
 if __name__ == '__main__':
     unittest.main()

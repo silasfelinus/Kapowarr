@@ -53,8 +53,15 @@ class continuous_import_large_folder(unittest.TestCase):
         provider = Mock()
         provider.search_volumes = AsyncMock(return_value=broad_results)
 
+        # Persistent import owns the broad search, while the shared matcher
+        # constructs its provider through backend.features.library_import even
+        # when every title is already present in its temporary cache. Stub both
+        # call sites so this unit test stays independent of Flask/Settings.
         with patch(
             'backend.features.library_import_persistent.get_metadata_provider',
+            return_value=provider
+        ), patch(
+            'backend.features.library_import.get_metadata_provider',
             return_value=provider
         ):
             result = importer._match_search_groups(groups, '/content/ElfQuest')

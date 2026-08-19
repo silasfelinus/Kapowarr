@@ -79,9 +79,8 @@ def api_backup_restore_upload():
 
     filename = _uploaded_backup_filename()
     filepath = join(get_backup_folder(), filename)
-    uploaded.save(filepath)
-
     try:
+        uploaded.save(filepath)
         result = stage_restore(filename)
     except (OSError, ValueError):
         if exists(filepath):
@@ -99,7 +98,7 @@ def api_backup_restore_upload():
 def api_backup_restore(filename: str):
     try:
         result = stage_restore(filename)
-    except (FileNotFoundError, ValueError):
+    except (OSError, ValueError):
         raise InvalidKeyValue('filename', filename)
 
     # Server.shutdown() is delayed one second, allowing this response to reach

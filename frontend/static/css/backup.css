@@ -1,0 +1,133 @@
+main {
+	padding: 1rem;
+	color: var(--text-color);
+}
+
+.backup-header {
+	display: flex;
+	align-items: end;
+	justify-content: space-between;
+	gap: 1rem;
+	padding-bottom: 1rem;
+	border-bottom: 1px solid var(--border-color);
+}
+
+.backup-header h1 {
+	margin: 0 0 .45rem;
+}
+
+.backup-header p {
+	margin: .2rem 0;
+	line-height: 1.4;
+}
+
+.backup-header-actions {
+	display: flex;
+	gap: .5rem;
+	align-items: center;
+	flex-wrap: wrap;
+}
+
+.backup-note,
+#backup-status {
+	font-size: .9rem;
+}
+
+#backup-now,
+.backup-action {
+	border: 1px solid var(--border-color);
+	border-radius: 4px;
+	padding: .5rem .7rem;
+	background: var(--accent-color);
+	color: var(--nav-background-color);
+	font: inherit;
+	font-weight: 600;
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+#backup-now:disabled,
+.backup-action:disabled {
+	opacity: .55;
+	cursor: default;
+}
+
+.backup-action.secondary {
+	background: var(--nav-background-color);
+	color: var(--text-color);
+}
+
+.backup-action.danger {
+	background: var(--error-color);
+	color: #fff;
+}
+
+#backup-status {
+	min-height: 1.25rem;
+	margin: .8rem 0;
+}
+
+.backup-table-wrap {
+	overflow: auto;
+	border: 1px solid var(--border-color);
+	border-radius: 4px;
+}
+
+.backup-table {
+	width: 100%;
+	border-collapse: collapse;
+}
+
+.backup-table th,
+.backup-table td {
+	padding: .55rem .65rem;
+	text-align: left;
+	border-bottom: 1px solid var(--border-color);
+	vertical-align: middle;
+}
+
+.backup-table tr:last-child td {
+	border-bottom: 0;
+}
+
+.backup-actions {
+	display: flex;
+	gap: .4rem;
+	flex-wrap: wrap;
+}
+
+#backup-empty {
+	padding: 2rem;
+	text-align: center;
+}
+
+.restore-help {
+	margin-top: 1.25rem;
+	max-width: 60rem;
+	line-height: 1.45;
+}
+
+.restore-help h2 {
+	margin-bottom: .35rem;
+}
+
+@media (max-width: 700px) {
+	.backup-header {
+		align-items: stretch;
+		flex-direction: column;
+	}
+
+	.backup-header-actions {
+		align-items: stretch;
+		flex-direction: column;
+	}
+
+	.backup-header-actions > * {
+		text-align: center;
+	}
+
+	.backup-table th:nth-child(3),
+	.backup-table td:nth-child(3) {
+		display: none;
+	}
+}

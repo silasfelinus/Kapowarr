@@ -4,7 +4,7 @@
 from argparse import ArgumentParser
 from atexit import register
 from multiprocessing import set_start_method
-from os import environ, name
+from os import environ, name, remove
 from signal import SIGINT, SIGTERM, signal
 from subprocess import Popen
 from sys import argv
@@ -67,12 +67,15 @@ def _main(
     from backend.base.helpers import (apply_proxy, build_proxy_url,
                                       check_min_python_version)
     from backend.base.logging import LOGGER, setup_logging
+    from backend.features.backups import (BackupScheduler,
+                                          PENDING_RESTORE_SUFFIX,
+                                          apply_pending_restore)
     from backend.features.download_queue import DownloadHandler
     from backend.features.library_import_persistent import (
         PersistentContinuousLibraryImport,
     )
     from backend.features.tasks import TaskHandler
-    from backend.internals.db import set_db_location, setup_db
+    from backend.internals.db import DBConnection, set_db_location, setup_db
     from backend.internals.server import Server, StartTypeHandlers
     from backend.internals.settings import Settings
 
@@ -84,6 +87,18 @@ def _main(
         exit(1)
 
     set_db_location(db_folder)
+
+    # Restore is staged by an authenticated request while the old process is
+    # alive, then applied here before setup_db() opens or migrates the database.
+    # A corrupt stage must never trap the app in a restart loop.
+    try:
+        apply_pending_restore()
+    except Exception:
+        LOGGER.exception('Staged database restore failed; keeping current database')
+        try:
+            remove(DBConnection.file + PENDING_RESTORE_SUFFIX)
+        except FileNotFoundError:
+            pass
 
     SERVER = Server()
     with SERVER.app.app_context():
@@ -132,6 +147,8 @@ def _main(
         download_handler = DownloadHandler()
         download_handler.load_downloads()
         task_handler = TaskHandler()
+        backup_scheduler = BackupScheduler()
+        backup_scheduler.start(SERVER.app)
 
         resumable_import = (
             PersistentContinuousLibraryImport.restore_running_job()
@@ -151,6 +168,7 @@ def _main(
         # =================
 
     finally:
+        backup_scheduler.stop()
         download_handler.stop_handle()
         task_handler.stop_handle()
 

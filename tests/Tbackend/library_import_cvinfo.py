@@ -46,8 +46,13 @@ class mylar_cvinfo_import(unittest.TestCase):
         self.assertEqual(metadata['year'], 1994)
         self.assertEqual(metadata['source'], 'cvinfo')
 
-    def test_cvinfo_accepts_full_resource_or_bare_numeric_id(self):
-        for value in ('4050-19793', '19793'):
+    def test_cvinfo_accepts_current_legacy_or_bare_volume_id(self):
+        for value in (
+            '4050-19793',
+            '49-19793',
+            'https://comicvine.gamespot.com/penthouse-comix/49-19793/',
+            '19793',
+        ):
             with self.subTest(value=value), tempfile.TemporaryDirectory() as root:
                 folder = os.path.join(root, 'Penthouse Comix (1994)')
                 self._write_cvinfo(folder, value)
@@ -99,7 +104,19 @@ class mylar_cvinfo_import(unittest.TestCase):
                 select_local_series_metadata(folder, avengers)['comicvine_id'],
                 1234,
             )
-            self.assertIsNone(select_local_series_metadata(folder, academy))
+            with self.assertLogs(
+                'Kapowarr',
+                level='INFO'
+            ) as captured:
+                self.assertIsNone(
+                    select_local_series_metadata(folder, academy)
+                )
+
+        self.assertTrue(any(
+            'found local cvinfo ComicVine ID 1234' in message
+            and "parsed series 'Avengers Academy'" in message
+            for message in captured.output
+        ))
 
     def test_conflicting_json_and_cvinfo_are_not_auto_trusted(self):
         with tempfile.TemporaryDirectory() as root:

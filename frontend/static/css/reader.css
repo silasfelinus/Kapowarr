@@ -44,6 +44,10 @@ select {
 	padding: 7px 10px;
 }
 
+#reader-fullscreen {
+	white-space: nowrap;
+}
+
 .reader-title-wrap {
 	min-width: 0;
 	flex: 1;
@@ -180,6 +184,10 @@ select {
 
 	.reader-fit-label select {
 		font-size: 0.9rem;
+	}
+
+	.reader-fullscreen-label {
+		display: none;
 	}
 
 	#reader-stage {

@@ -43,6 +43,13 @@
 						<p class="description">Comma-separated Torznab category IDs. 7030 is the standard comics category.</p>
 					</td>
 				</tr>
+				<tr class="add-torznab-option hidden">
+					<th><label for="add-category-filter-input">Filter Categories</label></th>
+					<td>
+						<input type="checkbox" id="add-category-filter-input">
+						<p class="description">Off searches every category, matching Prowlarr's manual search. Turn on to enforce the IDs above.</p>
+					</td>
+				</tr>
 				<tr>
 					<th><label for="add-priority-input">Priority</label></th>
 					<td>
@@ -95,6 +102,13 @@
 					<th><label for="edit-categories-input">Categories</label></th>
 					<td><input type="text" id="edit-categories-input"></td>
 				</tr>
+				<tr class="edit-torznab-option hidden">
+					<th><label for="edit-category-filter-input">Filter Categories</label></th>
+					<td>
+						<input type="checkbox" id="edit-category-filter-input">
+						<p class="description">Off searches every category, matching Prowlarr's manual search.</p>
+					</td>
+				</tr>
 				<tr>
 					<th><label for="edit-priority-input">Priority</label></th>
 					<td>
@@ -126,7 +140,7 @@
 		<h2>Indexers</h2>
 		<p class="description">
 			Search GetComics plus any enabled Newznab Usenet and Torznab torrent feeds.
-			Prowlarr and Jackett can be added by pasting their Torznab API URL and API key.
+			Prowlarr and Jackett can be added by pasting their complete Newznab or Torznab API URL and API key.
 			Search results keep the configured indexer name so you can see where each release came from.
 			Within each protocol, lower priority numbers win otherwise-equivalent ties.
 			Use the status button on any indexer to include or exclude it immediately without deleting its settings.

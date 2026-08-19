@@ -1159,7 +1159,8 @@ class Library:
         # Raises RootFolderNotFound when ID is invalid
         root_folder = RootFolders().get_one(root_folder_id)
 
-        vd = run(get_metadata_provider().fetch_volume(comicvine_id))
+        from backend.features.metadata import fetch_volume_with_fallback
+        vd = run(fetch_volume_with_fallback(comicvine_id))
 
         cursor = get_db()
         with cursor:
@@ -1263,6 +1264,11 @@ class Library:
                 vd.get('external_id', comicvine_id),
                 source_url=vd['site_url']
             )
+            issue_metadata = {
+                issue['comicvine_id']: issue
+                for issue in vd['issues'] or []
+                if issue['comicvine_id'] is not None
+            }
             for issue in cursor.execute(
                 "SELECT id, comicvine_id FROM issues WHERE volume_id = ?;",
                 (volume_id,)
@@ -1270,6 +1276,12 @@ class Library:
                 MetadataIdentityStore.set(
                     'issue', issue['id'], 'comicvine', issue['comicvine_id']
                 )
+                provider_issue = issue_metadata.get(issue['comicvine_id'])
+                if provider_issue and provider_issue.get('provider_id'):
+                    MetadataIdentityStore.set(
+                        'issue', issue['id'], provider_issue['provider_id'],
+                        provider_issue['external_id']
+                    )
 
             volume = Volume(volume_id)
 
@@ -1444,9 +1456,9 @@ def refresh_and_scan(
         return
 
     # Update volumes
-    cv = get_metadata_provider()
+    from backend.features.metadata import fetch_volumes_with_fallback
     volume_datas = filtered_volume_datas = run(
-        cv.fetch_volumes(tuple(cv_to_id_fetch.keys()))
+        fetch_volumes_with_fallback(tuple(cv_to_id_fetch.keys()))
     )
 
     if not volume_id and allow_skipping:

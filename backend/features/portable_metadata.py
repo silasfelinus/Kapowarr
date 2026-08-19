@@ -170,7 +170,6 @@ def write_series_json(volume_id: int, overwrite: bool = False) -> Dict[str, Any]
             'exists': False,
         }
 
-    content = serialized_series_json(volume_id)
     existed = exists(path)
     if existed and not overwrite:
         return {
@@ -179,6 +178,8 @@ def write_series_json(volume_id: int, overwrite: bool = False) -> Dict[str, Any]
             'reason': 'existing_preserved',
             'exists': True,
         }
+
+    content = serialized_series_json(volume_id)
 
     if overwrite:
         _atomic_replace(path, content)

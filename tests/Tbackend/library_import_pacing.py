@@ -184,7 +184,10 @@ class continuous_import_pacing(unittest.IsolatedAsyncioTestCase):
             'backend.features.library_import_persistent._match_file_groups',
             new_callable=AsyncMock
         ) as match_mock:
-            result = importer._match_search_groups(self._group())
+            result = importer._match_search_groups(
+                self._group(),
+                '/content/Batman'
+            )
 
         self.assertIsNone(result)
         sleep_mock.assert_called_once_with(1.0)
@@ -205,7 +208,10 @@ class continuous_import_pacing(unittest.IsolatedAsyncioTestCase):
             'backend.features.library_import_persistent._match_file_groups',
             new_callable=AsyncMock
         ) as match_mock:
-            result = importer._match_search_groups(self._group())
+            result = importer._match_search_groups(
+                self._group(),
+                '/content/Batman'
+            )
 
         self.assertIsNone(result)
         sleep_mock.assert_not_called()

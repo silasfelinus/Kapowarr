@@ -131,9 +131,9 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
             remaining -= step
         return not self._should_stop()
 
-    def _wait_for_metadata_slot(self) -> bool:
-        """Pace ComicVine volume/issue fetch starts independently of searches."""
-        last_started = self.cv_request_clock.get('last_metadata_started')
+    def _wait_for_resource_slot(self, clock_key: str) -> bool:
+        """Wait for one paced ComicVine resource lane without hiding Stop."""
+        last_started = self.cv_request_clock.get(clock_key)
         if last_started is not None:
             elapsed = monotonic() - last_started
             remaining_delay = max(
@@ -145,8 +145,44 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
 
         if self._should_stop():
             return False
-        self.cv_request_clock['last_metadata_started'] = monotonic()
+        self.cv_request_clock[clock_key] = monotonic()
         return True
+
+    def _wait_for_metadata_slot(self) -> bool:
+        """Pace ComicVine volume/issue fetch starts independently of searches."""
+        return self._wait_for_resource_slot('last_metadata_started')
+
+    def _match_search_groups(
+        self,
+        search_groups: Dict[int, Dict[str, FilenameData]]
+    ) -> Optional[Dict[int, Dict[str, Any]]]:
+        """Match groups with a stop-aware delay before each uncached CV search."""
+        title_to_groups: Dict[str, Dict[int, Dict[str, FilenameData]]] = {}
+        for group_number, files in search_groups.items():
+            title = next(iter(files.values()))['series'].lower()
+            title_to_groups.setdefault(title, {})[group_number] = files
+
+        searched_matches: Dict[int, Dict[str, Any]] = {}
+        for title, title_groups in title_to_groups.items():
+            if self._should_stop():
+                return None
+
+            # Cached titles spend no request budget, so only gate a title when
+            # the shared cache proves that a real provider search will start.
+            if title not in self.search_cache:
+                if not self._wait_for_resource_slot('last_started'):
+                    return None
+
+            matches = asyncio_run(_match_file_groups(
+                title_groups,
+                only_english=True,
+                request_delay=0.0,
+                search_cache=self.search_cache,
+                require_confident_match=True
+            ))
+            searched_matches.update(matches)
+
+        return searched_matches
 
     def _emit_persistent_status(self, detail: str = '') -> None:
         if self.job_id is None:
@@ -360,14 +396,12 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
                             )
                         )
                         if search_groups:
-                            searched_matches = asyncio_run(_match_file_groups(
-                                search_groups,
-                                only_english=True,
-                                request_delay=CONTINUOUS_IMPORT_CV_RESOURCE_DELAY,
-                                search_cache=self.search_cache,
-                                require_confident_match=True,
-                                request_clock=self.cv_request_clock
-                            ))
+                            searched_matches = self._match_search_groups(
+                                search_groups
+                            )
+                            if searched_matches is None:
+                                mark_folder_pending(self.job_id, folder)
+                                break
                             searched_matches = apply_series_run_context(
                                 search_groups,
                                 searched_matches,

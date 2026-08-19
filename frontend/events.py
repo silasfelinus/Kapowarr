@@ -50,12 +50,13 @@ def _download_events() -> List[Dict[str, Any]]:
     events = []
     for entry in get_download_history(offset=0):
         success = entry['success']
+        failed = success is not None and not bool(success)
         title = entry['file_title'] or entry['web_title'] or 'Download'
         subtitle = entry['web_sub_title'] or ''
         events.append({
             'timestamp': entry['downloaded_at'],
             'kind': 'download',
-            'level': 'ERROR' if success is False else 'INFO',
+            'level': 'ERROR' if failed else 'INFO',
             'source': entry['source'] or 'Download',
             'title': title,
             'message': subtitle,

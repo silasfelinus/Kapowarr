@@ -106,6 +106,9 @@ class Constants:
     CV_BRAKE_TIME = 1.0 # seconds
     "Average amount of seconds between requests to the CV API"
 
+    METRON_API_URL = "https://metron.cloud/api"
+    "The base URL of the Metron API"
+
     GC_SITE_URL = "https://getcomics.org"
     "The base URL of GetComics"
 
@@ -744,8 +747,8 @@ class CoverProvenance(TypedDict):
 
 
 class IssueMetadata(MetadataIdentity):
-    comicvine_id: int
-    volume_id: int
+    comicvine_id: Union[int, None]
+    volume_id: Union[int, None]
     issue_number: str
     calculated_issue_number: float
     title: Union[str, None]
@@ -754,7 +757,7 @@ class IssueMetadata(MetadataIdentity):
 
 
 class VolumeMetadata(MetadataIdentity):
-    comicvine_id: int
+    comicvine_id: Union[int, None]
     title: str
     year: Union[int, None]
     volume_number: int

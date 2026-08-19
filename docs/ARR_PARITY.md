@@ -21,7 +21,7 @@ Current Sonarr and Radarr both expose these first-class System capabilities:
 | Tasks | Supported | Keep recurring work visible here. Database Backup now uses this same persistent interval-task machinery rather than a private timer. |
 | Logs | Supported | In-app viewer separates capture granularity from severity/search filtering and retains raw download. |
 | Backup / restore | Supported | Manual + weekly SQLite-safe backups, 28-day retention, authenticated list/download/delete, listed or uploaded restore, and automatic pre-restore snapshot. |
-| Events | Partial | Download History and task history capture some events, but there is no unified operational event stream. Audit signal gaps before creating another history table. |
+| Events | Supported | Unified read-only timeline reuses task history, download history and recent warning/error logs instead of duplicating them in another database table. ComicVine provider-operation telemetry is process-local and explicitly distinguished from raw HTTP request counts. |
 | Updates | Partial / needs decision | Running version is visible, but there is no Sonarr/Radarr-style update surface. Container-first installs should not gain a blind in-app updater; they still need understandable current/latest/update-channel state where safe. |
 
 ## Shared Settings parity
@@ -52,7 +52,7 @@ The same comparison applies outside Settings. Track these as explicit `supported
 | Calendar / release awareness | Supported / comic-shaped: weekly publisher-aware release catalogue and subscriptions are the current equivalent; audit whether a conventional date calendar would add value. |
 | Search + acquisition | Supported / expanding: GetComics, Newznab, Torznab and client routing are first-class; watched-folder import and additional lawful sources remain roadmap work. |
 | Completed-download handling | Supported / partial: torrent/Usenet lifecycle, seed-safe import and failure handling are substantial; watched-folder external import remains missing. |
-| History + blocklist | Supported for acquisition; operational Events remains a separate audit. |
+| History + blocklist | Supported: acquisition history/blocklist stay focused, while System Events provides the operational cross-stream timeline. |
 | Portable metadata | Partial: provider-neutral IDs are durable, file-embedded metadata portability remains missing. |
 | Reader | Intentionally secondary: reader parity is not an *arr convention and should not displace aggregation priorities. |
 
@@ -60,11 +60,10 @@ The same comparison applies outside Settings. Track these as explicit `supported
 
 Prioritize shared expectations that reduce support friction or data-loss risk before ornamental parity:
 
-1. **System Events** — map what Download History, task history, health and logs already capture; add only the missing operational event signal.
-2. **Import Lists** — determine the comic-native equivalent for automatically following curated/publisher/reading lists without confusing it with filesystem Library Import.
-3. **Profiles + Quality** — decide whether per-series acquisition profiles are justified, and finish durable file provenance before any automatic replacement upgrades.
-4. **Updates** — define the expected UX for Docker/container installs versus native installs without teaching Kapowarr to self-update in unsafe environments.
-5. **System navigation** — Logs and Backup are visible from Status today; when the monolithic sidebar is safely refactored, make shared System capabilities sibling links like other *arrs without bloating the main navigation.
+1. **Import Lists** — determine the comic-native equivalent for automatically following curated/publisher/reading lists without confusing it with filesystem Library Import.
+2. **Profiles + Quality** — decide whether per-series acquisition profiles are justified, and finish durable file provenance before any automatic replacement upgrades.
+3. **Updates** — define the expected UX for Docker/container installs versus native installs without teaching Kapowarr to self-update in unsafe environments.
+4. **System navigation** — Logs, Events and Backup are visible from Status today; when the monolithic sidebar can be safely refactored, make shared System capabilities sibling links like other arrs without bloating the main navigation.
 
 ## Ongoing audit process
 

@@ -3,7 +3,7 @@
 import logging
 import unittest
 
-from frontend.logs import filter_log_entries, parse_log_entries
+from backend.features.log_view import filter_log_entries, parse_log_entries
 
 
 class LogViewTest(unittest.TestCase):

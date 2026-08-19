@@ -10,6 +10,7 @@ without orphaning volumes or issues.
 from abc import ABC, abstractmethod
 from asyncio import gather
 from enum import Enum
+from functools import wraps
 from time import time
 from typing import Dict, List, Sequence, Tuple, Union
 
@@ -64,6 +65,58 @@ class MetadataProviderRegistry:
 
     _providers: Dict[str, type] = {}
 
+    @staticmethod
+    def _instrument_comicvine(provider: type) -> type:
+        """Measure provider operations without changing ComicVine semantics."""
+        from backend.base.custom_exceptions import (
+            CVRateLimitReached,
+            InvalidComicVineApiKey,
+            VolumeNotMatched,
+        )
+        from backend.features.system_events import (
+            begin_comicvine_operation,
+            finish_comicvine_operation,
+        )
+
+        for operation in (
+            'search_volumes',
+            'fetch_volume',
+            'fetch_volumes',
+            'fetch_issues',
+        ):
+            original = getattr(provider, operation)
+            if getattr(original, '_kapowarr_events_instrumented', False):
+                continue
+
+            def instrument(method, operation_name):
+                @wraps(method)
+                async def wrapped(self, *args, **kwargs):
+                    operation_key = begin_comicvine_operation(operation_name)
+                    try:
+                        result = await method(self, *args, **kwargs)
+                    except CVRateLimitReached:
+                        finish_comicvine_operation(operation_key, 'rate_limit')
+                        raise
+                    except InvalidComicVineApiKey:
+                        finish_comicvine_operation(operation_key, 'invalid_key')
+                        raise
+                    except VolumeNotMatched:
+                        finish_comicvine_operation(operation_key, 'not_found')
+                        raise
+                    except Exception:
+                        finish_comicvine_operation(operation_key, 'other_error')
+                        raise
+
+                    finish_comicvine_operation(operation_key, 'success')
+                    return result
+
+                wrapped._kapowarr_events_instrumented = True
+                return wrapped
+
+            setattr(provider, operation, instrument(original, operation))
+
+        return provider
+
     @classmethod
     def register(cls, provider: type) -> type:
         provider_id = getattr(provider, 'provider_id', '')
@@ -71,6 +124,8 @@ class MetadataProviderRegistry:
             raise ValueError('Metadata provider IDs must be stable lowercase keys')
         if provider_id in cls._providers and cls._providers[provider_id] is not provider:
             raise ValueError(f'Metadata provider already registered: {provider_id}')
+        if provider_id == 'comicvine':
+            provider = cls._instrument_comicvine(provider)
         cls._providers[provider_id] = provider
         return provider
 

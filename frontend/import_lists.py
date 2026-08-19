@@ -92,6 +92,8 @@ def api_import_list_exclusions():
         return return_api(get_import_list_exclusions())
 
     data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return return_api({}, 'InvalidImportListExclusion', 400)
     try:
         result = add_import_list_exclusion(
             data.get('comicvine_volume_id'),

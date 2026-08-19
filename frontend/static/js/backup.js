@@ -33,8 +33,15 @@ function backupButton(label, class_name, handler) {
 	return button;
 };
 
+async function requireBackupResponse(response) {
+	if (!response.ok)
+		throw response;
+	return response;
+};
+
 async function sendBackupPost(endpoint) {
 	const response = await sendAPI('POST', endpoint, backup_api_key);
+	await requireBackupResponse(response);
 	return response.json();
 };
 
@@ -106,11 +113,12 @@ function renderBackups(backups) {
 			if (!confirm(`Delete ${backup.filename}?`))
 				return;
 			try {
-				await sendAPI(
+				const response = await sendAPI(
 					'DELETE',
 					`/system/backups/${encodeURIComponent(backup.filename)}`,
 					backup_api_key
 				);
+				await requireBackupResponse(response);
 				BackupEls.status.textContent = 'Backup deleted.';
 				refreshBackups();
 			} catch (error) {
@@ -172,8 +180,7 @@ async function restoreUploadedBackup() {
 			`${url_base}/api/system/backups/restore?api_key=${encodeURIComponent(backup_api_key)}`,
 			{method: 'POST', body: form}
 		);
-		if (!response.ok)
-			throw response;
+		await requireBackupResponse(response);
 		const json = await response.json();
 		BackupEls.status.textContent =
 			`Restarting… current state was preserved as ${json.result.pre_restore_backup}.`;

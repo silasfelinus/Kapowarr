@@ -66,10 +66,16 @@ select {
 	margin-top: 3px;
 }
 
-.reader-fit-label {
+.reader-fit-label,
+.reader-fullscreen {
 	display: flex;
 	align-items: center;
 	gap: 6px;
+}
+
+.reader-fullscreen {
+	white-space: nowrap;
+	cursor: pointer;
 }
 
 #reader-stage {
@@ -180,6 +186,10 @@ select {
 
 	.reader-fit-label select {
 		font-size: 0.9rem;
+	}
+
+	.reader-fullscreen-label {
+		display: none;
 	}
 
 	#reader-stage {

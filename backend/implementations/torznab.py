@@ -9,6 +9,7 @@ protocol rather than product-specific integrations.
 
 from __future__ import annotations
 
+from asyncio import TimeoutError as AsyncioTimeoutError, wait_for
 from concurrent.futures import (Future, ThreadPoolExecutor,
                                 TimeoutError as FutureTimeoutError)
 from hashlib import sha1
@@ -44,6 +45,7 @@ from backend.internals.db import get_db
 from backend.internals.settings import Settings
 
 TORZNAB_TEST_TIMEOUT = 10.0
+TORZNAB_DOWNLOAD_TIMEOUT = 30.0
 DEFAULT_COMIC_CATEGORIES = '7030'
 TORZNAB_TAG_KEY = 'kapowarr-torznab'
 TORZNAB_TITLE_KEY = 'kapowarr-title'
@@ -169,6 +171,15 @@ def _item_enclosure(item) -> Union[str, None]:
         if _xml_local_name(child.tag) == 'enclosure':
             return child.attrib.get('url')
     return None
+
+
+def _peer_count(value: Union[str, None]) -> Union[int, None]:
+    if value is None:
+        return None
+    try:
+        return max(int(value), 0)
+    except ValueError:
+        return None
 
 
 def _build_magnet(
@@ -466,7 +477,14 @@ async def search_torznab_indexer(
         if not link:
             continue
 
-        results.append({
+        seeders = _peer_count(attrs.get('seeders'))
+        leechers = _peer_count(attrs.get('leechers'))
+        if leechers is None:
+            peers = _peer_count(attrs.get('peers'))
+            if peers is not None and seeders is not None:
+                leechers = max(peers - seeders, 0)
+
+        result: SearchResultData = {
             **extract_filename_data(
                 title,
                 assume_volume_number=False,
@@ -475,7 +493,12 @@ async def search_torznab_indexer(
             'link': tag_torznab_link(link, indexer.id, title),
             'display_title': title,
             'source': indexer.title
-        })
+        }
+        if seeders is not None:
+            result['seeders'] = seeders
+        if leechers is not None:
+            result['leechers'] = leechers
+        results.append(result)
 
     return results
 
@@ -563,8 +586,11 @@ async def _normalise_torrent_link(
 
     async with AsyncSession() as session:
         try:
-            content = await session.get_content(link, quiet_fail=True)
-        except ClientError:
+            content = await wait_for(
+                session.get_content(link, quiet_fail=True),
+                timeout=TORZNAB_DOWNLOAD_TIMEOUT
+            )
+        except (AsyncioTimeoutError, ClientError):
             content = b''
     if not content:
         raise EnqueuingDownloadFailure(

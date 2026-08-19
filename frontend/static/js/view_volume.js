@@ -162,7 +162,11 @@ function fillTable(issues, api_key) {
 
 		// Actions
 		inst.auto_search.onclick = e => autosearchIssue(obj.id, api_key);
-		inst.manual_search.onclick = e => showManualSearch(api_key, obj.id);
+		inst.manual_search.onclick = e => showManualSearch(
+			api_key,
+			obj.id,
+			obj.title || `Issue ${obj.issue_number}`
+		);
 		inst.convert.onclick = e => showConvert(api_key, obj.id);
 	};
 };
@@ -331,11 +335,16 @@ function autosearchIssue(issue_id, api_key) {
 //
 // Manual search
 //
-function showManualSearch(api_key, issue_id=null) {
+function showManualSearch(api_key, issue_id=null, issue_title=null) {
 	// Display searching message
 	const message = document.querySelector('#searching-message');
 	const table = document.querySelector('#search-result-table');
 	const tbody = table.querySelector('tbody');
+	const heading = document.querySelector('#manual-search-window .window-header h2');
+	heading.innerText = manualSearchHeading(
+		ViewEls.vol_data.title.innerText,
+		issue_title
+	);
 
 	hide([table], [message]);
 
@@ -373,6 +382,8 @@ function showManualSearch(api_key, issue_id=null) {
 			title.innerText = result.display_title;
 
 			entry.querySelector('.source-column').innerText = result.source;
+			entry.querySelector('.seeders-column').innerText = result.seeders ?? '—';
+			entry.querySelector('.leechers-column').innerText = result.leechers ?? '—';
 
 			const download_button = entry.querySelector('.search-action-column :nth-child(1)');
 			download_button.classList.add('icon-text-color');
@@ -418,14 +429,17 @@ function addManualSearch(link, force, button, api_key, issue_id=null) {
 	sendAPI('POST', url, api_key, {link: link, force_match: force})
 	.then(response => response.json())
 	.then(json => {
-		img.classList.remove('spinning');
-		if (json.result.fail_reason === null)
-			img.src = `${url_base}/static/img/check.svg`;
-		else {
-			img.src = `${url_base}/static/img/download.svg`;
-			button.classList.add('error');
-			button.title = json.result.fail_reason;
+		finishManualSearchAction(button, json.result.fail_reason);
+	})
+	.catch(async error => {
+		let reason = 'Unable to add torrent. Check the Kapowarr log.';
+		if (error && typeof error.json === 'function') {
+			try {
+				const body = await error.json();
+				reason = body.error || body.result?.fail_reason || reason;
+			} catch (_) {};
 		};
+		finishManualSearchAction(button, reason);
 	});
 };
 

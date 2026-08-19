@@ -249,6 +249,11 @@ tbody .issue-title:hover {
 	width: 6rem;
 }
 
+.peer-column {
+	width: 5rem;
+	text-align: right;
+}
+
 .search-action-column {
 	width: 9rem;
 	display: flex;

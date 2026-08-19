@@ -1,10 +1,12 @@
 import sqlite3
 import unittest
+from asyncio import sleep
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from bencoding import bencode
 
+from backend.base.custom_exceptions import EnqueuingDownloadFailure
 from backend.base.definitions import (DownloadType, SpecialVersion,
                                       VolumeData)
 from backend.features import search
@@ -125,6 +127,7 @@ class torznab_search(unittest.IsolatedAsyncioTestCase):
               <enclosure url="https://prowlarr.example/1/api?t=get&amp;id=42" type="application/x-bittorrent" />
               <torznab:attr name="infohash" value="ABCDEF" />
               <torznab:attr name="seeders" value="12" />
+              <torznab:attr name="peers" value="17" />
             </item>
           </channel>
         </rss>'''
@@ -135,6 +138,8 @@ class torznab_search(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]['source'], 'Prowlarr')
         self.assertEqual(results[0]['issue_number'], 42.0)
+        self.assertEqual(results[0]['seeders'], 12)
+        self.assertEqual(results[0]['leechers'], 5)
         clean, source_id, title = tz.strip_torznab_tag(results[0]['link'])
         self.assertEqual(
             clean,
@@ -210,6 +215,30 @@ class torrent_metadata_conversion(unittest.TestCase):
         self.assertEqual(name, 'Batman Pack')
         self.assertIn('xt=', magnet)
         self.assertIn('dn=Batman+Pack', magnet)
+
+
+class _SlowContentSession:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return None
+
+    async def get_content(self, *args, **kwargs):
+        await sleep(1)
+        return b''
+
+
+class torrent_metadata_timeout(unittest.IsolatedAsyncioTestCase):
+    async def test_torrent_metadata_fetch_has_a_total_deadline(self):
+        with patch.object(
+            tz, 'AsyncSession', return_value=_SlowContentSession()
+        ), patch.object(tz, 'TORZNAB_DOWNLOAD_TIMEOUT', 0.001):
+            with self.assertRaises(EnqueuingDownloadFailure):
+                await tz._normalise_torrent_link(
+                    'https://prowlarr.example/download/slow',
+                    'Batman 001'
+                )
 
 
 class torznab_search_registration(unittest.TestCase):

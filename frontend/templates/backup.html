@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Backup{% endblock %}
+{% block css %}
+	<link rel="stylesheet" href="{{ url_for('static', filename='css/backup.css') }}">
+{% endblock %}
+{% block js %}
+	<script src="{{ url_for('static', filename='js/backup.js') }}" defer></script>
+{% endblock %}
+
+{% block main %}
+<main>
+	<section class="backup-header">
+		<div>
+			<h1>Backup</h1>
+			<p>Kapowarr automatically creates a database backup every 7 days and keeps backups for 28 days.</p>
+			<p class="backup-note">Backups include Kapowarr settings and credentials stored in the database. Downloads require your authenticated API key.</p>
+		</div>
+		<button id="backup-now" type="button">Backup Now</button>
+	</section>
+
+	<p id="backup-status" aria-live="polite"></p>
+
+	<section class="backup-table-wrap" aria-label="Database backups">
+		<table class="backup-table">
+			<thead>
+				<tr>
+					<th>Created</th>
+					<th>Type</th>
+					<th>Version</th>
+					<th>Size</th>
+					<th>Actions</th>
+				</tr>
+			</thead>
+			<tbody id="backup-rows"></tbody>
+		</table>
+		<p id="backup-empty" class="hidden">No backups yet.</p>
+	</section>
+
+	<section class="restore-help">
+		<h2>Restore safety</h2>
+		<p>Restore validates the archive and database first, creates a pre-restore backup of your current state, then restarts Kapowarr. The selected database is swapped in before startup migrations run.</p>
+	</section>
+</main>
+{% endblock main %}

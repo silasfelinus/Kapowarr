@@ -1371,3 +1371,72 @@ def _migrate_add_metadata_provider_identities():
             )
         WHERE provider_id IS NULL;
     """)
+
+
+@DatabaseMigrationHandler.register_handler(50)
+def _migrate_allow_provider_native_identities():
+    """Make legacy ComicVine compatibility IDs optional without losing data."""
+    cursor = get_db()
+    cursor.executescript("""
+        PRAGMA foreign_keys = OFF;
+        BEGIN IMMEDIATE TRANSACTION;
+
+        DROP TABLE IF EXISTS volumes_51;
+        DROP TABLE IF EXISTS issues_51;
+
+        CREATE TABLE volumes_51(
+            id INTEGER PRIMARY KEY,
+            comicvine_id INTEGER,
+            title VARCHAR(255) NOT NULL,
+            alt_title VARCHAR(255),
+            year INTEGER(5),
+            publisher VARCHAR(255),
+            volume_number INTEGER(8) DEFAULT 1,
+            description TEXT,
+            site_url TEXT NOT NULL DEFAULT "",
+            monitored BOOL NOT NULL DEFAULT 0,
+            monitor_new_issues BOOL NOT NULL DEFAULT 1,
+            root_folder INTEGER NOT NULL,
+            folder TEXT,
+            custom_folder BOOL NOT NULL DEFAULT 0,
+            last_cv_fetch INTEGER(8) DEFAULT 0,
+            special_version VARCHAR(255),
+            special_version_locked BOOL NOT NULL DEFAULT 0,
+            FOREIGN KEY (root_folder) REFERENCES root_folders(id)
+        );
+
+        CREATE TABLE issues_51(
+            id INTEGER PRIMARY KEY,
+            volume_id INTEGER NOT NULL,
+            comicvine_id INTEGER UNIQUE,
+            issue_number VARCHAR(20) NOT NULL,
+            calculated_issue_number FLOAT(20) NOT NULL,
+            title VARCHAR(255),
+            date VARCHAR(10),
+            description TEXT,
+            monitored BOOL NOT NULL DEFAULT 1,
+            FOREIGN KEY (volume_id) REFERENCES volumes(id) ON DELETE CASCADE
+        );
+
+        INSERT INTO volumes_51 SELECT * FROM volumes;
+        INSERT INTO issues_51 SELECT * FROM issues;
+
+        DROP TABLE issues;
+        DROP TABLE volumes;
+        ALTER TABLE volumes_51 RENAME TO volumes;
+        ALTER TABLE issues_51 RENAME TO issues;
+
+        CREATE INDEX issues_volume_number_index
+            ON issues(volume_id, calculated_issue_number);
+        CREATE INDEX issues_volume_index ON issues(volume_id);
+
+        COMMIT;
+        PRAGMA foreign_keys = ON;
+    """)
+
+    foreign_key_errors = list(cursor.execute('PRAGMA foreign_key_check;'))
+    if foreign_key_errors:
+        raise RuntimeError(
+            'Provider identity migration left invalid foreign keys: '
+            f'{foreign_key_errors[:5]}'
+        )

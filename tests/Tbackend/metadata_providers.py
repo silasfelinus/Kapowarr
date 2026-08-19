@@ -1,11 +1,13 @@
 import sqlite3
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+from backend.base.custom_exceptions import InvalidComicVineApiKey
 from backend.features.metadata import (MetadataCapability,
                                        MetadataIdentityStore, MetadataProvider,
                                        MetadataProviderRegistry,
-                                       get_metadata_provider)
+                                       get_metadata_provider,
+                                       search_metadata_with_fallback)
 from backend.internals.db import KapowarrCursor
 
 
@@ -64,6 +66,58 @@ class metadata_provider_registry(unittest.TestCase):
                 ))
         finally:
             MetadataProviderRegistry._providers = original
+
+
+class metadata_provider_search(unittest.IsolatedAsyncioTestCase):
+    async def test_configured_metron_results_join_comicvine_results(self):
+        comicvine = MagicMock()
+        comicvine.search_volumes = AsyncMock(return_value=[{
+            'provider_id': 'comicvine', 'external_id': '4050'
+        }])
+        metron = MagicMock()
+        metron.search_volumes = AsyncMock(return_value=[{
+            'provider_id': 'metron', 'external_id': 'native-9'
+        }])
+
+        with patch(
+            'backend.features.metadata._metron_is_configured',
+            return_value=True
+        ), patch(
+            'backend.features.metadata.get_metadata_provider',
+            side_effect=lambda provider_id='comicvine': (
+                comicvine if provider_id == 'comicvine' else metron
+            )
+        ):
+            results = await search_metadata_with_fallback('Saga')
+
+        self.assertEqual(
+            [result['provider_id'] for result in results],
+            ['comicvine', 'metron']
+        )
+        comicvine.search_volumes.assert_awaited_once_with('Saga')
+        metron.search_volumes.assert_awaited_once_with('Saga')
+
+    async def test_metron_works_without_a_comicvine_key(self):
+        metron = MagicMock()
+        metron.search_volumes = AsyncMock(return_value=[{
+            'provider_id': 'metron', 'external_id': 'native-9'
+        }])
+
+        def provider(provider_id='comicvine'):
+            if provider_id == 'comicvine':
+                raise InvalidComicVineApiKey
+            return metron
+
+        with patch(
+            'backend.features.metadata._metron_is_configured',
+            return_value=True
+        ), patch(
+            'backend.features.metadata.get_metadata_provider',
+            side_effect=provider
+        ):
+            results = await search_metadata_with_fallback('Saga')
+
+        self.assertEqual(results[0]['provider_id'], 'metron')
 
 
 class metadata_identity_store(unittest.TestCase):

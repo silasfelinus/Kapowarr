@@ -27,6 +27,8 @@ const SearchEls = {
 		title: document.querySelector('#add-window h2'),
 		cover: document.querySelector('#add-cover'),
 		cv_input: document.querySelector('#comicvine-input'),
+		provider_input: document.querySelector('#provider-input'),
+		external_id_input: document.querySelector('#external-id-input'),
 		monitor_volume_input: document.querySelector('#monitor-volume-input'),
 		monitor_issues_input: document.querySelector('#monitor-issues-input'),
 		monitoring_scheme: document.querySelector('#monitoring-scheme-input'),
@@ -51,6 +53,15 @@ function addAlreadyAdded(entry, id) {
 	title.appendChild(aa_icon);
 };
 
+function findSearchEntry(provider_id, external_id) {
+	return Array.from(
+		SearchEls.search_results.querySelectorAll('.search-entry')
+	).find(entry => (
+		entry.dataset.providerId === provider_id
+		&& entry.dataset.externalId === String(external_id)
+	));
+};
+
 function buildResults(results, api_key) {
 	SearchEls.search_results
         .querySelectorAll('button:not(.filter-bar)')
@@ -62,8 +73,10 @@ function buildResults(results, api_key) {
 			result.year !== null
             ? `${result.title} (${result.year})`
             : result.title;
-		entry.dataset.cover = result.cover_link;
-		entry.dataset.comicvine_id = result.comicvine_id;
+		entry.dataset.cover = result.cover_link || `${url_base}/static/img/favicon.svg`;
+		entry.dataset.providerId = result.provider_id;
+		entry.dataset.externalId = result.external_id;
+		entry.dataset.comicvineId = result.comicvine_id || '';
 		entry.dataset._translated = result.translated;
 		entry.dataset._title = result.title;
 		entry.dataset._year = result.year || '';
@@ -73,9 +86,11 @@ function buildResults(results, api_key) {
 
 		// Only allow adding volume if it isn't already added
 		if (result.already_added === null)
-			entry.onclick = e => showAddWindow(result.comicvine_id, api_key);
+			entry.onclick = e => showAddWindow(
+				result.provider_id, result.external_id, api_key
+			);
 
-		entry.querySelector('img').src = result.cover_link;
+		entry.querySelector('img').src = entry.dataset.cover;
 
 		const title = entry.querySelector('h2');
 		title.innerText = result.title;
@@ -90,6 +105,11 @@ function buildResults(results, api_key) {
 			addAlreadyAdded(entry, result.already_added);
 
 		const tags = entry.querySelector('.entry-tags');
+		if (result.provider_id !== 'comicvine') {
+			const provider = document.createElement('p');
+			provider.innerText = 'Metron';
+			tags.appendChild(provider);
+		};
 
 		if (result.volume_number !== null) {
 			const volume_number = document.createElement('p');
@@ -105,11 +125,13 @@ function buildResults(results, api_key) {
 		issue_count.innerText = `${result.issue_count} issues`;
 		tags.appendChild(issue_count);
 
-		const info_link = document.createElement('a');
-		info_link.href = result.site_url;
-		info_link.innerText = 'Link';
-		info_link.onclick = e => e.stopImmediatePropagation();
-		tags.appendChild(info_link);
+		if (result.site_url) {
+			const info_link = document.createElement('a');
+			info_link.href = result.site_url;
+			info_link.innerText = 'Link';
+			info_link.onclick = e => e.stopImmediatePropagation();
+			tags.appendChild(info_link);
+		};
 
 		if (result.aliases.length) {
 			const aliases = entry.querySelector('.entry-aliases');
@@ -375,12 +397,14 @@ function fillRootFolderInput(api_key) {
 	});
 };
 
-function showAddWindow(comicvine_id, api_key) {
-	const volume_data = document.querySelector(
-		`button[data-comicvine_id="${comicvine_id}"]`
-	).dataset;
+function showAddWindow(provider_id, external_id, api_key) {
+	const volume_data = findSearchEntry(provider_id, external_id).dataset;
 	const body = {
-		'comicvine_id': volume_data.comicvine_id,
+		'provider_id': provider_id,
+		'external_id': external_id,
+		'comicvine_id': volume_data.comicvineId
+			? parseInt(volume_data.comicvineId)
+			: null,
 		'title': volume_data._title,
 		'year': volume_data._year || null,
 		'volume_number': volume_data._volume_number,
@@ -397,7 +421,9 @@ function showAddWindow(comicvine_id, api_key) {
 
 	SearchEls.window.title.innerText = volume_data.title;
 	SearchEls.window.cover.src = volume_data.cover;
-	SearchEls.window.cv_input.value = comicvine_id;
+	SearchEls.window.cv_input.value = volume_data.comicvineId;
+	SearchEls.window.provider_input.value = provider_id;
+	SearchEls.window.external_id_input.value = external_id;
     SearchEls.window.special_state_input.value = "auto";
 	
 	const monitoring_pref = getLocalStorage(
@@ -413,7 +439,11 @@ function addVolume() {
 	const volume_folder = SearchEls.window.volume_folder_input.value;
 
 	const data = {
-		'comicvine_id': parseInt(SearchEls.window.cv_input.value),
+		'comicvine_id': SearchEls.window.cv_input.value
+			? parseInt(SearchEls.window.cv_input.value)
+			: null,
+		'provider_id': SearchEls.window.provider_input.value,
+		'external_id': SearchEls.window.external_id_input.value,
 		'root_folder_id': parseInt(SearchEls.window.root_folder_input.value),
 		'monitor': SearchEls.window.monitor_volume_input.value === "true",
 		'monitoring_scheme': SearchEls.window.monitoring_scheme.value,
@@ -424,8 +454,8 @@ function addVolume() {
 	};
 	if (
 		volume_folder !== ''
-		&& volume_folder !== document.querySelector(
-			`button[data-comicvine_id="${data.comicvine_id}"]`
+		&& volume_folder !== findSearchEntry(
+			data.provider_id, data.external_id
 		).dataset._volume_folder
 	) {
 		// Custom volume folder
@@ -443,15 +473,24 @@ function addVolume() {
 		sendAPI('POST', '/volumes', api_key, {}, data)
 		.then(response => response.json())
 		.then(json => {
-			const entry = document.querySelector(
-				`button[data-comicvine_id="${data.comicvine_id}"]`
+			const entry = findSearchEntry(
+				data.provider_id, data.external_id
 			);
 			addAlreadyAdded(entry, json.result.id);
 			closeWindow();
 		})
-		.catch(e => {
+		.catch(async e => {
+			const error = await e.clone().json().catch(() => ({}));
+			if (error.error === 'VolumeAlreadyAdded') {
+				const entry = findSearchEntry(
+					data.provider_id, data.external_id
+				);
+				addAlreadyAdded(entry, error.result.volume_id);
+				closeWindow();
+				return;
+			};
 			if (e.status === 509) {
-				SearchEls.window.submit.innerText = 'ComicVine API rate limit reached';
+				SearchEls.window.submit.innerText = 'Metadata provider rate limit reached';
 				showWindow("add-window");
 			} else if (e.status === 400) {
 				SearchEls.window.submit.innerText = 'Volume folder is parent or child of other volume folder';

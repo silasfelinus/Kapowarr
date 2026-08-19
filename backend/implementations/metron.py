@@ -16,9 +16,9 @@ from backend.base.definitions import Constants, IssueMetadata, VolumeMetadata
 from backend.base.file_extraction import extract_issue_number
 from backend.base.helpers import (AsyncSession, force_range,
                                   normalise_string, run)
-from backend.features.metadata import (MetadataCapability, MetadataProvider,
+from backend.features.metadata import (MetadataCapability,
+                                       MetadataIdentityStore, MetadataProvider,
                                        MetadataProviderRegistry)
-from backend.internals.db import get_db
 from backend.internals.settings import Settings
 
 
@@ -40,15 +40,25 @@ class Metron(MetadataProvider):
 
     def __init__(
         self,
+        metron_api_token: Union[str, None] = None,
         metron_username: Union[str, None] = None,
         metron_password: Union[str, None] = None
     ) -> None:
         settings = Settings().get_settings()
+        self.token = metron_api_token or settings.metron_api_token
         self.username = metron_username or settings.metron_username
         self.password = metron_password or settings.metron_password
-        if not self.username or not self.password:
-            raise MetronError('Metron username and password are required')
-        self.auth = BasicAuth(self.username, self.password)
+        if not self.token and (not self.username or not self.password):
+            raise MetronError(
+                'A Metron API token or username and password are required'
+            )
+        if self.token:
+            self.auth = None
+            self.headers = {'Authorization': f'Bearer {self.token}'}
+        else:
+            assert self.username and self.password
+            self.auth = BasicAuth(self.username, self.password)
+            self.headers = {}
         self.date_type = settings.date_type.value
 
     async def _get(
@@ -58,7 +68,7 @@ class Metron(MetadataProvider):
             async with AsyncSession() as session:
                 response = await session.get(
                     f'{Constants.METRON_API_URL}/{path.strip("/")}/',
-                    params=params or {}, auth=self.auth
+                    params=params or {}, auth=self.auth, headers=self.headers
                 )
                 if response.status in (401, 403, 429):
                     raise MetronError(f'Metron returned HTTP {response.status}')
@@ -73,12 +83,17 @@ class Metron(MetadataProvider):
         image = data.get('image') or ''
         metron_id = str(data['id'])
         cv_id = data.get('cv_id')
+        year = data.get('year_began')
+        title = data.get('name') or data.get('series') or ''
+        year_suffix = f' ({year})'
+        if not data.get('name') and year and title.endswith(year_suffix):
+            title = title[:-len(year_suffix)]
         result: VolumeMetadata = {
             'provider_id': 'metron',
             'external_id': metron_id,
             'comicvine_id': int(cv_id) if cv_id else None,
-            'title': normalise_string(data.get('name') or data.get('series') or ''),
-            'year': data.get('year_began'),
+            'title': normalise_string(title),
+            'year': year,
             'volume_number': int(data.get('volume') or 1),
             'cover_link': image,
             'cover_source': {
@@ -142,28 +157,26 @@ class Metron(MetadataProvider):
             params = {'cv_id': query.split('-', 1)[-1].split(':')[-1]}
         else:
             params = {'q': query, 'page_size': 50}
-        summaries = await self._all('series', params)
-        details = [
-            await self._get(f'series/{item["id"]}')
-            for item in summaries
+        results = [
+            self._volume(item)
+            for item in await self._all('series', params)
         ]
-        # The current library schema still requires a compatibility CV ID.
-        # Metron-native records become addable when that final legacy column is
-        # made nullable; until then, hiding them avoids a broken Add action.
-        results = [self._volume(item) for item in details if item.get('cv_id')]
-        cv_ids = [item['comicvine_id'] for item in results if item['comicvine_id']]
-        added = dict(get_db().execute(
-            f'SELECT comicvine_id, id FROM volumes WHERE comicvine_id IN ({",".join("?" for _ in cv_ids)})',
-            cv_ids
-        )) if cv_ids else {}
         for item in results:
-            if item['comicvine_id']:
-                item['already_added'] = added.get(item['comicvine_id'])
+            item['already_added'] = MetadataIdentityStore.resolve(
+                'volume', self.provider_id, item['external_id']
+            )
         return results
 
     async def fetch_volume(self, external_id: Union[str, int]) -> VolumeMetadata:
         volume = self._volume(await self._get(f'series/{external_id}'))
-        volume['issues'] = await self.fetch_issues((external_id,))
+        summaries = await self._all('issue', {'series_id': external_id})
+        if not volume['cover_link'] and summaries:
+            volume['cover_link'] = summaries[0].get('image') or ''
+            volume['cover_source']['source_url'] = volume['cover_link']
+        # List results contain every field Kapowarr needs to establish an issue
+        # identity. Avoid a detail request per issue: a long-running series can
+        # otherwise exhaust Metron's burst quota during one add or refresh.
+        volume['issues'] = [self._issue(summary) for summary in summaries]
         if volume['cover_link']:
             try:
                 async with AsyncSession() as session:
@@ -185,13 +198,7 @@ class Metron(MetadataProvider):
         results: List[IssueMetadata] = []
         for external_id in volume_external_ids:
             summaries = await self._all('issue', {'series_id': external_id})
-            for summary in summaries:
-                issue = await self._get(f'issue/{summary["id"]}')
-                # The legacy issue table still requires a ComicVine ID. Keep
-                # Metron-native issues visible in search, but do not invent a
-                # compatibility identity during library refresh.
-                if issue.get('cv_id'):
-                    results.append(self._issue(issue))
+            results.extend(self._issue(summary) for summary in summaries)
         return results
 
     async def fetch_volume_by_comicvine_id(self, cv_id: int) -> VolumeMetadata:
@@ -209,7 +216,5 @@ class Metron(MetadataProvider):
         for cv_id in cv_ids:
             matches = await self._all('series', {'cv_id': cv_id})
             if len(matches) == 1:
-                volumes.append(self._volume(await self._get(
-                    f'series/{matches[0]["id"]}'
-                )))
+                volumes.append(await self.fetch_volume(matches[0]['id']))
         return volumes

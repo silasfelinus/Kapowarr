@@ -745,17 +745,13 @@ def api_volumes_search():
 
     elif request.method == 'POST':
         data: Dict[str, Any] = request.get_json()
-        for key in (
-            'comicvine_id',
-            'title', 'year', 'volume_number',
-            'publisher'
-        ):
+        for key in ('title', 'year', 'volume_number', 'publisher'):
             if key not in data:
                 raise KeyNotFound(key)
 
         vd = VolumeData(
             id=0,
-            comicvine_id=data['comicvine_id'],
+            comicvine_id=data.get('comicvine_id'),
             title=data['title'],
             alt_title=data['title'],
             year=data['year'],
@@ -796,8 +792,10 @@ def api_volumes():
         data: dict = request.get_json()
 
         comicvine_id = data.get('comicvine_id')
-        if comicvine_id is None:
-            raise KeyNotFound('comicvine_id')
+        provider_id = data.get('provider_id') or 'comicvine'
+        external_id = data.get('external_id') or comicvine_id
+        if external_id is None:
+            raise KeyNotFound('external_id')
 
         root_folder_id = data.get('root_folder_id')
         if root_folder_id is None:
@@ -840,7 +838,9 @@ def api_volumes():
             monitor_new_issues,
             volume_folder,
             sv,
-            auto_search
+            auto_search,
+            provider_id,
+            external_id
         )
         volume_info = Library.get_volume(volume_id).get_public_data()
         return return_api(volume_info, code=201)

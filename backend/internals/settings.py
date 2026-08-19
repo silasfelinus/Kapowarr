@@ -72,6 +72,7 @@ class PublicSettingsValues:
     auth_password: str = ''
 
     comicvine_api_key: str = ''
+    metron_api_token: str = ''
     metron_username: str = ''
     metron_password: str = ''
     api_key: str = ''
@@ -147,7 +148,7 @@ class PublicSettingsValues:
         for k, v in result.items():
             if k in (
                 "auth_username", "auth_password", "proxy_password",
-                "metron_username", "metron_password"
+                "metron_api_token", "metron_username", "metron_password"
             ) and v:
                 result[k] = Constants.CREDENTIAL_REPLACEMENT
 
@@ -472,7 +473,9 @@ class Settings(metaclass=Singleton):
             ).test_key():
                 raise InvalidKeyValue(key, value)
 
-        elif key in ('metron_username', 'metron_password'):
+        elif key in (
+            'metron_api_token', 'metron_username', 'metron_password'
+        ):
             if value == Constants.CREDENTIAL_REPLACEMENT:
                 converted_value = getattr(self.sv, key)
             else:

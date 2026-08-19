@@ -8,6 +8,7 @@ without orphaning volumes or issues.
 """
 
 from abc import ABC, abstractmethod
+from asyncio import gather
 from enum import Enum
 from time import time
 from typing import Dict, List, Sequence, Tuple, Union
@@ -168,19 +169,50 @@ def get_metadata_provider(
 def _metron_is_configured() -> bool:
     from backend.internals.settings import Settings
     settings = Settings().get_settings()
-    return bool(settings.metron_username and settings.metron_password)
+    return bool(
+        settings.metron_api_token
+        or (settings.metron_username and settings.metron_password)
+    )
 
 
 async def search_metadata_with_fallback(query: str) -> List[VolumeMetadata]:
-    """Search ComicVine, falling back only after an availability failure."""
+    """Search every configured provider while keeping identities explicit."""
     from backend.base.custom_exceptions import (CVRateLimitReached,
                                                 InvalidComicVineApiKey)
-    try:
-        return await get_metadata_provider().search_volumes(query)
-    except (CVRateLimitReached, InvalidComicVineApiKey):
-        if not _metron_is_configured():
-            raise
-        return await get_metadata_provider('metron').search_volumes(query)
+    async def search_provider(provider_id: str) -> List[VolumeMetadata]:
+        return await get_metadata_provider(provider_id).search_volumes(query)
+
+    comicvine_search = search_provider('comicvine')
+    if not _metron_is_configured():
+        return await comicvine_search
+
+    from backend.implementations.metron import MetronError
+    comicvine_result, metron_result = await gather(
+        comicvine_search,
+        get_metadata_provider('metron').search_volumes(query),
+        return_exceptions=True
+    )
+
+    comicvine_error: Union[BaseException, None] = None
+    if isinstance(comicvine_result, BaseException):
+        if not isinstance(
+            comicvine_result, (CVRateLimitReached, InvalidComicVineApiKey)
+        ):
+            raise comicvine_result
+        comicvine_error = comicvine_result
+        results: List[VolumeMetadata] = []
+    else:
+        results = comicvine_result
+
+    if isinstance(metron_result, BaseException):
+        if not isinstance(metron_result, MetronError):
+            raise metron_result
+        if comicvine_error is not None:
+            raise comicvine_error
+    else:
+        results.extend(metron_result)
+
+    return results
 
 
 async def fetch_volume_with_fallback(cv_id: int) -> VolumeMetadata:

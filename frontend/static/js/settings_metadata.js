@@ -2,6 +2,7 @@ function fillSettings(api_key) {
 	fetchAPI('/settings', api_key)
 	.then(json => {
 		document.querySelector('#date-type-input').value = json.result.date_type;
+		document.querySelector('#metron-token-input').value = json.result.metron_api_token;
 		document.querySelector('#metron-username-input').value = json.result.metron_username;
 		document.querySelector('#metron-password-input').value = json.result.metron_password;
 	});
@@ -11,6 +12,7 @@ function saveSettings(api_key) {
 	document.querySelector("#save-button p").innerText = 'Saving';
 	const data = {
 		'date_type': document.querySelector('#date-type-input').value,
+		'metron_api_token': document.querySelector('#metron-token-input').value,
 		'metron_username': document.querySelector('#metron-username-input').value,
 		'metron_password': document.querySelector('#metron-password-input').value
 	};

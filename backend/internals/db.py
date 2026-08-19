@@ -356,7 +356,7 @@ CREATE TABLE IF NOT EXISTS root_folders(
 );
 CREATE TABLE IF NOT EXISTS volumes(
     id INTEGER PRIMARY KEY,
-    comicvine_id INTEGER NOT NULL,
+    comicvine_id INTEGER,
     title VARCHAR(255) NOT NULL,
     alt_title VARCHAR(255),
     year INTEGER(5),
@@ -389,7 +389,7 @@ CREATE INDEX IF NOT EXISTS volumes_covers_volume_id_index
 CREATE TABLE IF NOT EXISTS issues(
     id INTEGER PRIMARY KEY,
     volume_id INTEGER NOT NULL,
-    comicvine_id INTEGER NOT NULL UNIQUE,
+    comicvine_id INTEGER UNIQUE,
     issue_number VARCHAR(20) NOT NULL,
     calculated_issue_number FLOAT(20) NOT NULL,
     title VARCHAR(255),

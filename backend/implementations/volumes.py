@@ -1089,14 +1089,16 @@ class Library:
     @classmethod
     def add(
         cls,
-        comicvine_id: int,
+        comicvine_id: Union[int, None],
         root_folder_id: int,
         monitored: bool,
         monitor_scheme: MonitorScheme = MonitorScheme.ALL,
         monitor_new_issues: bool = True,
         volume_folder: Union[str, None] = None,
         special_version: Union[SpecialVersion, None] = None,
-        auto_search: bool = False
+        auto_search: bool = False,
+        metadata_provider_id: str = 'comicvine',
+        metadata_external_id: Union[str, int, None] = None
     ) -> int:
         """Add a volume to the library.
 
@@ -1140,10 +1142,14 @@ class Library:
         """
         from backend.implementations.naming import generate_volume_folder_path
 
+        external_id = metadata_external_id or comicvine_id
+        if external_id is None:
+            raise ValueError('A metadata identity is required')
+
         LOGGER.info(
             'Adding a volume to the library: '
-            'CV ID %d, RF ID %d, M %s, MS %s, MNI %s, VF %s, SV %s',
-            comicvine_id,
+            '%s ID %s, RF ID %d, M %s, MS %s, MNI %s, VF %s, SV %s',
+            metadata_provider_id, external_id,
             root_folder_id,
             monitored,
             monitor_scheme.value,
@@ -1152,15 +1158,33 @@ class Library:
             special_version
         )
 
-        potential_volume_id = cls._cv_to_id(comicvine_id)
+        potential_volume_id = MetadataIdentityStore.resolve(
+            'volume', metadata_provider_id, external_id
+        )
+        if potential_volume_id is None and comicvine_id is not None:
+            potential_volume_id = cls._cv_to_id(comicvine_id)
         if potential_volume_id:
-            raise VolumeAlreadyAdded(comicvine_id, potential_volume_id)
+            raise VolumeAlreadyAdded(comicvine_id or 0, potential_volume_id)
 
         # Raises RootFolderNotFound when ID is invalid
         root_folder = RootFolders().get_one(root_folder_id)
 
-        from backend.features.metadata import fetch_volume_with_fallback
-        vd = run(fetch_volume_with_fallback(comicvine_id))
+        if metadata_provider_id == 'comicvine':
+            from backend.features.metadata import fetch_volume_with_fallback
+            vd = run(fetch_volume_with_fallback(int(external_id)))
+        else:
+            try:
+                metadata_provider = get_metadata_provider(metadata_provider_id)
+            except KeyError:
+                raise InvalidKeyValue('provider_id', metadata_provider_id)
+            vd = run(metadata_provider.fetch_volume(external_id))
+
+        if vd['comicvine_id'] is not None:
+            potential_volume_id = cls._cv_to_id(vd['comicvine_id'])
+            if potential_volume_id:
+                raise VolumeAlreadyAdded(
+                    vd['comicvine_id'], potential_volume_id
+                )
 
         cursor = get_db()
         with cursor:
@@ -1221,66 +1245,43 @@ class Library:
                     "volume_id": volume_id,
                     "cover": vd["cover"],
                     "provider_id": vd.get("provider_id", "comicvine"),
-                    "external_id": vd.get("external_id", str(comicvine_id)),
+                    "external_id": vd.get("external_id", str(external_id)),
                     "source_url": vd.get("cover_source", {}).get("source_url")
                 }
-            )
-
-            cursor.executemany("""
-                INSERT INTO issues(
-                    volume_id,
-                    comicvine_id,
-                    issue_number,
-                    calculated_issue_number,
-                    title,
-                    date,
-                    description,
-                    monitored
-                ) VALUES (
-                    :volume_id, :comicvine_id,
-                    :issue_number, :calculated_issue_number,
-                    :title, :date, :description,
-                    :monitored
-                );
-                """,
-                (
-                    {
-                        "volume_id": volume_id,
-                        "comicvine_id": i["comicvine_id"],
-                        "issue_number": i["issue_number"],
-                        "calculated_issue_number": i["calculated_issue_number"],
-                        "title": i["title"],
-                        "date": i["date"],
-                        "description": i["description"],
-                        "monitored": True
-                    }
-                    for i in vd["issues"] or []
-                )
             )
 
             MetadataIdentityStore.set(
                 'volume', volume_id,
                 vd.get('provider_id', 'comicvine'),
-                vd.get('external_id', comicvine_id),
+                vd.get('external_id', external_id),
                 source_url=vd['site_url']
             )
-            issue_metadata = {
-                issue['comicvine_id']: issue
-                for issue in vd['issues'] or []
-                if issue['comicvine_id'] is not None
-            }
-            for issue in cursor.execute(
-                "SELECT id, comicvine_id FROM issues WHERE volume_id = ?;",
-                (volume_id,)
-            ):
+            if vd['comicvine_id'] is not None:
                 MetadataIdentityStore.set(
-                    'issue', issue['id'], 'comicvine', issue['comicvine_id']
+                    'volume', volume_id, 'comicvine', vd['comicvine_id']
                 )
-                provider_issue = issue_metadata.get(issue['comicvine_id'])
-                if provider_issue and provider_issue.get('provider_id'):
+
+            for issue in vd['issues'] or []:
+                issue_id = cursor.execute("""
+                    INSERT INTO issues(
+                        volume_id, comicvine_id, issue_number,
+                        calculated_issue_number, title, date, description,
+                        monitored
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 1);
+                    """, (
+                        volume_id, issue['comicvine_id'],
+                        issue['issue_number'], issue['calculated_issue_number'],
+                        issue['title'], issue['date'], issue['description']
+                    )).lastrowid
+                MetadataIdentityStore.set(
+                    'issue', issue_id,
+                    issue.get('provider_id', metadata_provider_id),
+                    issue['external_id']
+                )
+                if issue['comicvine_id'] is not None:
                     MetadataIdentityStore.set(
-                        'issue', issue['id'], provider_issue['provider_id'],
-                        provider_issue['external_id']
+                        'issue', issue_id, 'comicvine',
+                        issue['comicvine_id']
                     )
 
             volume = Volume(volume_id)
@@ -1313,7 +1314,8 @@ class Library:
             TaskHandler().add(task)
 
         LOGGER.info(
-            f'Added volume with CV ID {comicvine_id} and ID {volume_id}'
+            f'Added volume with {metadata_provider_id} ID {external_id} '
+            f'and local ID {volume_id}'
         )
         return volume_id
 
@@ -1448,41 +1450,76 @@ def refresh_and_scan(
             )
         )
 
-    cv_to_id_fetch: Dict[int, Tuple[int, int]] = {
-        e["comicvine_id"]: (e["id"], e["last_cv_fetch"])
-        for e in cursor
-    }
-    if not cv_to_id_fetch:
+    selected_volumes = list(cursor)
+    if not selected_volumes:
         return
 
-    # Update volumes
+    requests: List[Dict[str, Any]] = []
+    for row in selected_volumes:
+        identities = MetadataIdentityStore.get('volume', row['id'])
+        if row['comicvine_id'] is not None:
+            provider_id = 'comicvine'
+            external_id = str(row['comicvine_id'])
+        elif 'metron' in identities:
+            provider_id = 'metron'
+            external_id = identities['metron']
+        elif identities:
+            provider_id, external_id = next(iter(identities.items()))
+        else:
+            LOGGER.warning(
+                'Volume %s has no usable metadata identity; skipping refresh',
+                row['id']
+            )
+            continue
+        requests.append({
+            'id': row['id'],
+            'last_fetch': row['last_cv_fetch'],
+            'provider_id': provider_id,
+            'external_id': external_id,
+            'comicvine_id': row['comicvine_id']
+        })
+
+    volume_records: List[Dict[str, Any]] = []
     from backend.features.metadata import fetch_volumes_with_fallback
-    volume_datas = filtered_volume_datas = run(
-        fetch_volumes_with_fallback(tuple(cv_to_id_fetch.keys()))
-    )
+    cv_requests = {
+        request['comicvine_id']: request
+        for request in requests
+        if request['provider_id'] == 'comicvine'
+    }
+    if cv_requests:
+        for data in run(fetch_volumes_with_fallback(tuple(cv_requests))):
+            request = cv_requests.get(data['comicvine_id'])
+            if request:
+                volume_records.append({'request': request, 'data': data})
 
-    if not volume_id and allow_skipping:
-        cv_id_to_issue_count: Dict[int, int] = dict(cursor.execute("""
-            SELECT v.comicvine_id, COUNT(i.id)
-            FROM volumes v
-            LEFT JOIN issues i
-            ON v.id = i.volume_id
-            WHERE v.last_cv_fetch <= ?
-            GROUP BY v.id;
-            """,
-            (one_day_ago.timestamp(),)
-        ))
+    for provider_id in {
+        request['provider_id']
+        for request in requests
+        if request['provider_id'] != 'comicvine'
+    }:
+        provider_requests = {
+            request['external_id']: request
+            for request in requests
+            if request['provider_id'] == provider_id
+        }
+        for data in run(get_metadata_provider(provider_id).fetch_volumes(
+            tuple(provider_requests)
+        )):
+            request = provider_requests.get(data['external_id'])
+            if request:
+                volume_records.append({'request': request, 'data': data})
 
-        filtered_volume_datas = [
-            v
-            for v in volume_datas
-            if cv_id_to_issue_count[v["comicvine_id"]] != v["issue_count"]
-            # Do a fetch anyway if it hasn't been done for 30 days
-            or cv_to_id_fetch[v["comicvine_id"]][1] <= thirty_days_ago.timestamp()
-        ]
+    issue_counts = dict(cursor.execute("""
+        SELECT v.id, COUNT(i.id)
+        FROM volumes v
+        LEFT JOIN issues i ON v.id = i.volume_id
+        GROUP BY v.id;
+        """))
 
-    cursor.executemany(
-        """
+    for record in volume_records:
+        request = record['request']
+        data = record['data']
+        cursor.execute("""
         UPDATE volumes
         SET
             title = :title,
@@ -1492,152 +1529,159 @@ def refresh_and_scan(
             volume_number = :volume_number,
             description = :description,
             site_url = :site_url,
+            comicvine_id = COALESCE(:comicvine_id, comicvine_id),
             last_cv_fetch = :last_cv_fetch
         WHERE id = :id;
-        """,
-        ({
-            "title": vd["title"],
-            "alt_title": (vd["aliases"] or [None])[0],
-            "year": vd["year"],
-            "publisher": vd["publisher"],
-            "volume_number": vd["volume_number"],
-            "description": vd["description"],
-            "site_url": vd["site_url"],
+        """, {
+            "title": data["title"],
+            "alt_title": (data["aliases"] or [None])[0],
+            "year": data["year"],
+            "publisher": data["publisher"],
+            "volume_number": data["volume_number"],
+            "description": data["description"],
+            "site_url": data["site_url"],
+            "comicvine_id": data["comicvine_id"],
             "last_cv_fetch": current_time.timestamp(),
-
-            "id": cv_to_id_fetch[vd["comicvine_id"]][0]
-        }
-            for vd in volume_datas
-        ))
-
-    cursor.executemany(
-        """
+            "id": request["id"]
+        })
+        cursor.execute("""
         UPDATE volumes_covers
         SET
-            cover = :cover,
+            cover = COALESCE(:cover, cover),
             provider_id = :provider_id,
             external_id = :external_id,
-            source_url = :source_url
+            source_url = COALESCE(:source_url, source_url)
         WHERE volume_id = :volume_id;
-        """,
-        ({
-            "volume_id": cv_to_id_fetch[vd["comicvine_id"]][0],
-            "cover": vd["cover"],
-            "provider_id": vd.get("provider_id", "comicvine"),
-            "external_id": vd.get(
-                "external_id", str(vd["comicvine_id"])
-            ),
-            "source_url": vd.get("cover_link")
-        }
-            for vd in volume_datas
-        ))
+        """, {
+            "volume_id": request["id"],
+            "cover": data["cover"],
+            "provider_id": data.get("provider_id", request['provider_id']),
+            "external_id": data.get("external_id", request['external_id']),
+            "source_url": data.get("cover_link")
+        })
+        MetadataIdentityStore.set(
+            'volume', request['id'],
+            data.get('provider_id', request['provider_id']),
+            data.get('external_id', request['external_id']),
+            source_url=data.get('site_url')
+        )
+        if data['comicvine_id'] is not None:
+            MetadataIdentityStore.set(
+                'volume', request['id'], 'comicvine', data['comicvine_id']
+            )
 
-    commit()
+        record['refresh_issues'] = (
+            volume_id is not None
+            or not allow_skipping
+            or issue_counts.get(request['id'], 0) != data['issue_count']
+            or request['last_fetch'] <= thirty_days_ago.timestamp()
+        )
 
-    # Update issues
-    issue_datas = run(cv.fetch_issues(
-        tuple(vd["comicvine_id"] for vd in filtered_volume_datas)
-    ))
     monitor_issues_volume_ids: Set[int] = set(first_of_subarrays(cursor.execute(
         "SELECT id FROM volumes WHERE monitor_new_issues = 1;"
     )))
-    cursor.executemany(
-        """
-        INSERT INTO issues(
-            volume_id,
-            comicvine_id,
-            issue_number,
-            calculated_issue_number,
-            title,
-            date,
-            description,
-            monitored
-        ) VALUES (
-            :volume_id, :comicvine_id, :issue_number, :calculated_issue_number,
-            :title, :date, :description, :monitored
-        )
-        ON CONFLICT(comicvine_id) DO
-        UPDATE
-        SET
-            issue_number = :issue_number,
-            calculated_issue_number = :calculated_issue_number,
-            title = :title,
-            date = :date,
-            description = :description;
-        """,
-        ({
-            "volume_id": cv_to_id_fetch[isd["volume_id"]][0],
-            "comicvine_id": isd["comicvine_id"],
-            "issue_number": isd["issue_number"],
-            "calculated_issue_number": isd["calculated_issue_number"] or 0.0,
-            "title": isd["title"],
-            "date": isd["date"],
-            "description": isd["description"],
-            "monitored": cv_to_id_fetch[isd["volume_id"]][0] in monitor_issues_volume_ids
-        }
-            for isd in issue_datas
-        ))
 
-    commit()
+    cv_records = [
+        record for record in volume_records
+        if record['refresh_issues']
+        and record['data']['issues'] is None
+        and record['data'].get('provider_id', 'comicvine') == 'comicvine'
+    ]
+    if cv_records:
+        cv_issues = run(get_metadata_provider().fetch_issues(tuple(
+            record['data']['comicvine_id'] for record in cv_records
+        )))
+        issues_by_volume: Dict[str, List[Any]] = {}
+        for issue in cv_issues:
+            issues_by_volume.setdefault(
+                issue['volume_external_id'], []
+            ).append(issue)
+        for record in cv_records:
+            record['data']['issues'] = issues_by_volume.get(
+                str(record['data']['comicvine_id']), []
+            )
 
-    # Refresh can discover new issues.  Keep their portable identities in step
-    # with the compatibility ComicVine column in the same database cycle.
-    cursor.execute("""
-        INSERT OR IGNORE INTO issue_external_ids(
-            issue_id, provider_id, external_id, source_url, updated_at
-        )
-        SELECT id, 'comicvine', CAST(comicvine_id AS TEXT), NULL, ?
-        FROM issues;
-        """, (round(current_time.timestamp()),))
-    commit()
-
-    # Delete issues from DB that aren't found in response
-    volume_issues_fetched: Dict[int, Set[int]] = {}
-    for isd in issue_datas:
-        (volume_issues_fetched
-            .setdefault(isd["volume_id"], set())
-            .add(isd["comicvine_id"]))
-
-    for vd in filtered_volume_datas:
-        if len(volume_issues_fetched.get(
-            vd["comicvine_id"]
-        ) or tuple()) != vd["issue_count"]:
+    for record in volume_records:
+        if not record['refresh_issues']:
             continue
+        request = record['request']
+        data = record['data']
+        issues = data['issues'] or []
+        seen_issue_ids: Set[int] = set()
+        for issue in issues:
+            issue_provider = issue.get(
+                'provider_id', data.get('provider_id', request['provider_id'])
+            )
+            issue_id = MetadataIdentityStore.resolve(
+                'issue', issue_provider, issue['external_id']
+            )
+            if issue_id is None and issue['comicvine_id'] is not None:
+                issue_id = MetadataIdentityStore.resolve(
+                    'issue', 'comicvine', issue['comicvine_id']
+                )
+            if issue_id is None:
+                issue_id = cursor.execute("""
+                    INSERT INTO issues(
+                        volume_id, comicvine_id, issue_number,
+                        calculated_issue_number, title, date, description,
+                        monitored
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                    """, (
+                        request['id'], issue['comicvine_id'],
+                        issue['issue_number'],
+                        issue['calculated_issue_number'] or 0.0,
+                        issue['title'], issue['date'], issue['description'],
+                        request['id'] in monitor_issues_volume_ids
+                    )).lastrowid
+            else:
+                cursor.execute("""
+                    UPDATE issues
+                    SET comicvine_id = COALESCE(?, comicvine_id),
+                        issue_number = ?, calculated_issue_number = ?,
+                        title = ?, date = ?, description = ?
+                    WHERE id = ?;
+                    """, (
+                        issue['comicvine_id'], issue['issue_number'],
+                        issue['calculated_issue_number'] or 0.0,
+                        issue['title'], issue['date'], issue['description'],
+                        issue_id
+                    ))
+            seen_issue_ids.add(issue_id)
+            MetadataIdentityStore.set(
+                'issue', issue_id, issue_provider, issue['external_id']
+            )
+            if issue['comicvine_id'] is not None:
+                MetadataIdentityStore.set(
+                    'issue', issue_id, 'comicvine', issue['comicvine_id']
+                )
 
-        # All issues of the volume have been fetched, which is not guaranteed
-        # because of rate limits.
-        issue_cv_to_id = dict(cursor.execute("""
-            SELECT i.comicvine_id, i.id
-            FROM issues i
-            INNER JOIN volumes v
-            ON i.volume_id = v.id
-            WHERE v.comicvine_id = ?;
-            """,
-            (vd["comicvine_id"],)
-        ).fetchall())
-        for issue_cv, issue_id in issue_cv_to_id.items():
-            if issue_cv not in volume_issues_fetched[vd["comicvine_id"]]:
-                # Issue is in database but not in response, so remove
-                Issue(issue_id).delete()
-                commit()
+        if len(issues) == data['issue_count']:
+            existing_ids = set(first_of_subarrays(cursor.execute(
+                'SELECT id FROM issues WHERE volume_id = ?;',
+                (request['id'],)
+            )))
+            for removed_issue_id in existing_ids - seen_issue_ids:
+                Issue(removed_issue_id).delete()
 
-    # Refresh Special Version
-    updated_special_versions = tuple(
-        {
-            "special_version": determine_special_version(
-                cv_to_id_fetch[vd["comicvine_id"]][0]
-            ),
-            "id": cv_to_id_fetch[vd["comicvine_id"]][0]
-        }
-        for vd in volume_datas
-    )
-    cursor.executemany("""
-        UPDATE volumes
-        SET special_version = :special_version
-        WHERE id = :id AND special_version_locked = 0;
-        """,
-        updated_special_versions
-    )
+        cursor.execute("""
+            UPDATE volumes
+            SET special_version = ?
+            WHERE id = ? AND special_version_locked = 0;
+            """, (
+                determine_special_version(request['id']), request['id']
+            ))
+
+    for record in volume_records:
+        if record['refresh_issues']:
+            continue
+        request = record['request']
+        cursor.execute("""
+            UPDATE volumes
+            SET special_version = ?
+            WHERE id = ? AND special_version_locked = 0;
+            """, (
+                determine_special_version(request['id']), request['id']
+            ))
 
     commit()
 
@@ -1647,8 +1691,8 @@ def refresh_and_scan(
 
     else:
         v_ids = [
-            (v[0], [], False, update_websocket)
-            for v in cv_to_id_fetch.values()
+            (v['id'], [], False, update_websocket)
+            for v in selected_volumes
         ]
         total_count = len(v_ids)
 

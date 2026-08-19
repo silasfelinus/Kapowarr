@@ -14,8 +14,6 @@ from time import monotonic, sleep, time
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlsplit
 
-from requests import RequestException
-
 from backend.base.custom_exceptions import VolumeAlreadyAdded
 from backend.base.definitions import MonitorScheme
 from backend.base.helpers import Session
@@ -87,17 +85,25 @@ def _validate_root_folder_id(value: Any) -> int:
     return value
 
 
-def _normalize_import_list(data: Dict[str, Any], current: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def _normalize_import_list(
+    data: Dict[str, Any],
+    current: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     current = current or {}
     name = data.get('name', current.get('name'))
     if not isinstance(name, str) or not name.strip():
         raise ValueError('Import List name is required')
 
-    provider = data.get('provider', current.get('provider', IMPORT_LIST_PROVIDER_REMOTE_CBL))
+    provider = data.get(
+        'provider',
+        current.get('provider', IMPORT_LIST_PROVIDER_REMOTE_CBL),
+    )
     if provider != IMPORT_LIST_PROVIDER_REMOTE_CBL:
         raise ValueError('Unsupported Import List provider')
 
-    source_url = _validate_source_url(data.get('source_url', current.get('source_url')))
+    source_url = _validate_source_url(
+        data.get('source_url', current.get('source_url'))
+    )
     root_folder_id = _validate_root_folder_id(
         data.get('root_folder_id', current.get('root_folder_id'))
     )
@@ -106,15 +112,25 @@ def _normalize_import_list(data: Dict[str, Any], current: Optional[Dict[str, Any
         'name': name.strip()[:255],
         'provider': provider,
         'source_url': source_url,
-        'enabled': _validate_bool(data, 'enabled', bool(current.get('enabled', True))),
-        'enable_auto': _validate_bool(data, 'enable_auto', bool(current.get('enable_auto', False))),
+        'enabled': _validate_bool(
+            data, 'enabled', bool(current.get('enabled', True))
+        ),
+        'enable_auto': _validate_bool(
+            data, 'enable_auto', bool(current.get('enable_auto', False))
+        ),
         'root_folder_id': root_folder_id,
-        'monitored': _validate_bool(data, 'monitored', bool(current.get('monitored', True))),
+        'monitored': _validate_bool(
+            data, 'monitored', bool(current.get('monitored', True))
+        ),
         'monitor_new_issues': _validate_bool(
-            data, 'monitor_new_issues', bool(current.get('monitor_new_issues', True))
+            data,
+            'monitor_new_issues',
+            bool(current.get('monitor_new_issues', True)),
         ),
         'search_on_add': _validate_bool(
-            data, 'search_on_add', bool(current.get('search_on_add', False))
+            data,
+            'search_on_add',
+            bool(current.get('search_on_add', False)),
         ),
     }
 
@@ -165,7 +181,10 @@ def create_import_list(data: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-def update_import_list(import_list_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
+def update_import_list(
+    import_list_id: int,
+    data: Dict[str, Any],
+) -> Dict[str, Any]:
     current = get_import_list(import_list_id)
     if current is None:
         raise KeyError(import_list_id)
@@ -194,7 +213,10 @@ def update_import_list(import_list_id: int, data: Dict[str, Any]) -> Dict[str, A
 def delete_import_list(import_list_id: int) -> bool:
     ensure_import_list_tables()
     cursor = get_db()
-    cursor.execute('DELETE FROM import_lists WHERE id = ?;', (import_list_id,))
+    cursor.execute(
+        'DELETE FROM import_lists WHERE id = ?;',
+        (import_list_id,),
+    )
     deleted = cursor.rowcount > 0
     commit()
     return deleted
@@ -209,9 +231,16 @@ def get_import_list_exclusions() -> List[Dict[str, Any]]:
     """).fetchalldict()
 
 
-def add_import_list_exclusion(comicvine_volume_id: int, note: str = '') -> Dict[str, Any]:
+def add_import_list_exclusion(
+    comicvine_volume_id: int,
+    note: str = '',
+) -> Dict[str, Any]:
     ensure_import_list_tables()
-    if not isinstance(comicvine_volume_id, int) or isinstance(comicvine_volume_id, bool) or comicvine_volume_id < 1:
+    if (
+        not isinstance(comicvine_volume_id, int)
+        or isinstance(comicvine_volume_id, bool)
+        or comicvine_volume_id < 1
+    ):
         raise ValueError('ComicVine volume ID must be a positive integer')
     if not isinstance(note, str):
         raise ValueError('Exclusion note must be text')
@@ -232,7 +261,7 @@ def delete_import_list_exclusion(comicvine_volume_id: int) -> bool:
     cursor = get_db()
     cursor.execute(
         'DELETE FROM import_list_exclusions WHERE comicvine_volume_id = ?;',
-        (comicvine_volume_id,)
+        (comicvine_volume_id,),
     )
     deleted = cursor.rowcount > 0
     commit()
@@ -240,40 +269,58 @@ def delete_import_list_exclusion(comicvine_volume_id: int) -> bool:
 
 
 def _fetch_remote_cbl(source_url: str) -> bytes:
-    response = Session().get(source_url, stream=True)
-    response.raise_for_status()
+    with Session() as session:
+        with session.get(source_url, stream=True) as response:
+            response.raise_for_status()
 
-    declared_size = response.headers.get('Content-Length')
-    if declared_size and declared_size.isdigit() and int(declared_size) > MAX_CBL_BYTES:
-        raise ValueError('Remote CBL is too large')
+            declared_size = response.headers.get('Content-Length')
+            if (
+                declared_size
+                and declared_size.isdigit()
+                and int(declared_size) > MAX_CBL_BYTES
+            ):
+                raise ValueError('Remote CBL is too large')
 
-    chunks = []
-    total = 0
-    for chunk in response.iter_content(chunk_size=64 * 1024):
-        if not chunk:
-            continue
-        total += len(chunk)
-        if total > MAX_CBL_BYTES:
-            raise ValueError('Remote CBL is too large')
-        chunks.append(chunk)
-    return b''.join(chunks)
-
-
-def _wait_for_metadata_slot(last_started: Optional[float], should_stop: Callable[[], bool]) -> Optional[float]:
-    if last_started is None:
-        return monotonic()
-
-    remaining = max(IMPORT_LIST_CV_RESOURCE_DELAY - (monotonic() - last_started), 0.0)
-    while remaining > 0:
-        if should_stop():
-            return None
-        sleep(min(1.0, remaining))
-        remaining = max(IMPORT_LIST_CV_RESOURCE_DELAY - (monotonic() - last_started), 0.0)
-
-    return monotonic()
+            chunks = []
+            total = 0
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > MAX_CBL_BYTES:
+                    raise ValueError('Remote CBL is too large')
+                chunks.append(chunk)
+            return b''.join(chunks)
 
 
-def _record_sync(import_list_id: int, summary: Dict[str, Any], error: Optional[str]) -> None:
+def _wait_for_metadata_slot(
+    request_clock: Dict[str, float],
+    should_stop: Callable[[], bool],
+) -> bool:
+    last_started = request_clock.get('last_metadata_started')
+    if last_started is not None:
+        remaining = max(
+            IMPORT_LIST_CV_RESOURCE_DELAY - (monotonic() - last_started),
+            0.0,
+        )
+        while remaining > 0:
+            if should_stop():
+                return False
+            sleep(min(1.0, remaining))
+            remaining = max(
+                IMPORT_LIST_CV_RESOURCE_DELAY - (monotonic() - last_started),
+                0.0,
+            )
+
+    request_clock['last_metadata_started'] = monotonic()
+    return True
+
+
+def _record_sync(
+    import_list_id: int,
+    summary: Dict[str, Any],
+    error: Optional[str],
+) -> None:
     get_db().execute("""
         UPDATE import_lists
         SET
@@ -285,7 +332,8 @@ def _record_sync(import_list_id: int, summary: Dict[str, Any], error: Optional[s
             last_added_count = ?
         WHERE id = ?;
     """, (
-        round(time()), error,
+        round(time()),
+        error,
         summary.get('item_count', 0),
         summary.get('exact_volume_count', 0),
         summary.get('unresolved_count', 0),
@@ -298,9 +346,11 @@ def _record_sync(import_list_id: int, summary: Dict[str, Any], error: Optional[s
 def sync_import_list(
     import_list_id: int,
     should_stop: Optional[Callable[[], bool]] = None,
+    request_clock: Optional[Dict[str, float]] = None,
 ) -> Dict[str, Any]:
     """Fetch one list and optionally auto-add exact, non-excluded volumes."""
     should_stop = should_stop or (lambda: False)
+    request_clock = request_clock if request_clock is not None else {}
     definition = get_import_list(import_list_id)
     if definition is None:
         raise KeyError(import_list_id)
@@ -348,11 +398,11 @@ def sync_import_list(
         existing = {
             row['comicvine_id']
             for row in get_db().execute(
-                'SELECT comicvine_id FROM volumes WHERE comicvine_id IS NOT NULL;'
+                'SELECT comicvine_id FROM volumes '
+                'WHERE comicvine_id IS NOT NULL;'
             ).fetchalldict()
         }
 
-        last_started: Optional[float] = None
         for comicvine_id in exact_ids:
             if should_stop():
                 summary['stopped'] = True
@@ -364,11 +414,9 @@ def sync_import_list(
                 summary['already_added_count'] += 1
                 continue
 
-            next_started = _wait_for_metadata_slot(last_started, should_stop)
-            if next_started is None:
+            if not _wait_for_metadata_slot(request_clock, should_stop):
                 summary['stopped'] = True
                 break
-            last_started = next_started
 
             try:
                 Library.add(
@@ -376,7 +424,9 @@ def sync_import_list(
                     definition['root_folder_id'],
                     bool(definition['monitored']),
                     monitor_scheme=MonitorScheme.ALL,
-                    monitor_new_issues=bool(definition['monitor_new_issues']),
+                    monitor_new_issues=bool(
+                        definition['monitor_new_issues']
+                    ),
                     auto_search=bool(definition['search_on_add']),
                 )
             except VolumeAlreadyAdded:
@@ -389,7 +439,8 @@ def sync_import_list(
 
         _record_sync(import_list_id, summary, None)
         LOGGER.info(
-            'Import List %s synced: %d CBL entries, %d exact volumes, %d added, %d unresolved',
+            'Import List %s synced: %d CBL entries, %d exact volumes, '
+            '%d added, %d unresolved',
             definition['name'],
             summary['item_count'],
             summary['exact_volume_count'],
@@ -398,23 +449,32 @@ def sync_import_list(
         )
         return summary
 
-    except (RequestException, ValueError, Exception) as error:
+    except Exception as error:
         # Keep the last observed counts for diagnostics, then preserve the
         # original exception so Task History / Events record a real failure.
-        _record_sync(import_list_id, summary, f'{type(error).__name__}: {error}')
+        _record_sync(
+            import_list_id,
+            summary,
+            f'{type(error).__name__}: {error}',
+        )
         raise
 
 
 def sync_enabled_import_lists(
     should_stop: Optional[Callable[[], bool]] = None,
 ) -> List[Dict[str, Any]]:
-    """Sync all enabled Import Lists in stable order."""
+    """Sync all enabled Import Lists in stable order with one pacing clock."""
     should_stop = should_stop or (lambda: False)
+    request_clock: Dict[str, float] = {}
     summaries = []
     for definition in get_import_lists():
         if should_stop():
             break
         if not definition['enabled']:
             continue
-        summaries.append(sync_import_list(definition['id'], should_stop))
+        summaries.append(sync_import_list(
+            definition['id'],
+            should_stop,
+            request_clock,
+        ))
     return summaries

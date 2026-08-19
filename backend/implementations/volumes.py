@@ -35,7 +35,8 @@ from backend.base.files import (change_basefolder, create_folder,
 from backend.base.helpers import (PortablePool, extract_year_from_date,
                                   first_of_subarrays, to_number_cv_id)
 from backend.base.logging import LOGGER
-from backend.implementations.comicvine import ComicVine
+from backend.features.metadata import (MetadataIdentityStore,
+                                       get_metadata_provider)
 from backend.implementations.file_matching import scan_files
 from backend.implementations.file_processing import mass_process_files
 from backend.implementations.matching import match_title
@@ -1158,7 +1159,7 @@ class Library:
         # Raises RootFolderNotFound when ID is invalid
         root_folder = RootFolders().get_one(root_folder_id)
 
-        vd = run(ComicVine().fetch_volume(comicvine_id))
+        vd = run(get_metadata_provider().fetch_volume(comicvine_id))
 
         cursor = get_db()
         with cursor:
@@ -1209,12 +1210,18 @@ class Library:
 
             cursor.execute(
                 """
-                INSERT INTO volumes_covers(volume_id, cover)
-                VALUES (:volume_id, :cover);
+                INSERT INTO volumes_covers(
+                    volume_id, cover, provider_id, external_id, source_url
+                ) VALUES (
+                    :volume_id, :cover, :provider_id, :external_id, :source_url
+                );
                 """,
                 {
                     "volume_id": volume_id,
-                    "cover": vd["cover"]
+                    "cover": vd["cover"],
+                    "provider_id": vd.get("provider_id", "comicvine"),
+                    "external_id": vd.get("external_id", str(comicvine_id)),
+                    "source_url": vd.get("cover_source", {}).get("source_url")
                 }
             )
 
@@ -1249,6 +1256,20 @@ class Library:
                     for i in vd["issues"] or []
                 )
             )
+
+            MetadataIdentityStore.set(
+                'volume', volume_id,
+                vd.get('provider_id', 'comicvine'),
+                vd.get('external_id', comicvine_id),
+                source_url=vd['site_url']
+            )
+            for issue in cursor.execute(
+                "SELECT id, comicvine_id FROM issues WHERE volume_id = ?;",
+                (volume_id,)
+            ):
+                MetadataIdentityStore.set(
+                    'issue', issue['id'], 'comicvine', issue['comicvine_id']
+                )
 
             volume = Volume(volume_id)
 
@@ -1423,7 +1444,7 @@ def refresh_and_scan(
         return
 
     # Update volumes
-    cv = ComicVine()
+    cv = get_metadata_provider()
     volume_datas = filtered_volume_datas = run(
         cv.fetch_volumes(tuple(cv_to_id_fetch.keys()))
     )
@@ -1481,12 +1502,20 @@ def refresh_and_scan(
         """
         UPDATE volumes_covers
         SET
-            cover = :cover
+            cover = :cover,
+            provider_id = :provider_id,
+            external_id = :external_id,
+            source_url = :source_url
         WHERE volume_id = :volume_id;
         """,
         ({
             "volume_id": cv_to_id_fetch[vd["comicvine_id"]][0],
-            "cover": vd["cover"]
+            "cover": vd["cover"],
+            "provider_id": vd.get("provider_id", "comicvine"),
+            "external_id": vd.get(
+                "external_id", str(vd["comicvine_id"])
+            ),
+            "source_url": vd.get("cover_link")
         }
             for vd in volume_datas
         ))
@@ -1537,6 +1566,17 @@ def refresh_and_scan(
             for isd in issue_datas
         ))
 
+    commit()
+
+    # Refresh can discover new issues.  Keep their portable identities in step
+    # with the compatibility ComicVine column in the same database cycle.
+    cursor.execute("""
+        INSERT OR IGNORE INTO issue_external_ids(
+            issue_id, provider_id, external_id, source_url, updated_at
+        )
+        SELECT id, 'comicvine', CAST(comicvine_id AS TEXT), NULL, ?
+        FROM issues;
+        """, (round(current_time.timestamp()),))
     commit()
 
     # Delete issues from DB that aren't found in response

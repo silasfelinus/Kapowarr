@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Tuple, Type, Union
 
 from backend.base.definitions import (MonitorScheme, WeeklyReleaseData,
                                       WeeklyReleaseSource)
-from backend.base.file_extraction import process_issue_number
+from backend.base.file_extraction import extract_issue_number
 from backend.base.helpers import AsyncSession, force_range
 from backend.base.logging import LOGGER
 from backend.features.search import auto_search
@@ -216,7 +216,7 @@ def _find_issue_id(entry: Dict[str, Any]) -> Union[int, None]:
         if issue_id:
             return issue_id
 
-    calculated = process_issue_number(str(entry.get('issue_number') or ''))
+    calculated = extract_issue_number(str(entry.get('issue_number') or ''))
     if calculated is None:
         return None
     return cursor.execute(

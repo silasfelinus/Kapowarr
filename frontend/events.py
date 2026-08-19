@@ -10,10 +10,10 @@ from flask import request
 from backend.base.custom_exceptions import InvalidKeyValue
 from backend.base.logging import get_log_file_contents
 from backend.features.download_queue import get_download_history
+from backend.features.log_view import parse_log_entries
 from backend.features.system_events import get_comicvine_operation_stats
 from backend.features.tasks import get_task_history
 from frontend.api import api, auth, error_handler, return_api
-from frontend.logs import parse_log_entries
 from frontend.ui import render, ui
 
 

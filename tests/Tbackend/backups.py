@@ -69,6 +69,40 @@ class BackupTest(unittest.TestCase):
             backups.BackupScheduler().start(object())
         ensure.assert_called_once_with()
 
+    def test_ensure_backup_interval_preserves_existing_next_run(self):
+        connection = sqlite3.connect(':memory:')
+        self.addCleanup(connection.close)
+        connection.execute(
+            'CREATE TABLE task_intervals('
+            'task_name PRIMARY KEY, interval INTEGER NOT NULL, next_run INTEGER NOT NULL);'
+        )
+        cursor = connection.cursor()
+
+        with patch.object(backups, 'get_db', return_value=cursor), patch.object(
+            backups,
+            'commit',
+            side_effect=connection.commit,
+        ):
+            backups.ensure_backup_interval()
+            first = connection.execute(
+                'SELECT interval, next_run FROM task_intervals WHERE task_name = ?;',
+                (backups.DatabaseBackup.action,),
+            ).fetchone()
+            self.assertEqual(first[0], backups.AUTO_BACKUP_INTERVAL_SECONDS)
+
+            connection.execute(
+                'UPDATE task_intervals SET next_run = 12345 WHERE task_name = ?;',
+                (backups.DatabaseBackup.action,),
+            )
+            connection.commit()
+            backups.ensure_backup_interval()
+            second = connection.execute(
+                'SELECT interval, next_run FROM task_intervals WHERE task_name = ?;',
+                (backups.DatabaseBackup.action,),
+            ).fetchone()
+
+        self.assertEqual(second, (backups.AUTO_BACKUP_INTERVAL_SECONDS, 12345))
+
     def test_backup_folder_follows_configured_database_folder(self):
         DBConnection.file = os.path.join(self.temp.name, Constants.DB_NAME)
         self.assertEqual(

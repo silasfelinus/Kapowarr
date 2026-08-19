@@ -357,7 +357,8 @@ class post_processor_pipeline_composition(unittest.TestCase):
         self.assertEqual(PostProcessor.actions_success, [
             pp.remove_from_queue, pp.add_to_history, pp.move_to_dest,
             pp.rename_with_proper_extension, pp.add_file_to_database,
-            pp.convert_file, pp.set_file_properties
+            pp.convert_file, pp.record_download_file_provenance,
+            pp.set_file_properties
         ])
 
     def test_seeding_pipeline_is_empty_by_default(self):
@@ -396,7 +397,8 @@ class post_processor_pipeline_composition(unittest.TestCase):
         )
         self.assertEqual(PostProcessorTorrentsCopy.actions_seeding, [
             pp.add_to_history, pp.copy_file_torrent, pp.convert_file,
-            pp.set_file_properties, pp.reset_file_link
+            pp.record_download_file_provenance, pp.set_file_properties,
+            pp.reset_file_link
         ])
 
 

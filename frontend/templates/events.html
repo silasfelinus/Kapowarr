@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Events{% endblock %}
+{% block css %}
+	<link rel="stylesheet" href="{{ url_for('static', filename='css/events.css') }}">
+{% endblock %}
+{% block js %}
+	<script src="{{ url_for('static', filename='js/events.js') }}" defer></script>
+{% endblock %}
+
+{% block main %}
+<main>
+	<section class="events-toolbar" aria-label="Event controls">
+		<div class="events-controls">
+			<label>
+				<span>Type</span>
+				<select id="event-kind">
+					<option value="all">All</option>
+					<option value="task">Tasks</option>
+					<option value="download">Downloads</option>
+					<option value="system">System</option>
+				</select>
+			</label>
+			<label>
+				<span>Level</span>
+				<select id="event-level">
+					<option value="all">All</option>
+					<option value="warning">Warnings +</option>
+					<option value="error">Errors</option>
+				</select>
+			</label>
+			<label class="event-search-label">
+				<span>Search</span>
+				<input id="event-search" type="search" placeholder="event, source, detail…" spellcheck="false">
+			</label>
+			<label class="auto-refresh-label">
+				<input id="event-auto-refresh" type="checkbox">
+				<span>Auto refresh</span>
+			</label>
+		</div>
+		<div class="events-actions">
+			<button id="refresh-events" type="button">Refresh</button>
+		</div>
+	</section>
+
+	<section class="comicvine-activity" aria-label="ComicVine metadata activity">
+		<div class="section-heading">
+			<div>
+				<h2>ComicVine metadata activity</h2>
+				<p>Provider operations since this Kapowarr process started. A bulk operation can contain more than one raw HTTP request.</p>
+			</div>
+			<p id="comicvine-summary" aria-live="polite"></p>
+		</div>
+		<div id="comicvine-operations" class="operation-grid"></div>
+	</section>
+
+	<section class="events-help" aria-label="Events help">
+		<p>
+			Events combines existing task history, download history, and recent application warnings/errors.
+			It is a diagnostic timeline, not a second history database. FlareSolverr handles supported web-scraping flows;
+			ComicVine metadata traffic is measured separately here.
+		</p>
+		<p id="events-status" aria-live="polite"></p>
+	</section>
+
+	<section class="events-table-wrap" aria-label="Operational events">
+		<table class="events-table">
+			<thead>
+				<tr>
+					<th>Time</th>
+					<th>Type</th>
+					<th>Level</th>
+					<th>Source</th>
+					<th>Event</th>
+				</tr>
+			</thead>
+			<tbody id="event-rows"></tbody>
+		</table>
+		<p id="events-empty" class="hidden">No events match these filters.</p>
+	</section>
+</main>
+{% endblock main %}

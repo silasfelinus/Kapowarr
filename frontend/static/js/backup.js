@@ -1,5 +1,6 @@
 const BackupEls = {
 	create: document.querySelector('#backup-now'),
+	upload: document.querySelector('#backup-upload'),
 	status: document.querySelector('#backup-status'),
 	rows: document.querySelector('#backup-rows'),
 	empty: document.querySelector('#backup-empty')
@@ -30,6 +31,11 @@ function backupButton(label, class_name, handler) {
 	button.textContent = label;
 	button.onclick = handler;
 	return button;
+};
+
+async function sendBackupPost(endpoint) {
+	const response = await sendAPI('POST', endpoint, backup_api_key);
+	return response.json();
 };
 
 async function refreshBackups() {
@@ -83,10 +89,8 @@ function renderBackups(backups) {
 			disableBackupActions(true);
 			BackupEls.status.textContent = 'Validating backup and preparing restore…';
 			try {
-				const json = await sendAPI(
-					'POST',
-					`/system/backups/${encodeURIComponent(backup.filename)}/restore`,
-					backup_api_key
+				const json = await sendBackupPost(
+					`/system/backups/${encodeURIComponent(backup.filename)}/restore`
 				);
 				BackupEls.status.textContent =
 					`Restarting… current state was preserved as ${json.result.pre_restore_backup}.`;
@@ -126,6 +130,7 @@ function renderBackups(backups) {
 
 function disableBackupActions(disabled) {
 	BackupEls.create.disabled = disabled;
+	BackupEls.upload.disabled = disabled;
 	BackupEls.rows.querySelectorAll('button').forEach(button => {
 		button.disabled = disabled;
 	});
@@ -135,7 +140,7 @@ async function createBackupNow() {
 	disableBackupActions(true);
 	BackupEls.status.textContent = 'Creating a consistent database backup…';
 	try {
-		const json = await sendAPI('POST', '/system/backups', backup_api_key);
+		const json = await sendBackupPost('/system/backups');
 		BackupEls.status.textContent = `Created ${json.result.filename}.`;
 		await refreshBackups();
 	} catch (error) {
@@ -146,7 +151,43 @@ async function createBackupNow() {
 	};
 };
 
+async function restoreUploadedBackup() {
+	const file = BackupEls.upload.files[0];
+	if (!file)
+		return;
+
+	if (!confirm(
+		`Restore ${file.name}?\n\nKapowarr will validate it, preserve the current database, then restart.`
+	)) {
+		BackupEls.upload.value = '';
+		return;
+	};
+
+	disableBackupActions(true);
+	BackupEls.status.textContent = 'Uploading and validating backup…';
+	try {
+		const form = new FormData();
+		form.append('restore', file);
+		const response = await fetch(
+			`${url_base}/api/system/backups/restore?api_key=${encodeURIComponent(backup_api_key)}`,
+			{method: 'POST', body: form}
+		);
+		if (!response.ok)
+			throw response;
+		const json = await response.json();
+		BackupEls.status.textContent =
+			`Restarting… current state was preserved as ${json.result.pre_restore_backup}.`;
+		setTimeout(() => window.location.href = `${url_base}/system/status`, 5000);
+	} catch (error) {
+		console.error(error);
+		BackupEls.status.textContent = 'Uploaded backup was rejected. The current database was left in place.';
+		disableBackupActions(false);
+		BackupEls.upload.value = '';
+	};
+};
+
 BackupEls.create.onclick = createBackupNow;
+BackupEls.upload.onchange = restoreUploadedBackup;
 
 usingApiKey()
 .then(api_key => {

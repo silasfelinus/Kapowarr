@@ -12,8 +12,8 @@ const script = fs.readFileSync(
 	path.join(root, 'frontend/static/js/logs.js'),
 	'utf8'
 );
-const nav = fs.readFileSync(
-	path.join(root, 'frontend/templates/base.html'),
+const status = fs.readFileSync(
+	path.join(root, 'frontend/templates/status.html'),
 	'utf8'
 );
 
@@ -34,7 +34,8 @@ test('logs page changes capture level through the existing settings API', () => 
 	assert.match(script, /log_level: next_level/);
 });
 
-test('system navigation exposes logs as a first-class surface', () => {
-	assert.match(nav, /href="\{\{url_base\}\}\/system\/logs"/);
-	assert.match(nav, />Logs<\/a>/);
+test('system status exposes logs as a visible system surface', () => {
+	assert.match(status, /aria-label="Logs"/);
+	assert.match(status, /href="\{\{url_base\}\}\/system\/logs"/);
+	assert.match(status, />View Logs<\/a>/);
 });

@@ -14,6 +14,7 @@ const LIEls = {
 	},
 	proposal_list: document.querySelector('.proposal-list'),
 	proposal_note: document.querySelector('#continuous-review-note'),
+	import_result: document.querySelector('#import-result-message'),
 	select_all: document.querySelector('#selectall-input'),
 	search: {
 		window: document.querySelector('#cv-window'),
@@ -295,9 +296,46 @@ function importLibrary(api_key, rename=false) {
 		});
 
 	const was_continuous_review = continuousReviewOpen;
+	const submitted_paths = new Set(data.map(entry => entry.filepath));
 	hide([LIEls.views.list], [LIEls.views.loading]);
 	sendAPI('POST', '/libraryimport', api_key, {rename_files: rename}, data)
-	.then(response => {
+	.then(response => response.json())
+	.then(json => {
+		const imported_paths = new Set(
+			(json.result.imported || []).flatMap(entry => entry.filepaths)
+		);
+		const failures = [
+			...(json.result.failed || []),
+			...(json.result.skipped || [])
+		];
+
+		LIEls.proposal_list.querySelectorAll('tr').forEach(row => {
+			const item = rowid_to_filepath[row.dataset.rowid];
+			if (item && imported_paths.has(item.filepath))
+				row.remove();
+		});
+
+		if (failures.length) {
+			const failed_paths = new Set(
+				failures.flatMap(entry => entry.filepaths || [])
+			);
+			LIEls.proposal_list.querySelectorAll('tr').forEach(row => {
+				const item = rowid_to_filepath[row.dataset.rowid];
+				const checkbox = row.querySelector('input[type="checkbox"]');
+				if (item && submitted_paths.has(item.filepath))
+					checkbox.checked = failed_paths.has(item.filepath);
+			});
+			const first = failures[0];
+			LIEls.import_result.innerText =
+				`${imported_paths.size} imported · ${failures.length} volume${failures.length === 1 ? '' : 's'} need attention. ${first.reason}`;
+			hide(
+				[LIEls.views.loading],
+				[LIEls.views.list, LIEls.import_result]
+			);
+			return;
+		};
+
+		hide([LIEls.import_result]);
 		continuousReviewOpen = false;
 		if (was_continuous_review && continuousTaskId !== null) {
 			continuousPanelDismissed = false;

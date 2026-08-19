@@ -398,8 +398,9 @@ def propose_library_import(
 
 def import_library(
     matches: List[CVFileMapping],
-    rename_files: bool = False
-) -> None:
+    rename_files: bool = False,
+    continue_on_error: bool = False
+) -> Dict[str, List[Dict[str, Any]]]:
     """Add volume to library and import linked files.
 
     Args:
@@ -415,90 +416,93 @@ def import_library(
         cvid_to_filepath.setdefault(m['id'], []).append(m['filepath'])
     LOGGER.debug(f'id_to_filepath: {cvid_to_filepath}')
 
+    result: Dict[str, List[Dict[str, Any]]] = {
+        'imported': [], 'skipped': [], 'failed': []
+    }
     root_folders = RootFolders().get_all()
     for cv_id, files in cvid_to_filepath.items():
-        # Find root folder that media is in
-        for root_folder in root_folders:
-            if folder_is_inside_folder(root_folder.folder, files[0]):
-                break
-        else:
-            continue
-
-        lcf = common_folder(files)
-        if not rename_files and force_suffix(lcf) == root_folder.folder:
-            # Back out. Volume folder will be equal to root folder.
-            continue
-
-        volume_already_added = False
-
         try:
-            volume_id = Library.add(
-                comicvine_id=cv_id,
-                root_folder_id=root_folder.id,
-                monitored=True,
-                monitor_scheme=MonitorScheme.ALL,
-                monitor_new_issues=True,
-                volume_folder=lcf if not rename_files else None
-            )
-            commit()
+            for root_folder in root_folders:
+                if folder_is_inside_folder(root_folder.folder, files[0]):
+                    break
+            else:
+                result['skipped'].append({
+                    'id': cv_id, 'filepaths': files,
+                    'reason': 'Files are outside the configured root folders'
+                })
+                continue
 
-        except VolumeAlreadyAdded as e:
-            # The volume that the files are for is already in the library, while
-            # the files aren't matched to it. This has two reasons:
-            # 1. The files are for an existing volume but in a common folder.
-            #    Like some users that download files externally and put them all
-            #    in a to-be-imported folder. Their idea is that they use LI to
-            #    move and rename the files to the proper volume folder because
-            #    they don't want to move it themselves, even though the volume
-            #    is already in their library.
-            # 2. The files matched to the wrong volume, and the wrong volume
-            #    happens to already be in the library.
-            # The propability of bullet 1 happening is quite low, so moving the
-            # files into the volume folder is worth more to users of bullet 1
-            # than it is a bad thing for the users that experience bullet 2. So
-            # solution is to move the file to the volume folder of the match,
-            # and rename if that was chosen.
-            volume_already_added = True
-            volume_id = e.volume_id
+            lcf = common_folder(files)
+            if not rename_files and force_suffix(lcf) == root_folder.folder:
+                result['skipped'].append({
+                    'id': cv_id, 'filepaths': files,
+                    'reason': 'The volume folder would equal the root folder'
+                })
+                continue
+
+            volume_already_added = False
+            try:
+                volume_id = Library.add(
+                    comicvine_id=cv_id,
+                    root_folder_id=root_folder.id,
+                    monitored=True,
+                    monitor_scheme=MonitorScheme.ALL,
+                    monitor_new_issues=True,
+                    volume_folder=lcf if not rename_files else None
+                )
+                commit()
+            except VolumeAlreadyAdded as exc:
+                volume_already_added = True
+                volume_id = exc.volume_id
+
+            if rename_files or volume_already_added:
+                vf = Library.get_volume(volume_id).vd.folder
+                if volume_already_added or folder_is_inside_folder(vf, lcf):
+                    file_changes = {
+                        filepath: (
+                            join(vf, basename(filepath))
+                            if not folder_is_inside_folder(vf, filepath) else
+                            filepath
+                        )
+                        for filepath in files
+                    }
+                else:
+                    file_changes = change_basefolder(files, lcf, vf)
+
+                for old, new in file_changes.items():
+                    if old != new:
+                        rename_file(old, new)
+                        delete_empty_parent_folders(
+                            dirname(old), root_folder.folder
+                        )
+                files = list(file_changes.values())
+
+            scan_files(volume_id, filepath_filter=files)
+            if rename_files:
+                mass_rename(volume_id, filepath_filter=files)
+
+            result['imported'].append({
+                'id': cv_id,
+                'volume_id': volume_id,
+                'filepaths': cvid_to_filepath[cv_id]
+            })
 
         except CVRateLimitReached:
-            # Importers must know that ComicVine throttled us. Silently breaking
-            # here made a partial import look like a successful one in the UI.
             raise
+        except Exception as exc:
+            if not continue_on_error:
+                raise
+            LOGGER.exception(
+                'Library import failed for ComicVine ID %s and paths %s',
+                cv_id, files
+            )
+            result['failed'].append({
+                'id': cv_id,
+                'filepaths': cvid_to_filepath[cv_id],
+                'reason': str(exc) or exc.__class__.__name__
+            })
 
-        if rename_files or volume_already_added:
-            # Move files not already in the volume folder into the volume folder
-            vf = Library.get_volume(volume_id).vd.folder
-
-            if volume_already_added or folder_is_inside_folder(vf, lcf):
-                file_changes = {
-                    f: (
-                        join(vf, basename(f))
-                        if not folder_is_inside_folder(vf, f) else
-                        f
-                    )
-                    for f in files
-                }
-
-            else:
-                file_changes = change_basefolder(files, lcf, vf)
-
-            for old, new in file_changes.items():
-                if old != new:
-                    rename_file(old, new)
-                    delete_empty_parent_folders(
-                        dirname(old), root_folder.folder
-                    )
-
-            files = list(file_changes.values())
-
-        scan_files(volume_id, filepath_filter=files)
-
-        if rename_files:
-            # Rename the filenames themselves
-            mass_rename(volume_id, filepath_filter=files)
-
-    return
+    return result
 
 
 class ContinuousLibraryImport(Task):

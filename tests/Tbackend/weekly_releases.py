@@ -1,9 +1,11 @@
 import unittest
+from datetime import date
 
 from bs4 import BeautifulSoup
 
 from backend.implementations.weekly_releases import (
-    _find_latest_weekly_release_article, _parse_weekly_release_lines,
+    _find_latest_weekly_release_article, _parse_mylar_release_data,
+    _parse_weekly_release_lines,
     fetch_getcomics_weekly_releases)
 
 
@@ -138,6 +140,37 @@ class parse_weekly_release_lines(unittest.TestCase):
 
         self.assertEqual(len(releases), 1)
         self.assertEqual(releases[0]['issue_number'], '1AU')
+
+
+class parse_mylar_release_data(unittest.TestCase):
+    def test_maps_publisher_dates_and_comicvine_ids(self):
+        releases = _parse_mylar_release_data([{
+            'series': 'Absolute Batman',
+            'issue': '23',
+            'publisher': 'DC Comics',
+            'shipdate': '08/19/2026',
+            'coverdate': '2026-10-01',
+            'comicid': '4050',
+            'issueid': '9001',
+            'seriesyear': '2024',
+            'link': 'https://comicvine.example/issue/9001'
+        }], date(2026, 8, 19))
+
+        self.assertEqual(len(releases), 1)
+        self.assertEqual(releases[0]['publisher'], 'DC Comics')
+        self.assertEqual(releases[0]['release_date'], '2026-08-19')
+        self.assertEqual(releases[0]['week_start'], '2026-08-17')
+        self.assertEqual(releases[0]['comicvine_volume_id'], 4050)
+        self.assertEqual(releases[0]['comicvine_issue_id'], 9001)
+        self.assertIsNone(releases[0]['availability_source'])
+
+    def test_invalid_rows_are_skipped(self):
+        releases = _parse_mylar_release_data([
+            {'publisher': 'DC Comics'},
+            'not a mapping'
+        ], date(2026, 8, 19))
+
+        self.assertEqual(releases, [])
 
 
 # =====================

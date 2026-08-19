@@ -23,9 +23,12 @@ from backend.features.download_queue import (DownloadHandler,
 from backend.features.library_import import (import_library,
                                              propose_library_import)
 from backend.features.mass_edit import run_mass_editor_action
-from backend.features.pull_list import get_pull_list
+from backend.features.pull_list import (act_on_release,
+                                        delete_publisher_subscription,
+                                        get_publishers, get_pull_list,
+                                        set_publisher_subscription)
 from backend.features.search import manual_search
-from backend.features.tasks import (Task, TaskHandler,
+from backend.features.tasks import (AutoSearchIssue, Task, TaskHandler,
                                     delete_task_history, get_task_history,
                                     get_task_planning, task_library)
 from backend.implementations.blocklist import (add_to_blocklist,
@@ -1532,8 +1535,61 @@ def api_indexer(id: int):
 @error_handler
 @auth
 def api_pull_list():
-    result = get_pull_list()
+    result = get_pull_list(request.args.get('week_start'))
     return return_api(result)
+
+
+@api.route('/pulllist/publishers', methods=['GET', 'POST', 'DELETE'])
+@error_handler
+@auth
+def api_pull_list_publishers():
+    if request.method == 'GET':
+        return return_api(get_publishers())
+
+    data = request.get_json()
+    if not isinstance(data, dict):
+        raise InvalidKeyValue('body', data)
+    publisher = data.get('publisher')
+    if not isinstance(publisher, str) or not publisher.strip():
+        raise InvalidKeyValue('publisher', publisher)
+
+    if request.method == 'DELETE':
+        delete_publisher_subscription(publisher)
+        return return_api({})
+
+    root_folder_id = data.get('root_folder_id')
+    if not isinstance(root_folder_id, int):
+        raise InvalidKeyValue('root_folder_id', root_folder_id)
+    RootFolders().get_one(root_folder_id)
+    auto_search = data.get('auto_search', False)
+    if not isinstance(auto_search, bool):
+        raise InvalidKeyValue('auto_search', auto_search)
+    return return_api(set_publisher_subscription(
+        publisher, root_folder_id, auto_search
+    ), code=201)
+
+
+@api.route('/pulllist/<int:entry_id>/action', methods=['POST'])
+@error_handler
+@auth
+def api_pull_list_action(entry_id: int):
+    data = request.get_json()
+    if not isinstance(data, dict):
+        raise InvalidKeyValue('body', data)
+    action = data.get('action')
+    if action not in ('monitor', 'grab'):
+        raise InvalidKeyValue('action', action)
+    root_folder_id = data.get('root_folder_id')
+    if root_folder_id is not None:
+        if not isinstance(root_folder_id, int):
+            raise InvalidKeyValue('root_folder_id', root_folder_id)
+        RootFolders().get_one(root_folder_id)
+
+    volume_id, issue_id = act_on_release(entry_id, action, root_folder_id)
+    task_id = None
+    if action == 'grab' and issue_id is not None:
+        task_id = TaskHandler().add(AutoSearchIssue(volume_id, issue_id))
+    return return_api({'task_id': task_id}, code=201 if task_id else 200)
 
 
 # =====================

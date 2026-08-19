@@ -545,15 +545,43 @@ CREATE TABLE IF NOT EXISTS indexers(
 );
 CREATE TABLE IF NOT EXISTS pull_list_entries(
     id INTEGER PRIMARY KEY,
-    volume_id INTEGER NOT NULL,
+    volume_id INTEGER,
+    issue_id INTEGER,
+    comicvine_volume_id INTEGER,
+    comicvine_issue_id INTEGER,
     issue_number VARCHAR(20),
     release_title VARCHAR(255) NOT NULL,
+    publisher VARCHAR(255),
+    release_date DATE,
+    cover_date DATE,
+    week_start DATE NOT NULL,
     year INTEGER(5),
     source VARCHAR(50) NOT NULL,
     link TEXT NOT NULL,
+    availability_source VARCHAR(50),
+    availability_link TEXT,
     checked_at INTEGER NOT NULL,
 
     FOREIGN KEY (volume_id) REFERENCES volumes(id)
-        ON DELETE CASCADE
+        ON DELETE SET NULL,
+    FOREIGN KEY (issue_id) REFERENCES issues(id)
+        ON DELETE SET NULL
+);
+CREATE TABLE IF NOT EXISTS publisher_subscriptions(
+    publisher VARCHAR(255) PRIMARY KEY COLLATE NOCASE,
+    root_folder_id INTEGER NOT NULL,
+    auto_search BOOL NOT NULL DEFAULT 0,
+
+    FOREIGN KEY (root_folder_id) REFERENCES root_folders(id)
+        ON DELETE RESTRICT
+);
+CREATE TABLE IF NOT EXISTS publisher_automation_history(
+    release_key VARCHAR(255) NOT NULL,
+    action VARCHAR(20) NOT NULL,
+    success BOOL NOT NULL,
+    message TEXT,
+    attempted_at INTEGER NOT NULL,
+
+    PRIMARY KEY (release_key, action)
 );
 """

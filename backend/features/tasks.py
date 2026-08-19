@@ -18,7 +18,8 @@ from backend.base.custom_exceptions import (InvalidComicVineApiKey,
 from backend.base.helpers import Singleton, get_subclasses
 from backend.base.logging import LOGGER
 from backend.features.download_queue import DownloadHandler
-from backend.features.pull_list import check_weekly_pull_list
+from backend.features.pull_list import (check_weekly_pull_list,
+                                        process_publisher_subscriptions)
 from backend.features.search import auto_search
 from backend.implementations.conversion import mass_convert
 from backend.implementations.naming import mass_rename
@@ -490,13 +491,13 @@ class SearchAll(Task):
 
 
 class WeeklyPullListCheck(Task):
-    "Fetch this week's releases and cross-reference them against the library"
+    "Refresh releases and apply opt-in publisher automation"
 
     stop = False
     message = ''
     action = 'weekly_pull_list_check'
     display_title = 'Weekly Pull List Check'
-    category = ''
+    category = 'download'
 
     @property
     def volume_id(self) -> None:
@@ -509,13 +510,14 @@ class WeeklyPullListCheck(Task):
     def __init__(self) -> None:
         return
 
-    def run(self) -> None:
-        self.message = "Checking this week's releases against the monitored library"
+    def run(self) -> List[Tuple[str, int, Union[int, None]]]:
+        self.message = "Refreshing the publisher release calendar"
         WebSocket().emit(TaskStatusEvent(self.message))
 
-        check_weekly_pull_list()
-
-        return
+        entries = check_weekly_pull_list()
+        self.message = "Applying publisher subscriptions"
+        WebSocket().emit(TaskStatusEvent(self.message))
+        return process_publisher_subscriptions(entries)
 
 
 # =====================

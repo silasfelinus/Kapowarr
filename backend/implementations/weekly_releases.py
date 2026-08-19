@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Fetching and parsing "what's releasing this week" from GetComics.
+Fetching publisher-aware release metadata plus GetComics availability.
 
 The raw fetch/parse logic lives here (mirroring how `getcomics.py` and
 `indexers.py` hold the raw fetch/parse logic for the search feature); the
@@ -10,15 +10,15 @@ live in `backend.features.pull_list`, mirroring how `search_getcomics()`/
 `search_indexer()` here plug into `SearchGetComics`/`SearchIndexers` in
 `backend.features.search`.
 
-The source and line shape were live-checked on 2026-08-18. GetComics exposes
-weekly-pack posts through its ``dc-week`` tag archive, and issue rows include
-download/read-online text after the issue number. The home page remains a
-fallback if the tag archive moves again, and the parser stays tolerant of the
-trailing action text rather than coupling itself to individual links.
+The calendar feed is the community release provider used by Mylar. GetComics
+weekly-pack posts remain a distinct availability overlay: their presence says
+a download page exists, not that they are the authoritative release catalogue.
 """
 
+from datetime import date, datetime, timedelta
+from json import JSONDecodeError, loads as json_loads
 from re import compile as re_compile
-from typing import List, Union
+from typing import Any, Dict, List, Union
 
 from bs4 import BeautifulSoup, Tag
 
@@ -33,6 +33,111 @@ _RELEASE_LINE_REGEX = re_compile(
     r"^(?P<series>.+?)\s*#\s*(?P<issue>[\w.]+)\s*"
     r"(?:\((?P<year>\d{4})\))?\s*(?::.*)?$"
 )
+
+
+def _week_start(value: date) -> str:
+    return (value - timedelta(days=value.weekday())).isoformat()
+
+
+def _normalise_date(value: Any) -> Union[str, None]:
+    """Return a provider date as ISO-8601, accepting Mylar's known shapes."""
+    if not value:
+        return None
+
+    text = str(value).strip()
+    for date_format in ('%Y-%m-%d', '%m/%d/%Y', '%Y%m%d'):
+        try:
+            return datetime.strptime(text[:10], date_format).date().isoformat()
+        except ValueError:
+            continue
+    return None
+
+
+def _optional_int(value: Any) -> Union[int, None]:
+    try:
+        return int(value) if value not in (None, '') else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_mylar_release_data(
+    payload: Any,
+    requested_date: date
+) -> List[WeeklyReleaseData]:
+    """Convert Mylar's release-provider JSON into Kapowarr release rows."""
+    if isinstance(payload, dict):
+        payload = payload.get('results', payload.get('releases', []))
+    if not isinstance(payload, list):
+        return []
+
+    releases: List[WeeklyReleaseData] = []
+    seen = set()
+    requested_week = _week_start(requested_date)
+    for raw in payload:
+        if not isinstance(raw, dict):
+            continue
+        series = str(raw.get('series') or '').strip()
+        if not series:
+            continue
+        issue_number = str(raw.get('issue') or '').strip() or None
+        release_date = _normalise_date(raw.get('shipdate'))
+        key = (
+            _optional_int(raw.get('issueid')),
+            series.lower(), issue_number, release_date
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+
+        releases.append(WeeklyReleaseData(
+            series=series,
+            issue_number=issue_number,
+            year=_optional_int(raw.get('seriesyear') or raw.get('year')),
+            link=str(raw.get('link') or ''),
+            source='Mylar Release Provider',
+            publisher=(str(raw.get('publisher')).strip()
+                       if raw.get('publisher') else None),
+            release_date=release_date,
+            cover_date=_normalise_date(raw.get('coverdate')),
+            week_start=(
+                _week_start(datetime.strptime(release_date, '%Y-%m-%d').date())
+                if release_date else requested_week
+            ),
+            comicvine_volume_id=_optional_int(raw.get('comicid')),
+            comicvine_issue_id=_optional_int(raw.get('issueid')),
+            availability_source=None,
+            availability_link=None
+        ))
+
+    return releases
+
+
+async def fetch_mylar_weekly_releases(
+    session: AsyncSession,
+    requested_date: date
+) -> List[WeeklyReleaseData]:
+    """Fetch one publisher-aware week from the provider used by Mylar."""
+    body = await session.get_text(
+        Constants.MYLAR_RELEASES_URL,
+        params={
+            'week': requested_date.strftime('%U'),
+            'year': requested_date.year
+        },
+        quiet_fail=True
+    )
+    if not body:
+        LOGGER.warning(
+            'Could not fetch release week %s from the Mylar provider',
+            _week_start(requested_date)
+        )
+        return []
+
+    try:
+        payload: Union[List[Any], Dict[str, Any]] = json_loads(body)
+    except JSONDecodeError:
+        LOGGER.warning('Mylar release provider returned invalid JSON')
+        return []
+    return _parse_mylar_release_data(payload, requested_date)
 
 
 def _parse_weekly_release_lines(
@@ -70,7 +175,11 @@ def _parse_weekly_release_lines(
         # list releases without a <ul>/<li> structure.
         for block in content.find_all(["p", "div"]):
             text = block.get_text("\n", strip=True)
-            lines.extend(line.strip() for line in text.split("\n") if line.strip())
+            lines.extend(
+                line.strip()
+                for line in text.split("\n")
+                if line.strip()
+            )
 
     releases: List[WeeklyReleaseData] = []
     seen = set()
@@ -95,7 +204,15 @@ def _parse_weekly_release_lines(
             issue_number=issue_number,
             year=int(year_str) if year_str else None,
             link=link,
-            source=source_name
+            source=source_name,
+            publisher=None,
+            release_date=None,
+            cover_date=None,
+            week_start=_week_start(date.today()),
+            comicvine_volume_id=None,
+            comicvine_issue_id=None,
+            availability_source=source_name,
+            availability_link=link
         ))
 
     return releases

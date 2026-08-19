@@ -9,7 +9,9 @@ const reader = {
 	previous: document.querySelector('#reader-prev'),
 	next: document.querySelector('#reader-next'),
 	fit: document.querySelector('#reader-fit'),
-	fit_label: document.querySelector('.reader-fit-label')
+	fit_label: document.querySelector('.reader-fit-label'),
+	fullscreen: document.querySelector('#reader-fullscreen'),
+	fullscreen_label: document.querySelector('.reader-fullscreen-label')
 };
 
 const url_base = document.querySelector('#url_base').dataset.value;
@@ -65,6 +67,52 @@ function readerPageUrl(index) {
 
 function readerDocumentUrl() {
 	return `${url_base}/api/reader/issues/${issue_id}/document?api_key=${encodeURIComponent(api_key)}`;
+};
+
+function getFullscreenElement() {
+	return document.fullscreenElement || document.webkitFullscreenElement || null;
+};
+
+function getFullscreenRequest() {
+	return document.documentElement.requestFullscreen
+		|| document.documentElement.webkitRequestFullscreen
+		|| null;
+};
+
+function getFullscreenExit() {
+	return document.exitFullscreen || document.webkitExitFullscreen || null;
+};
+
+function updateFullscreenControl() {
+	const request = getFullscreenRequest();
+	if (!request) {
+		reader.fullscreen.classList.add('hidden');
+		return;
+	};
+
+	reader.fullscreen.classList.remove('hidden');
+	const active = Boolean(getFullscreenElement());
+	const label = active ? 'Exit fullscreen' : 'Enter fullscreen';
+	reader.fullscreen.setAttribute('aria-label', label);
+	reader.fullscreen.title = label;
+	reader.fullscreen_label.innerText = active ? ' Exit' : ' Fullscreen';
+};
+
+async function toggleFullscreen() {
+	try {
+		if (getFullscreenElement()) {
+			const exit = getFullscreenExit();
+			if (exit)
+				await exit.call(document);
+			return;
+		};
+
+		const request = getFullscreenRequest();
+		if (request)
+			await request.call(document.documentElement);
+	} catch (error) {
+		console.warn('Could not change reader fullscreen state', error);
+	};
 };
 
 function updateControls() {
@@ -196,6 +244,10 @@ reader.back.onclick = () => history.back();
 reader.previous.onclick = previousPage;
 reader.next.onclick = nextPage;
 reader.fit.onchange = () => setFit(reader.fit.value);
+reader.fullscreen.onclick = toggleFullscreen;
+
+document.addEventListener('fullscreenchange', updateFullscreenControl);
+document.addEventListener('webkitfullscreenchange', updateFullscreenControl);
 
 reader.stage.addEventListener('touchstart', event => {
 	const touch = event.changedTouches[0];
@@ -222,9 +274,16 @@ document.addEventListener('keydown', event => {
 		previousPage();
 	else if (event.key === 'ArrowRight' || event.key === ' ')
 		nextPage();
-	else if (event.key === 'Escape')
-		reader.back.click();
+	else if (event.key === 'Escape') {
+		if (getFullscreenElement()) {
+			event.preventDefault();
+			toggleFullscreen();
+		} else {
+			reader.back.click();
+		};
+	};
 });
 
 setFit(reader.fit.value);
+updateFullscreenControl();
 loadReader();

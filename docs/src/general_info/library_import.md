@@ -22,13 +22,15 @@ Allows you to supply a specific folder in a root folder to scan, instead of all 
 
 Continuous Auto-Import is intended for large existing libraries. It saves its folder queue and review holds in the Kapowarr database so browser navigation or an application restart does not throw away completed work.
 
-Before searching ComicVine, continuous import looks for local series identity in the same folder. Mylar-style `series.json`, `metadata.json`, extensionless `cvinfo`, and `cvinfo.txt` can supply an exact ComicVine volume ID. Current `4050-N`, historical Mylar `49-N`, full ComicVine volume URLs, and bare numeric IDs are understood. If multiple local sidecars disagree, or the sidecar title does not safely describe the parsed files in that folder, Kapowarr does not trust the ID unattended and records the reason in the application log.
+Before searching ComicVine, continuous import looks for local series identity in the same folder or comic archive. Mylar-style `series.json`, `metadata.json`, extensionless `cvinfo`, `cvinfo.txt`, and legacy `cvinfo.xml` can supply an exact ComicVine volume ID. Kapowarr also understands standard `ComicInfo.xml` beside the files or embedded in CBZ/ZIP archives when its standard `Web` field contains a ComicVine **volume** URL. ComicInfo does not define a dedicated ComicVine-ID field, so a title/year alone is never silently converted into an external ID.
 
-Local metadata avoids an unnecessary ComicVine search, but adding a new volume still needs its volume and issue metadata. Continuous import therefore paces both search requests and those add-time metadata fetches independently. This deliberately leaves room for ordinary Kapowarr activity instead of treating the documented ComicVine ceiling as a target.
+Current `4050-N`, historical Mylar `49-N`, full ComicVine volume URLs, and bare numeric IDs are understood for Mylar-style sidecars. ComicVine issue/story-arc URLs are not accepted as volume identity. If independent local metadata sources disagree, if embedded ComicInfo files disagree with each other, or if the local metadata title does not safely describe the parsed files in that folder, Kapowarr does not trust the ID unattended and records the reason in the application log.
+
+Local metadata avoids an unnecessary ComicVine search, but adding a new volume still needs its volume and issue metadata. Continuous import therefore paces both search requests and those add-time metadata fetches independently. This deliberately leaves room for ordinary Kapowarr activity instead of treating the ComicVine ceiling as a target.
 
 For unattended matching, title/language/special-version/issue-capacity checks are hard safety gates. Once a candidate passes those gates, missing or different year/volume evidence is not by itself a reason to reject it; re-releases and reorganized libraries commonly disagree on start year. A unique non-contradictory winner can be imported automatically. Exact ties and explicit contradictions, such as files containing issue numbers beyond the candidate's reported issue count, remain Review Holds.
 
-FlareSolverr does not proxy the ComicVine API. It is used for Cloudflare-protected website scraping, so configuring FlareSolverr does not change ComicVine API rate limits.
+Kapowarr's shared web-request machinery may consult FlareSolverr when supported requests encounter Cloudflare protection. FlareSolverr does not increase or bypass ComicVine API quotas, so ComicVine metadata operations still require their own pacing.
 
 ## Importing
 

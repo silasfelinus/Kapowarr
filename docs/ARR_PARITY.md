@@ -18,6 +18,7 @@ Recent merged milestones have materially changed the roadmap:
 | #74 | File provenance | Supported: successful acquisitions persist source context on durable file IDs without secret-bearing acquisition URLs. |
 | #75 | Explainable file quality | Supported foundation: evidence-backed format/source/GetComics traits, no fake aggregate score or automatic replacement. |
 | #76 | ComicInfo import identity | Supported for sidecar ComicInfo and embedded CBZ/ZIP ComicInfo when `Web` contains an exact ComicVine volume URL; legacy `cvinfo.xml` is also consumed. |
+| #78 | CBR/RAR ComicInfo intake | Supported: embedded ComicInfo is read through Kapowarr's bundled RAR tooling using isolated temporary extraction, without modifying source archives. |
 
 Metron is also a native metadata provider with provider-neutral identity storage and ComicVine-aware fallback paths. ComicVine remains the default authority where a ComicVine-linked identity is required.
 
@@ -51,7 +52,7 @@ Silence is not a decision. Missing expected features should become visible roadm
 | Import Lists | Supported / expanding | Remote CBL is the first comic-native provider. Automatic Add deliberately requires exact embedded ComicVine volume identity; unresolved title-only entries do not trigger fuzzy metadata storms. |
 | Indexers | Supported | Newznab and Torznab/Prowlarr/Jackett feeds support enable/disable, categories where explicit, and priority. |
 | Media Management | Supported | Naming, root folders, deleted-issue behavior, file dates, chmod/chown, conversion/extraction and format preference are substantial. |
-| Metadata | Partial / improving | ComicVine and native Metron identities coexist. Library Import consumes Mylar JSON/cvinfo/cvinfo.xml and standard ComicInfo beside files or embedded in CBZ/ZIP when an exact ComicVine volume URL is present. Portable metadata write-back and embedded CBR/RAR ComicInfo remain gaps. |
+| Metadata | Partial / improving | ComicVine and native Metron identities coexist. Library Import consumes Mylar JSON/cvinfo/cvinfo.xml and standard ComicInfo beside files or embedded in CBZ/ZIP/CBR/RAR when an exact ComicVine volume URL is present. Portable metadata write-back remains the primary portability gap. |
 | Notifications | Supported | Discord/generic webhook notifications exist and should grow only with useful event coverage. |
 | Profiles | Missing / deferred | Do not clone video quality profiles literally. Add per-series acquisition profiles only if they materially reduce repetitive setup after quality policy is defined. |
 | Quality | Partial / foundation complete | Per-file provenance and read-only quality explanations exist. Unknown evidence remains unknown; no aggregate score or automatic replacement policy exists yet. |
@@ -66,14 +67,14 @@ Silence is not a decision. Missing expected features should become visible roadm
 | Search + acquisition | Supported / expanding: GetComics, Newznab, Torznab and client routing are first-class. Watched-folder import and additional lawful sources remain roadmap work. |
 | Completed-download handling | Supported / partial: torrent/Usenet lifecycle, seed-safe import, failure handling and durable file provenance are substantial; watched-folder external import remains missing. |
 | History + blocklist | Supported: acquisition history/blocklist stay focused while System Events provides the operational cross-stream timeline. |
-| Portable metadata | Partial: provider-neutral IDs are durable and exact ComicInfo identity can be consumed, but Kapowarr does not yet write portable ComicInfo/series metadata back out. Embedded ComicInfo in CBR/RAR is also not yet consumed. |
+| Portable metadata | Partial: provider-neutral IDs are durable and exact ComicInfo identity can be consumed from sidecars and common ZIP/RAR comic containers, but Kapowarr does not yet write portable ComicInfo/series metadata back out. |
 | Reader | Intentionally secondary | Reader parity is not an `*arr` convention and should not displace aggregation priorities. |
 
 ## Near-term roadmap
 
 Prioritize work that reduces metadata dependency, support friction or data-loss risk before ornamental parity:
 
-1. **Portable metadata write-back + CBR/RAR ComicInfo intake** — make Kapowarr-managed libraries more self-describing while preserving third-party metadata and never overwriting richer data blindly.
+1. **Portable metadata write-back** — make Kapowarr-managed libraries self-describing while preserving useful third-party metadata and never overwriting richer data blindly. Start with preview/export and explicit preservation rules before archive mutation.
 2. **Watched-folder / external completed-download import** — safely ingest files obtained outside Kapowarr and route them through the same matching, provenance and post-processing rules.
 3. **ComicVine failure taxonomy and telemetry follow-up** — if real-world import tests still hit suspicious cooldowns, distinguish confirmed ComicVine rate-limit status from transport/JSON failures and expose endpoint/provider-operation evidence clearly.
 4. **Profiles + Quality policy** — only after evidence is durable, decide whether known traits should be combined at all, define strictly-better comparisons and rollback/keep-old semantics, then consider per-series profiles.

@@ -41,6 +41,18 @@ Providers subclass `MetadataProvider`, register lazily with `MetadataProviderReg
 
 Provider credentials and enable/fallback policy are intentionally not stored in the identity tables. Those are runtime configuration concerns; changing or disabling a provider must not orphan library records that already carry its identity.
 
-## Portability direction
+## Portable metadata
 
-Provider-neutral database identity is durable, and Library Import can consume exact ComicVine identity from Mylar sidecars and standard ComicInfo `Web` URLs beside files or embedded in CBZ/ZIP/CBR/RAR archives. The next portability work is preservation-aware file-level write-back so Kapowarr-managed libraries become more self-describing without blindly replacing richer third-party metadata.
+Provider-neutral database identity is durable, and Library Import can consume exact ComicVine identity from Mylar sidecars and standard ComicInfo `Web` URLs beside files or embedded in CBZ/ZIP/CBR/RAR archives.
+
+Kapowarr can also generate a conservative Mylar-compatible `series.json` (schema version `1.0.2`) from a managed volume. The export fills only fields Kapowarr actually knows. A ComicVine `comicid` is written only when the volume truly has ComicVine identity; Metron IDs are never disguised as ComicVine IDs. Unknown lifecycle, imprint, age-rating, collection and publication-run data remain unknown rather than being inferred.
+
+Portable series metadata is available through authenticated API endpoints:
+
+- `GET /api/volumes/<id>/portable-metadata/series` previews the generated payload and reports whether a `series.json` already exists;
+- `GET /api/volumes/<id>/portable-metadata/series/download` downloads the generated payload without modifying the library;
+- `POST /api/volumes/<id>/portable-metadata/series` materializes `series.json` in the volume folder.
+
+Write-back is preservation-first. POST defaults to `overwrite: false`; an existing `series.json` is returned as `existing_preserved` and is not touched. Explicit overwrite uses a same-folder temporary file followed by atomic replacement. Creating a new file uses exclusive creation so a concurrently-created third-party file cannot be clobbered. A successful write is passed through Kapowarr's normal file scanner so it becomes ordinary volume metadata in the library database.
+
+Archive-level ComicInfo write-back remains intentionally separate. It should not begin until preservation/merge semantics for existing embedded metadata are explicit.

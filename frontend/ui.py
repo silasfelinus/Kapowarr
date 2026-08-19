@@ -157,3 +157,4 @@ import frontend.wanted  # noqa: E402,F401  # isort: skip
 import frontend.manual_import  # noqa: E402,F401  # isort: skip
 import frontend.acquisition_preferences  # noqa: E402,F401  # isort: skip
 import frontend.logs  # noqa: E402,F401  # isort: skip
+import frontend.backups  # noqa: E402,F401  # isort: skip

@@ -29,7 +29,7 @@ from concurrent.futures import (ThreadPoolExecutor,
 from typing import Any, Dict, List
 
 from backend.base.logging import LOGGER
-from backend.implementations.comicvine import ComicVine
+from backend.features.metadata import get_metadata_provider
 from backend.implementations.external_clients import ExternalClients
 from backend.implementations.root_folders import RootFolders
 from backend.internals.settings import Settings
@@ -128,7 +128,7 @@ def _check_comicvine() -> List[Dict[str, str]]:
         }]
 
     try:
-        key_works = ComicVine().test_key()
+        key_works = get_metadata_provider().test_key()
 
     except Exception:
         LOGGER.exception('Health check: unable to reach ComicVine')

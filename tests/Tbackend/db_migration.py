@@ -1,6 +1,6 @@
 import sqlite3
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from backend.internals import db_migration
 from backend.internals.db import KapowarrCursor
@@ -94,6 +94,35 @@ class weekly_calendar_migration(unittest.TestCase):
         ).fetchone()
         self.assertEqual(history['release_key'], 'gwar-4')
         self.assertEqual(history['success'], 1)
+
+
+class migration_completion(unittest.TestCase):
+    @patch('backend.internals.settings.Settings')
+    def test_migration_does_not_vacuum_before_web_start(self, Settings):
+        settings = Settings.return_value
+        settings.sv.database_version = 48
+        cursor = MagicMock()
+        handler = MagicMock()
+
+        with patch.object(
+            db_migration.DatabaseMigrationHandler,
+            'handlers',
+            {48: handler}
+        ), patch.object(
+            db_migration.DatabaseMigrationHandler,
+            'latest_db_version',
+            return_value=49
+        ), patch.object(
+            db_migration,
+            'get_db',
+            return_value=cursor
+        ):
+            db_migration.DatabaseMigrationHandler.migrate()
+
+        handler.assert_called_once_with()
+        settings.update.assert_called_once_with({'database_version': 49})
+        settings.clear_cache.assert_called_once_with()
+        cursor.execute.assert_not_called()
 
 
 if __name__ == '__main__':

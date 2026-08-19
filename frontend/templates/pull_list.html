@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% from "base.html" import icon_button %}
-{% block title %}Pull List{% endblock %}
+{% block title %}Release Calendar{% endblock %}
 {% block css %}
 	<link rel="stylesheet" href="{{ url_for('static', filename='css/pull_list.css') }}">
 {% endblock %}
@@ -10,44 +10,101 @@
 
 {% block pre_build_rows %}
 <tr class="pull-list-entry">
-	<td class="volume-column">
-		<a></a>
-	</td>
+	<td class="date-column"></td>
+	<td class="publisher-column"></td>
+	<td class="title-column"><a></a></td>
 	<td class="issue-column"></td>
-	<td class="source-column">
-		<a target="_blank"></a>
-	</td>
-	<td class="checked-column"></td>
+	<td class="library-column"></td>
+	<td class="source-column"></td>
+	<td class="availability-column"></td>
+	<td class="action-column"></td>
 </tr>
+<div class="publisher-rule">
+	<span class="publisher-rule-name"></span>
+	<span class="publisher-rule-count"></span>
+	<select class="publisher-rule-mode" aria-label="Publisher automation mode">
+		<option value="off">Off</option>
+		<option value="add">Auto-add &amp; monitor</option>
+		<option value="grab">Auto-add &amp; grab</option>
+	</select>
+</div>
 {% endblock %}
 
 {% block main %}
 <main>
 	<section class="tool-bar-container" aria-label="Tool bar">
 		<div class="tool-bar">
-			{{ icon_button("refresh-button", "Refresh the list", "refresh.svg", "Refresh") }}
-			{{ icon_button("check-button", "Check for new releases now", "search.svg", "Check Now") }}
+			{{ icon_button("refresh-button", "Refresh the displayed week", "refresh.svg", "Refresh") }}
+			{{ icon_button("check-button", "Refresh the release catalogue now", "search.svg", "Check Now") }}
 			{{ icon_button("reading-lists-button", "Open story arcs and portable reading lists", "files.svg", "Reading Lists") }}
 		</div>
 	</section>
 	<div class="main-window">
+		<section class="calendar-heading">
+			<div class="week-navigation">
+				<button id="previous-week" type="button">Previous</button>
+				<button id="current-week" type="button">This week</button>
+				<button id="next-week" type="button">Next</button>
+				<strong id="week-label"></strong>
+			</div>
+			<button id="publisher-rules-toggle" type="button">Publisher automation</button>
+		</section>
+
+		<section id="publisher-rules" class="publisher-rules hidden">
+			<h2>Publisher automation</h2>
+			<p>
+				Rules are opt-in. Auto-add monitors newly released series; auto-grab
+				also searches enabled download sources for each released issue. Rules
+				apply to the current week on the next scheduled or manual check.
+			</p>
+			<label>
+				Root folder
+				<select id="publisher-root-folder"></select>
+			</label>
+			<div id="publisher-rule-list"></div>
+		</section>
+
+		<section class="release-filters" aria-label="Release filters">
+			<input id="release-search" type="search" placeholder="Filter titles" aria-label="Filter release titles">
+			<select id="publisher-filter" aria-label="Filter publisher">
+				<option value="">All publishers</option>
+			</select>
+			<select id="library-filter" aria-label="Filter library status">
+				<option value="">All releases</option>
+				<option value="library">In my library</option>
+				<option value="missing">Not in my library</option>
+			</select>
+		</section>
+		<p class="source-explanation">
+			Release metadata comes from the publisher-aware Mylar release provider.
+			Download availability is checked separately against enabled sources.
+		</p>
+
 		<p id="pull-list-empty-message" class="hidden">
-			No wanted releases found yet. Run "Check Now" or wait for the
-			weekly scheduled check (see System &gt; Tasks) to look for new
-			releases of your monitored volumes.
+			No releases are stored for this week. Run “Check Now” to refresh the
+			publisher-aware calendar.
 		</p>
 		<div class="table-container icon-text-color">
 			<table>
 				<thead>
 					<tr>
-						<th class="volume-column">Volume</th>
+						<th class="date-column">Release</th>
+						<th class="publisher-column">Publisher</th>
+						<th class="title-column">Title</th>
 						<th class="issue-column">Issue</th>
-						<th class="source-column">Source</th>
-						<th class="checked-column">Checked At</th>
+						<th class="library-column">Library</th>
+						<th class="source-column">Calendar source</th>
+						<th class="availability-column">Availability</th>
+						<th class="action-column">Actions</th>
 					</tr>
 				</thead>
 				<tbody id="pull-list"></tbody>
 			</table>
+		</div>
+		<div class="pagination">
+			<button id="previous-page" type="button">Previous page</button>
+			<span id="page-label"></span>
+			<button id="next-page" type="button">Next page</button>
 		</div>
 	</div>
 </main>

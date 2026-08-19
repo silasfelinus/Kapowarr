@@ -1284,7 +1284,7 @@ def _migrate_expand_pull_list_calendar():
 
         DROP TABLE old_pull_list_entries;
 
-        CREATE TABLE publisher_subscriptions(
+        CREATE TABLE IF NOT EXISTS publisher_subscriptions(
             publisher VARCHAR(255) PRIMARY KEY COLLATE NOCASE,
             root_folder_id INTEGER NOT NULL,
             auto_search BOOL NOT NULL DEFAULT 0,
@@ -1293,7 +1293,7 @@ def _migrate_expand_pull_list_calendar():
                 ON DELETE RESTRICT
         );
 
-        CREATE TABLE publisher_automation_history(
+        CREATE TABLE IF NOT EXISTS publisher_automation_history(
             release_key VARCHAR(255) NOT NULL,
             action VARCHAR(20) NOT NULL,
             success BOOL NOT NULL,

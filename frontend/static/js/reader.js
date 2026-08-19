@@ -9,7 +9,9 @@ const reader = {
 	previous: document.querySelector('#reader-prev'),
 	next: document.querySelector('#reader-next'),
 	fit: document.querySelector('#reader-fit'),
-	fit_label: document.querySelector('.reader-fit-label')
+	fit_label: document.querySelector('.reader-fit-label'),
+	fullscreen: document.querySelector('#reader-fullscreen'),
+	fullscreen_label: document.querySelector('.reader-fullscreen-label')
 };
 
 const url_base = document.querySelector('#url_base').dataset.value;
@@ -65,6 +67,51 @@ function readerPageUrl(index) {
 
 function readerDocumentUrl() {
 	return `${url_base}/api/reader/issues/${issue_id}/document?api_key=${encodeURIComponent(api_key)}`;
+};
+
+function fullscreenElement() {
+	return document.fullscreenElement || document.webkitFullscreenElement || null;
+};
+
+function fullscreenSupported() {
+	const root = document.documentElement;
+	return Boolean(root.requestFullscreen || root.webkitRequestFullscreen);
+};
+
+function syncFullscreenControl() {
+	if (!fullscreenSupported()) {
+		reader.fullscreen.classList.add('hidden');
+		return;
+	};
+
+	const active = Boolean(fullscreenElement());
+	reader.fullscreen.classList.remove('hidden');
+	reader.fullscreen.title = active ? 'Exit fullscreen' : 'Enter fullscreen';
+	reader.fullscreen.setAttribute(
+		'aria-label',
+		active ? 'Exit fullscreen' : 'Enter fullscreen'
+	);
+	reader.fullscreen_label.innerText = active ? 'Exit' : 'Fullscreen';
+};
+
+async function toggleFullscreen() {
+	try {
+		if (fullscreenElement()) {
+			if (document.exitFullscreen)
+				await document.exitFullscreen();
+			else if (document.webkitExitFullscreen)
+				await document.webkitExitFullscreen();
+			return;
+		};
+
+		const root = document.documentElement;
+		if (root.requestFullscreen)
+			await root.requestFullscreen({navigationUI: 'hide'});
+		else if (root.webkitRequestFullscreen)
+			await root.webkitRequestFullscreen();
+	} catch (error) {
+		console.error('Fullscreen request failed', error);
+	};
 };
 
 function updateControls() {
@@ -196,6 +243,10 @@ reader.back.onclick = () => history.back();
 reader.previous.onclick = previousPage;
 reader.next.onclick = nextPage;
 reader.fit.onchange = () => setFit(reader.fit.value);
+reader.fullscreen.onclick = toggleFullscreen;
+
+document.addEventListener('fullscreenchange', syncFullscreenControl);
+document.addEventListener('webkitfullscreenchange', syncFullscreenControl);
 
 reader.stage.addEventListener('touchstart', event => {
 	const touch = event.changedTouches[0];
@@ -222,9 +273,10 @@ document.addEventListener('keydown', event => {
 		previousPage();
 	else if (event.key === 'ArrowRight' || event.key === ' ')
 		nextPage();
-	else if (event.key === 'Escape')
+	else if (event.key === 'Escape' && !fullscreenElement())
 		reader.back.click();
 });
 
+syncFullscreenControl();
 setFit(reader.fit.value);
 loadReader();

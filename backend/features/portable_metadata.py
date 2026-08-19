@@ -11,9 +11,9 @@ from __future__ import annotations
 
 from html.parser import HTMLParser
 from json import dumps
-from os import O_CREAT, O_EXCL, O_WRONLY, fdopen, fsync, open as _unused
+from os import O_CREAT, O_EXCL, O_WRONLY, fdopen, fsync, open as os_open
 from os import remove, replace
-from os.path import exists, isdir, join
+from os.path import dirname, exists, isdir, join
 from tempfile import NamedTemporaryFile
 from typing import Any, Dict, Optional
 
@@ -99,11 +99,6 @@ def build_series_json(volume_id: int) -> Dict[str, Any]:
     }
 
 
-def _series_path(volume_id: int) -> str:
-    volume = Volume(volume_id, check_existence=True)
-    return join(volume.vd.folder, SERIES_JSON_FILENAME)
-
-
 def preview_series_json(volume_id: int) -> Dict[str, Any]:
     """Return generated metadata and filesystem preservation status."""
     volume = Volume(volume_id, check_existence=True)
@@ -116,7 +111,7 @@ def preview_series_json(volume_id: int) -> Dict[str, Any]:
     }
 
 
-def _serialized_payload(volume_id: int) -> str:
+def serialized_series_json(volume_id: int) -> str:
     return dumps(
         build_series_json(volume_id),
         indent=4,
@@ -127,7 +122,7 @@ def _serialized_payload(volume_id: int) -> str:
 def _exclusive_create(path: str, content: str) -> bool:
     """Create ``path`` without ever clobbering a concurrently created file."""
     try:
-        fd = __import__('os').open(path, O_WRONLY | O_CREAT | O_EXCL, 0o644)
+        fd = os_open(path, O_WRONLY | O_CREAT | O_EXCL, 0o644)
     except FileExistsError:
         return False
 
@@ -140,13 +135,12 @@ def _exclusive_create(path: str, content: str) -> bool:
 
 def _atomic_replace(path: str, content: str) -> None:
     """Explicit overwrite path: write beside the target, then atomically swap."""
-    folder = __import__('os').path.dirname(path)
     temp_path = ''
     try:
         with NamedTemporaryFile(
             'w',
             encoding='utf-8',
-            dir=folder,
+            dir=dirname(path),
             prefix='.series.json.',
             suffix='.tmp',
             delete=False,
@@ -176,7 +170,7 @@ def write_series_json(volume_id: int, overwrite: bool = False) -> Dict[str, Any]
             'exists': False,
         }
 
-    content = _serialized_payload(volume_id)
+    content = serialized_series_json(volume_id)
     existed = exists(path)
     if existed and not overwrite:
         return {

@@ -129,5 +129,65 @@ class migration_completion(unittest.TestCase):
         cursor.execute.assert_not_called()
 
 
+class metadata_provider_migration(unittest.TestCase):
+    def setUp(self):
+        self.connection = sqlite3.connect(':memory:')
+        self.connection.row_factory = sqlite3.Row
+        self.connection.executescript("""
+            CREATE TABLE volumes(
+                id INTEGER PRIMARY KEY,
+                comicvine_id INTEGER NOT NULL,
+                site_url TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE issues(
+                id INTEGER PRIMARY KEY,
+                volume_id INTEGER NOT NULL,
+                comicvine_id INTEGER NOT NULL UNIQUE
+            );
+            CREATE TABLE volumes_covers(
+                volume_id INTEGER UNIQUE NOT NULL,
+                cover BLOB
+            );
+            INSERT INTO volumes VALUES (
+                1, 4050, 'https://comicvine.example/volume/4050'
+            );
+            INSERT INTO issues VALUES (2, 1, 9001);
+            INSERT INTO volumes_covers VALUES (1, X'CAFE');
+        """)
+        self.patch = patch.object(
+            db_migration, 'get_db', side_effect=self._cursor
+        )
+        self.patch.start()
+
+    def tearDown(self):
+        self.patch.stop()
+        self.connection.close()
+
+    def _cursor(self):
+        cursor = KapowarrCursor(self.connection)
+        cursor.row_factory = sqlite3.Row
+        return cursor
+
+    def test_backfills_legacy_ids_and_cover_provenance_restart_safely(self):
+        db_migration._migrate_add_metadata_provider_identities()
+        db_migration._migrate_add_metadata_provider_identities()
+
+        volume_identity = self.connection.execute(
+            'SELECT * FROM volume_external_ids;'
+        ).fetchone()
+        issue_identity = self.connection.execute(
+            'SELECT * FROM issue_external_ids;'
+        ).fetchone()
+        cover = self.connection.execute(
+            'SELECT * FROM volumes_covers;'
+        ).fetchone()
+
+        self.assertEqual(volume_identity['provider_id'], 'comicvine')
+        self.assertEqual(volume_identity['external_id'], '4050')
+        self.assertEqual(issue_identity['external_id'], '9001')
+        self.assertEqual(cover['provider_id'], 'comicvine')
+        self.assertEqual(cover['external_id'], '4050')
+
+
 if __name__ == '__main__':
     unittest.main()

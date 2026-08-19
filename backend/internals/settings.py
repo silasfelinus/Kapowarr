@@ -177,6 +177,27 @@ task_intervals = {
     'weekly_pull_list_check': 604800 # every week
 }
 
+SENSITIVE_SETTING_KEYS = frozenset((
+    'api_key',
+    'auth_password',
+    'comicvine_api_key',
+    'metron_api_token',
+    'metron_password',
+    'proxy_password'
+))
+
+
+def _redact_settings_for_log(data: Mapping[str, Any]) -> Dict[str, Any]:
+    """Return settings changes without ever copying credential values."""
+    return {
+        key: (
+            Constants.CREDENTIAL_REPLACEMENT
+            if key in SENSITIVE_SETTING_KEYS and value
+            else value
+        )
+        for key, value in data.items()
+    }
+
 
 class Settings(metaclass=Singleton):
     def __init__(self) -> None:
@@ -309,7 +330,9 @@ class Settings(metaclass=Singleton):
 
         self.clear_cache()
 
-        LOGGER.info(f'Settings changed: {formatted_data}')
+        LOGGER.info(
+            'Settings changed: %s', _redact_settings_for_log(formatted_data)
+        )
 
         return
 
@@ -357,7 +380,7 @@ class Settings(metaclass=Singleton):
         self.update({"api_key": api_key}, from_public=False)
         self.clear_cache()
 
-        LOGGER.info(f'Setting api key regenerated: {api_key}')
+        LOGGER.info('Setting api key regenerated')
         return
 
     def backup_hosting_settings(self) -> None:

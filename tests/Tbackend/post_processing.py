@@ -89,6 +89,138 @@ class add_dl_to_blocklist_fn(unittest.TestCase):
             BlocklistReason.LINK_BROKEN
         )
 
+    def test_a_corrupt_download_blocklists_under_its_own_reason(self):
+        # The link worked; what it served did not. Recorded separately
+        # from LINK_BROKEN so the blocklist page distinguishes a dead
+        # indexer link from a bad rip.
+        dl = _make_download(
+            web_link='wl', web_title='wt', web_sub_title='ws',
+            download_link='dl', volume_id=2, issue_id=5
+        )
+        with patch.object(pp, 'add_to_blocklist') as mock_add:
+            pp.add_corrupt_dl_to_blocklist(dl)
+        mock_add.assert_called_once_with(
+            'wl', 'wt', 'ws', 'dl', dl.source_type, 2, 5,
+            BlocklistReason.DOWNLOAD_CORRUPT
+        )
+
+
+# region Integrity gate
+class failed_integrity_check_fn(unittest.TestCase):
+    @staticmethod
+    def _settings(enabled: bool):
+        return patch.object(
+            pp, 'Settings',
+            return_value=MagicMock(
+                sv=MagicMock(verify_downloaded_archives=enabled)
+            )
+        )
+
+    def test_returns_none_when_every_file_passes(self):
+        dl = _make_download(files=['/a.cbz', '/b.cbz'])
+        ok = MagicMock(ok=True)
+        with self._settings(True), \
+             patch.object(pp, 'verify_archive', return_value=ok) as mock_verify:
+            self.assertIsNone(pp.failed_integrity_check(dl))
+        self.assertEqual(mock_verify.call_count, 2)
+
+    def test_returns_the_first_failing_result(self):
+        dl = _make_download(files=['/a.cbz', '/b.cbz', '/c.cbz'])
+        bad = MagicMock(ok=False)
+        with self._settings(True), \
+             patch.object(pp, 'verify_archive', side_effect=[
+                 MagicMock(ok=True), bad, MagicMock(ok=True)
+             ]) as mock_verify:
+            self.assertIs(pp.failed_integrity_check(dl), bad)
+        # Stops at the first failure rather than checking the rest.
+        self.assertEqual(mock_verify.call_count, 2)
+
+    def test_the_setting_switches_the_check_off_entirely(self):
+        dl = _make_download(files=['/a.cbz'])
+        with self._settings(False), \
+             patch.object(pp, 'verify_archive') as mock_verify:
+            self.assertIsNone(pp.failed_integrity_check(dl))
+        mock_verify.assert_not_called()
+
+    def test_a_download_with_no_files_passes(self):
+        dl = _make_download(files=[])
+        with self._settings(True), \
+             patch.object(pp, 'verify_archive') as mock_verify:
+            self.assertIsNone(pp.failed_integrity_check(dl))
+        mock_verify.assert_not_called()
+
+
+class integrity_failure_pipeline(unittest.TestCase):
+    def test_a_failing_download_is_blocklisted_and_never_registered(self):
+        """The whole point of the gate: `add_file_to_database` must not
+        run, or the corrupt file becomes the issue's file, the issue
+        stops being `wanted`, and nothing ever re-searches it."""
+        dl = _make_download()
+        failure = MagicMock(detail='CRC check failed', **{'status.value': 'corrupt'})
+        recorder = MagicMock()
+        with patch.object(pp, 'failed_integrity_check', return_value=failure), \
+             patch.object(PostProcessor, 'actions_success', [recorder.success]), \
+             patch.object(PostProcessor, 'actions_integrity_failed',
+                          [recorder.reject]), \
+             patch.object(pp, 'send_notification') as mock_notify:
+            PostProcessor.success(dl)
+
+        recorder.reject.assert_called_once_with(dl)
+        recorder.success.assert_not_called()
+        self.assertEqual(
+            mock_notify.call_args.args[0], NotificationEvent.IMPORT_FAILED
+        )
+
+    def test_the_download_is_marked_failed_before_history_is_written(self):
+        # `add_to_history` derives its `success` column from the state,
+        # so a rejection filed while the state still says IMPORTING
+        # would be recorded as a successful import.
+        from backend.base.definitions import DownloadState
+
+        dl = _make_download()
+        seen_state = {}
+
+        def _record_state(download):
+            seen_state['value'] = download.state
+
+        with patch.object(pp, 'failed_integrity_check',
+                          return_value=MagicMock(detail='x')), \
+             patch.object(PostProcessor, 'actions_integrity_failed',
+                          [_record_state]), \
+             patch.object(pp, 'send_notification'):
+            PostProcessor.success(dl)
+
+        self.assertEqual(seen_state['value'], DownloadState.FAILED_STATE)
+
+    def test_the_rejection_pipeline_blocklists_and_deletes(self):
+        self.assertEqual(PostProcessor.actions_integrity_failed, [
+            pp.remove_from_queue, pp.add_to_history,
+            pp.add_corrupt_dl_to_blocklist, pp.delete_file
+        ])
+        # It must not contain the step that would register the file.
+        self.assertNotIn(
+            pp.add_file_to_database, PostProcessor.actions_integrity_failed
+        )
+
+    def test_torrents_complete_is_gated_like_a_direct_download(self):
+        # Its success() still runs before move_torrent_to_dest imports
+        # anything, so the gate is in the right place.
+        self.assertTrue(PostProcessorTorrentsComplete.verify_integrity_on_success)
+
+    def test_torrents_copy_is_not_gated_on_success(self):
+        """copy_file_torrent has already imported the file by the time
+        success() runs, so gating there would blocklist and delete the
+        seeding copy while the imported one stays in the library."""
+        self.assertFalse(PostProcessorTorrentsCopy.verify_integrity_on_success)
+
+        dl = _make_download(files=['/a.cbz'])
+        with patch.object(pp, 'failed_integrity_check') as mock_check, \
+             patch.object(PostProcessorTorrentsCopy, 'actions_success', []), \
+             patch.object(pp, 'send_notification'):
+            PostProcessorTorrentsCopy.success(dl)
+
+        mock_check.assert_not_called()
+
 
 # region Moving
 class move_to_dest_fn(unittest.TestCase):
@@ -408,6 +540,7 @@ class post_processor_run_actions(unittest.TestCase):
         recorder = MagicMock()
         with patch.object(PostProcessor, 'actions_success',
                            [recorder.a, recorder.b]), \
+             patch.object(pp, 'failed_integrity_check', return_value=None), \
              patch.object(pp, 'send_notification') as mock_notify:
             PostProcessor.success(dl)
         recorder.assert_has_calls([call.a(dl), call.b(dl)])

@@ -166,10 +166,12 @@ class Constants:
 
     USENET_CATEGORY = "kapowarr"
     """
-    The SABnzbd category downloads are submitted under. SABnzbd has no
-    per-job "download to this path" parameter (unlike the torrent
-    clients' `target_folder`), so this category's folder must be mapped,
-    in SABnzbd's own Config > Categories, to Kapowarr's download folder.
+    The Usenet-client category downloads are submitted under. Neither
+    SABnzbd nor NZBGet has a per-job "download to this path" parameter
+    (unlike the torrent clients' `target_folder`), so this category's
+    folder must be mapped, in the client's own settings (SABnzbd's
+    Config > Categories, NZBGet's Settings > Categories `DestDir`), to
+    Kapowarr's download folder.
     """
 
 

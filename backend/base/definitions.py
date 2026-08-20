@@ -212,6 +212,25 @@ class FileConstants:
     without dot-prefix
     """
 
+    TAR_ARCHIVE_SUFFIXES = (
+        ".cbt", ".tar",
+        ".tar.gz", ".tgz",
+        ".tar.bz2", ".tbz2",
+        ".tar.xz", ".txz"
+    )
+    """
+    TAR-family container suffixes, lowercase and with dot-prefix.
+
+    Matched against a whole lowercased filename rather than via
+    `splitext`, because the compressed forms are double extensions:
+    `splitext('x.tar.gz')[1]` is `.gz`, which on its own says nothing
+    about tar. Kept here rather than in one feature module because both
+    `backend.features.comic_reader` (which displays these) and
+    `backend.features.archive_integrity` (which verifies them) must agree
+    on exactly this list -- a file the reader will open but the verifier
+    does not recognise is a silent gap, and vice versa.
+    """
+
     CB_TO_ARCHIVE_EXTENSIONS = {
         "cbz": "zip",
         "cbr": "rar",

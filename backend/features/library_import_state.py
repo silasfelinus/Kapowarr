@@ -12,11 +12,10 @@ from __future__ import annotations
 
 from json import dumps, loads
 from time import time
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from backend.features.library_import_metadata import is_library_import_artifact
 from backend.internals.db import commit, get_db
-
 
 JOB_RUNNING = 'running'
 JOB_PAUSED = 'paused'
@@ -125,6 +124,22 @@ def get_running_job() -> Optional[Dict[str, Any]]:
 
 def get_paused_job() -> Optional[Dict[str, Any]]:
     return get_latest_job((JOB_PAUSED,))
+
+
+def get_active_job() -> Optional[Dict[str, Any]]:
+    """Return the job the UI should be showing, running or not.
+
+    A finished pass still has everything worth looking at: what it checked, what
+    it imported, and which folders it held. Those live here rather than in the
+    task queue, which drops a task the moment it finishes -- so anything that
+    can only reach a job through a live task loses sight of the pass as soon as
+    it ends, and again on every page reload.
+    """
+    return (
+        get_running_job()
+        or get_paused_job()
+        or get_latest_job((JOB_RUNNING, JOB_PAUSED, JOB_COMPLETE))
+    )
 
 
 def mark_job_running(job_id: int) -> None:
@@ -332,15 +347,78 @@ def _decode_review_items(raw: str) -> List[Dict[str, Any]]:
     return [item for item in decoded if isinstance(item, dict)]
 
 
-def get_review_items(job_id: int, prune_resolved: bool = True) -> List[Dict[str, Any]]:
-    """Return durable review rows, pruning resolved files and decoration.
+def _imported_filepaths() -> Set[str]:
+    return {
+        str(row['filepath'])
+        for row in get_db().execute("SELECT filepath FROM files;").fetchall()
+    }
+
+
+def _prune_review_rows(
+    rows: Sequence[Any],
+    imported_paths: Set[str]
+) -> Tuple[Dict[int, List[Dict[str, Any]]], bool]:
+    """Reconcile held rows against the canonical ``files`` table.
 
     Manual review uses the normal import endpoint, not a special persistent-job
-    mutation. Looking at the review queue therefore reconciles it against the
-    canonical ``files`` table. Artwork/cache paths that should never have been
-    volume-discovery candidates are pruned by the same classifier used by the
-    continuous importer.
+    mutation, so the queue has to be reconciled when it is read. Artwork/cache
+    paths that should never have been volume-discovery candidates are dropped by
+    the same classifier the continuous importer uses.
     """
+    cursor = get_db()
+    kept: Dict[int, List[Dict[str, Any]]] = {}
+    changed = False
+    now = round(time())
+
+    for row in rows:
+        row_id = int(row['id'])
+        items = _decode_review_items(row['review_items'])
+        filtered = [
+            item
+            for item in items
+            if (
+                item.get('filepath') not in imported_paths
+                and not is_library_import_artifact(
+                    str(item.get('filepath') or '')
+                )
+            )
+        ]
+
+        if len(filtered) != len(items):
+            changed = True
+            if filtered:
+                cursor.execute(
+                    """
+                    UPDATE library_import_items
+                    SET review_items = ?, updated_at = ?
+                    WHERE id = ?;
+                    """,
+                    (dumps(filtered), now, row_id)
+                )
+            else:
+                cursor.execute(
+                    """
+                    UPDATE library_import_items
+                    SET
+                        state = ?,
+                        review_reason = NULL,
+                        review_items = '[]',
+                        updated_at = ?
+                    WHERE id = ?;
+                    """,
+                    (ITEM_DONE, now, row_id)
+                )
+
+        kept[row_id] = filtered
+
+    return kept, changed
+
+
+def get_review_items(
+    job_id: int,
+    prune_resolved: bool = True
+) -> List[Dict[str, Any]]:
+    """Return one job's durable review rows, reconciled against `files`."""
     cursor = get_db()
     rows = cursor.execute(
         """
@@ -352,63 +430,92 @@ def get_review_items(job_id: int, prune_resolved: bool = True) -> List[Dict[str,
         (job_id, ITEM_REVIEW)
     ).fetchall()
 
-    imported_paths = set()
-    if prune_resolved and rows:
-        imported_paths = {
-            str(row['filepath'])
-            for row in cursor.execute("SELECT filepath FROM files;").fetchall()
-        }
+    if not prune_resolved:
+        return [
+            item
+            for row in rows
+            for item in _decode_review_items(row['review_items'])
+        ]
 
-    changed = False
-    result: List[Dict[str, Any]] = []
-    now = round(time())
-    for row in rows:
-        items = _decode_review_items(row['review_items'])
-        if prune_resolved:
-            filtered = [
-                item
-                for item in items
-                if (
-                    item.get('filepath') not in imported_paths
-                    and not is_library_import_artifact(
-                        str(item.get('filepath') or '')
-                    )
-                )
-            ]
-            if len(filtered) != len(items):
-                changed = True
-                items = filtered
-                if items:
-                    cursor.execute(
-                        """
-                        UPDATE library_import_items
-                        SET review_items = ?, updated_at = ?
-                        WHERE id = ?;
-                        """,
-                        (dumps(items), now, row['id'])
-                    )
-                else:
-                    cursor.execute(
-                        """
-                        UPDATE library_import_items
-                        SET
-                            state = ?,
-                            review_reason = NULL,
-                            review_items = '[]',
-                            updated_at = ?
-                        WHERE id = ?;
-                        """,
-                        (ITEM_DONE, now, row['id'])
-                    )
-
-        result.extend(items)
-
+    kept, changed = _prune_review_rows(
+        rows,
+        _imported_filepaths() if rows else set()
+    )
     if changed:
         cursor.execute(
             "UPDATE library_import_jobs SET updated_at = ? WHERE id = ?;",
-            (now, job_id)
+            (round(time()), job_id)
         )
         commit()
+
+    return [item for row in rows for item in kept[int(row['id'])]]
+
+
+def count_outstanding_review_folders() -> int:
+    """Count held folders without decoding or reconciling any of them.
+
+    The Library Import page polls while a pass runs, and the review queue can be
+    hundreds of folders. Decoding every held row and cross-checking it against
+    the whole `files` table on each poll is a lot of work to render one number,
+    so this counts in SQL instead. It can briefly read high if holds were
+    resolved by hand elsewhere; opening the review list reconciles them and the
+    count settles.
+    """
+    ensure_schema()
+    row = get_db().execute(
+        """
+        SELECT COUNT(DISTINCT folder) AS amount
+        FROM library_import_items
+        WHERE state = ?;
+        """,
+        (ITEM_REVIEW,)
+    ).fetchone()
+    return int(row['amount']) if row is not None else 0
+
+
+def get_outstanding_review_items() -> List[Dict[str, Any]]:
+    """Return every folder still waiting for review, across all passes.
+
+    Review holds belong to the job that produced them, but a hold outlives its
+    pass: nothing imported it, so the next pass finds the same files unimported
+    and queues the same folder again. Scoping the review queue to one job
+    therefore made the whole backlog disappear the moment a pass finished or a
+    new one started, even though the rows were still sitting in SQLite.
+
+    Newest pass wins per folder, so a re-evaluated folder replaces its earlier
+    hold rather than showing up twice, and whole folders are kept together so a
+    filename group is never split across passes.
+    """
+    ensure_schema()
+    cursor = get_db()
+    rows = cursor.execute(
+        """
+        SELECT id, job_id, folder, review_items
+        FROM library_import_items
+        WHERE state = ?
+        ORDER BY job_id DESC, position;
+        """,
+        (ITEM_REVIEW,)
+    ).fetchall()
+
+    kept, changed = _prune_review_rows(
+        rows,
+        _imported_filepaths() if rows else set()
+    )
+    if changed:
+        commit()
+
+    result: List[Dict[str, Any]] = []
+    seen_folders: Set[str] = set()
+    for row in rows:
+        folder = str(row['folder'])
+        if folder in seen_folders:
+            continue
+        items = kept[int(row['id'])]
+        if not items:
+            continue
+        seen_folders.add(folder)
+        result.extend(items)
 
     return result
 

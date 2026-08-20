@@ -178,6 +178,11 @@ class ComicVine(MetadataProvider):
         'site_detail_url',
         'start_year'
     ))
+    unavailable_errors = (CVRateLimitReached, InvalidComicVineApiKey)
+
+    @classmethod
+    def is_configured(cls) -> bool:
+        return bool(Settings().get_settings().comicvine_api_key)
 
     def __init__(self, comicvine_api_key: Union[str, None] = None) -> None:
         """Start interacting with ComicVine.

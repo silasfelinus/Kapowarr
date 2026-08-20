@@ -11,10 +11,15 @@ from backend.features.metadata import (MetadataCapability,
 from backend.internals.db import KapowarrCursor
 
 
+class DummyUnavailable(RuntimeError):
+    """This dummy provider cannot answer right now."""
+
+
 class DummyProvider(MetadataProvider):
     provider_id = 'test-provider'
     display_name = 'Test Provider'
     capabilities = (MetadataCapability.SEARCH_VOLUMES,)
+    unavailable_errors = (DummyUnavailable,)
 
     def test_key(self):
         return True
@@ -67,6 +72,59 @@ class metadata_provider_registry(unittest.TestCase):
         finally:
             MetadataProviderRegistry._providers = original
 
+    def test_configured_provider_ids_skip_the_unconfigured_and_order_stably(
+        self
+    ):
+        original = dict(MetadataProviderRegistry._providers)
+        try:
+            MetadataProviderRegistry._providers = {
+                'metron': type('M', (DummyProvider,), {'provider_id': 'metron'}),
+                'unconfigured': type('U', (DummyProvider,), {
+                    'provider_id': 'unconfigured',
+                    'is_configured': classmethod(lambda cls: False)
+                }),
+                'comicvine': type('C', (DummyProvider,), {
+                    'provider_id': 'comicvine'
+                })
+            }
+            with patch.object(
+                MetadataProviderRegistry, '_load_builtins'
+            ):
+                self.assertEqual(
+                    MetadataProviderRegistry.configured_provider_ids(),
+                    ['comicvine', 'metron']
+                )
+        finally:
+            MetadataProviderRegistry._providers = original
+
+    def test_configured_provider_ids_filter_on_capability(self):
+        original = dict(MetadataProviderRegistry._providers)
+        try:
+            MetadataProviderRegistry._providers = {
+                'comicvine': type('C', (DummyProvider,), {
+                    'provider_id': 'comicvine'
+                }),
+                'covers-only': type('K', (DummyProvider,), {
+                    'provider_id': 'covers-only',
+                    'capabilities': (MetadataCapability.COVERS,)
+                })
+            }
+            with patch.object(MetadataProviderRegistry, '_load_builtins'):
+                self.assertEqual(
+                    MetadataProviderRegistry.configured_provider_ids(
+                        MetadataCapability.SEARCH_VOLUMES
+                    ),
+                    ['comicvine']
+                )
+                self.assertEqual(
+                    MetadataProviderRegistry.configured_provider_ids(
+                        MetadataCapability.COVERS
+                    ),
+                    ['covers-only']
+                )
+        finally:
+            MetadataProviderRegistry._providers = original
+
 
 class metadata_provider_search(unittest.IsolatedAsyncioTestCase):
     async def test_configured_metron_results_join_comicvine_results(self):
@@ -80,8 +138,8 @@ class metadata_provider_search(unittest.IsolatedAsyncioTestCase):
         }])
 
         with patch(
-            'backend.features.metadata._metron_is_configured',
-            return_value=True
+            'backend.features.metadata.configured_metadata_provider_ids',
+            return_value=['comicvine', 'metron']
         ), patch(
             'backend.features.metadata.get_metadata_provider',
             side_effect=lambda provider_id='comicvine': (
@@ -109,8 +167,8 @@ class metadata_provider_search(unittest.IsolatedAsyncioTestCase):
             return metron
 
         with patch(
-            'backend.features.metadata._metron_is_configured',
-            return_value=True
+            'backend.features.metadata.configured_metadata_provider_ids',
+            return_value=['comicvine', 'metron']
         ), patch(
             'backend.features.metadata.get_metadata_provider',
             side_effect=provider
@@ -118,6 +176,96 @@ class metadata_provider_search(unittest.IsolatedAsyncioTestCase):
             results = await search_metadata_with_fallback('Saga')
 
         self.assertEqual(results[0]['provider_id'], 'metron')
+
+    async def test_a_third_provider_joins_the_fan_out_without_special_casing(
+        self
+    ):
+        providers = {}
+        for provider_id in ('comicvine', 'metron', 'test-provider'):
+            provider = MagicMock()
+            provider.search_volumes = AsyncMock(return_value=[{
+                'provider_id': provider_id, 'external_id': f'{provider_id}-1'
+            }])
+            providers[provider_id] = provider
+
+        with patch(
+            'backend.features.metadata.configured_metadata_provider_ids',
+            return_value=['comicvine', 'metron', 'test-provider']
+        ), patch(
+            'backend.features.metadata.get_metadata_provider',
+            side_effect=lambda provider_id='comicvine': providers[provider_id]
+        ):
+            results = await search_metadata_with_fallback('Saga')
+
+        self.assertEqual(
+            [result['provider_id'] for result in results],
+            ['comicvine', 'metron', 'test-provider']
+        )
+        for provider in providers.values():
+            provider.search_volumes.assert_awaited_once_with('Saga')
+
+    async def test_an_unavailable_provider_is_skipped_not_fatal(self):
+        comicvine = MagicMock()
+        comicvine.search_volumes = AsyncMock(return_value=[{
+            'provider_id': 'comicvine', 'external_id': '4050'
+        }])
+        broken = MagicMock()
+        broken.search_volumes = AsyncMock(side_effect=DummyUnavailable)
+
+        with patch(
+            'backend.features.metadata.configured_metadata_provider_ids',
+            return_value=['comicvine', 'test-provider']
+        ), patch(
+            'backend.features.metadata.get_metadata_provider',
+            side_effect=lambda provider_id='comicvine': (
+                comicvine if provider_id == 'comicvine' else broken
+            )
+        ):
+            MetadataProviderRegistry.register(DummyProvider)
+            try:
+                results = await search_metadata_with_fallback('Saga')
+            finally:
+                MetadataProviderRegistry._providers.pop('test-provider', None)
+
+        self.assertEqual(
+            [result['provider_id'] for result in results], ['comicvine']
+        )
+
+    async def test_an_unexpected_provider_error_still_propagates(self):
+        comicvine = MagicMock()
+        comicvine.search_volumes = AsyncMock(return_value=[])
+        broken = MagicMock()
+        broken.search_volumes = AsyncMock(side_effect=RuntimeError('boom'))
+
+        with patch(
+            'backend.features.metadata.configured_metadata_provider_ids',
+            return_value=['comicvine', 'test-provider']
+        ), patch(
+            'backend.features.metadata.get_metadata_provider',
+            side_effect=lambda provider_id='comicvine': (
+                comicvine if provider_id == 'comicvine' else broken
+            )
+        ):
+            MetadataProviderRegistry.register(DummyProvider)
+            try:
+                with self.assertRaises(RuntimeError):
+                    await search_metadata_with_fallback('Saga')
+            finally:
+                MetadataProviderRegistry._providers.pop('test-provider', None)
+
+    async def test_a_single_configured_provider_owns_its_own_errors(self):
+        metron = MagicMock()
+        metron.search_volumes = AsyncMock(side_effect=RuntimeError('boom'))
+
+        with patch(
+            'backend.features.metadata.configured_metadata_provider_ids',
+            return_value=['metron']
+        ), patch(
+            'backend.features.metadata.get_metadata_provider',
+            return_value=metron
+        ):
+            with self.assertRaises(RuntimeError):
+                await search_metadata_with_fallback('Saga')
 
 
 class metadata_identity_store(unittest.TestCase):

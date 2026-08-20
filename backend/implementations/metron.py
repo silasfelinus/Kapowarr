@@ -37,6 +37,15 @@ class Metron(MetadataProvider):
         MetadataCapability.FETCH_ISSUES,
         MetadataCapability.COVERS
     )
+    unavailable_errors = (MetronError,)
+
+    @classmethod
+    def is_configured(cls) -> bool:
+        settings = Settings().get_settings()
+        return bool(
+            settings.metron_api_token
+            or (settings.metron_username and settings.metron_password)
+        )
 
     def __init__(
         self,

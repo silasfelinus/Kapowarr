@@ -11,11 +11,15 @@ from abc import ABC, abstractmethod
 from asyncio import gather
 from enum import Enum
 from functools import wraps
+from importlib import import_module
 from time import time
 from typing import Dict, List, Sequence, Tuple, Union
 
 from backend.base.definitions import IssueMetadata, VolumeMetadata
 from backend.internals.db import get_db
+
+#: The provider every ComicVine-ID-shaped code path still assumes.
+DEFAULT_METADATA_PROVIDER_ID = 'comicvine'
 
 
 class MetadataCapability(Enum):
@@ -32,6 +36,22 @@ class MetadataProvider(ABC):
     provider_id: str
     display_name: str
     capabilities: Tuple[MetadataCapability, ...]
+
+    #: Errors that mean "this provider cannot answer right now" rather than
+    #: "something is broken".  A fan-out across several providers tolerates
+    #: these as long as another provider answered; anything else propagates.
+    unavailable_errors: Tuple[type, ...] = ()
+
+    @classmethod
+    def is_configured(cls) -> bool:
+        """Whether this provider holds the credentials to take part in a
+        fan-out.  Providers that need no configuration inherit ``True``."""
+        return True
+
+    @classmethod
+    def is_unavailable_error(cls, error: BaseException) -> bool:
+        """Whether `error` is this provider being unavailable, not a bug."""
+        return isinstance(error, cls.unavailable_errors)
 
     @abstractmethod
     def test_key(self) -> bool:
@@ -64,6 +84,15 @@ class MetadataProviderRegistry:
     """Lazy provider registry; registration never constructs API clients."""
 
     _providers: Dict[str, type] = {}
+
+    #: Built-in providers and the module whose import registers them.  Adding a
+    #: provider here is the only change the registry needs; nothing else in
+    #: this module names a provider.  Imports stay lazy to avoid
+    #: settings/database import cycles.
+    _builtin_modules: Dict[str, str] = {
+        'comicvine': 'backend.implementations.comicvine',
+        'metron': 'backend.implementations.metron'
+    }
 
     @staticmethod
     def _instrument_comicvine(provider: type) -> type:
@@ -130,29 +159,68 @@ class MetadataProviderRegistry:
         return provider
 
     @classmethod
-    def get(cls, provider_id: str = 'comicvine', **kwargs) -> MetadataProvider:
-        if provider_id not in cls._providers:
-            # Import the built-in lazily to avoid settings/database import cycles.
-            if provider_id == 'comicvine':
-                from backend.implementations import comicvine  # noqa: F401
-            elif provider_id == 'metron':
-                from backend.implementations import metron  # noqa: F401
+    def _load_builtin(cls, provider_id: str) -> None:
+        """Import the module that registers `provider_id`, if it is built in."""
+        if provider_id in cls._providers:
+            return
+        module = cls._builtin_modules.get(provider_id)
+        if module is not None:
+            import_module(module)
+
+    @classmethod
+    def _load_builtins(cls) -> None:
+        for provider_id in cls._builtin_modules:
+            cls._load_builtin(provider_id)
+
+    @classmethod
+    def provider_class(cls, provider_id: str) -> type:
+        """The registered class for `provider_id`, without constructing it."""
+        cls._load_builtin(provider_id)
         try:
-            provider = cls._providers[provider_id]
+            return cls._providers[provider_id]
         except KeyError:
             raise KeyError(f'Unknown metadata provider: {provider_id}')
-        return provider(**kwargs)
+
+    @classmethod
+    def get(
+        cls, provider_id: str = DEFAULT_METADATA_PROVIDER_ID, **kwargs
+    ) -> MetadataProvider:
+        return cls.provider_class(provider_id)(**kwargs)
 
     @classmethod
     def capabilities(cls) -> Dict[str, Tuple[MetadataCapability, ...]]:
-        if 'comicvine' not in cls._providers:
-            from backend.implementations import comicvine  # noqa: F401
-        if 'metron' not in cls._providers:
-            from backend.implementations import metron  # noqa: F401
+        cls._load_builtins()
         return {
             provider_id: provider.capabilities
             for provider_id, provider in cls._providers.items()
         }
+
+    @classmethod
+    def configured_provider_ids(
+        cls, capability: Union[MetadataCapability, None] = None
+    ) -> List[str]:
+        """Every registered provider that has the credentials to be used.
+
+        `capability` narrows the list to providers that can actually perform
+        the operation in question, so a provider that does not search is never
+        included in a search fan-out.
+
+        Ordered deterministically — the default provider first, then the rest
+        alphabetically — so a fan-out's result order never depends on which
+        module happened to be imported first.
+        """
+        cls._load_builtins()
+        return sorted(
+            (
+                provider_id
+                for provider_id, provider in cls._providers.items()
+                if provider.is_configured()
+                and (capability is None or capability in provider.capabilities)
+            ),
+            key=lambda provider_id: (
+                provider_id != DEFAULT_METADATA_PROVIDER_ID, provider_id
+            )
+        )
 
 
 class MetadataIdentityStore:
@@ -216,56 +284,76 @@ class MetadataIdentityStore:
 
 
 def get_metadata_provider(
-    provider_id: str = 'comicvine', **kwargs
+    provider_id: str = DEFAULT_METADATA_PROVIDER_ID, **kwargs
 ) -> MetadataProvider:
     return MetadataProviderRegistry.get(provider_id, **kwargs)
 
 
-def _metron_is_configured() -> bool:
-    from backend.internals.settings import Settings
-    settings = Settings().get_settings()
-    return bool(
-        settings.metron_api_token
-        or (settings.metron_username and settings.metron_password)
-    )
+def configured_metadata_provider_ids(
+    capability: Union[MetadataCapability, None] = None
+) -> List[str]:
+    """Registered providers that hold the credentials to be used."""
+    return MetadataProviderRegistry.configured_provider_ids(capability)
+
+
+def is_metadata_provider_configured(provider_id: str) -> bool:
+    """Whether `provider_id` is registered and configured."""
+    try:
+        return MetadataProviderRegistry.provider_class(
+            provider_id
+        ).is_configured()
+    except KeyError:
+        return False
 
 
 async def search_metadata_with_fallback(query: str) -> List[VolumeMetadata]:
-    """Search every configured provider while keeping identities explicit."""
-    from backend.base.custom_exceptions import (CVRateLimitReached,
-                                                InvalidComicVineApiKey)
+    """Search every configured provider while keeping identities explicit.
+
+    A provider that reports itself unavailable (see
+    :attr:`MetadataProvider.unavailable_errors`) is skipped as long as another
+    provider answered; if every provider is unavailable, the first such error
+    is raised.  Anything else propagates immediately — an unavailable provider
+    is a degraded search, an unexpected error is a bug.
+    """
     async def search_provider(provider_id: str) -> List[VolumeMetadata]:
+        # Constructing inside the coroutine keeps a provider whose credentials
+        # are rejected at construction time an error of *that* provider's
+        # search, not of the whole fan-out.
         return await get_metadata_provider(provider_id).search_volumes(query)
 
-    comicvine_search = search_provider('comicvine')
-    if not _metron_is_configured():
-        return await comicvine_search
+    provider_ids = configured_metadata_provider_ids(
+        MetadataCapability.SEARCH_VOLUMES
+    )
+    if len(provider_ids) <= 1:
+        # A lone provider owns the outcome, so its errors are the search's
+        # errors — there is no second opinion to fall back to.
+        return await search_provider(
+            provider_ids[0] if provider_ids else DEFAULT_METADATA_PROVIDER_ID
+        )
 
-    from backend.implementations.metron import MetronError
-    comicvine_result, metron_result = await gather(
-        comicvine_search,
-        get_metadata_provider('metron').search_volumes(query),
+    outcomes = await gather(
+        *(search_provider(provider_id) for provider_id in provider_ids),
         return_exceptions=True
     )
 
-    comicvine_error: Union[BaseException, None] = None
-    if isinstance(comicvine_result, BaseException):
-        if not isinstance(
-            comicvine_result, (CVRateLimitReached, InvalidComicVineApiKey)
-        ):
-            raise comicvine_result
-        comicvine_error = comicvine_result
-        results: List[VolumeMetadata] = []
-    else:
-        results = comicvine_result
+    results: List[VolumeMetadata] = []
+    answered = False
+    first_error: Union[BaseException, None] = None
+    for provider_id, outcome in zip(provider_ids, outcomes):
+        if not isinstance(outcome, BaseException):
+            answered = True
+            results.extend(outcome)
+            continue
 
-    if isinstance(metron_result, BaseException):
-        if not isinstance(metron_result, MetronError):
-            raise metron_result
-        if comicvine_error is not None:
-            raise comicvine_error
-    else:
-        results.extend(metron_result)
+        if not MetadataProviderRegistry.provider_class(
+            provider_id
+        ).is_unavailable_error(outcome):
+            raise outcome
+        if first_error is None:
+            first_error = outcome
+
+    if first_error is not None and not answered:
+        raise first_error
 
     return results
 
@@ -277,7 +365,7 @@ async def fetch_volume_with_fallback(cv_id: int) -> VolumeMetadata:
     try:
         return await get_metadata_provider().fetch_volume(cv_id)
     except (CVRateLimitReached, InvalidComicVineApiKey):
-        if not _metron_is_configured():
+        if not is_metadata_provider_configured('metron'):
             raise
         metron = get_metadata_provider('metron')
         return await metron.fetch_volume_by_comicvine_id(cv_id)  # type: ignore
@@ -292,12 +380,12 @@ async def fetch_volumes_with_fallback(
     try:
         volumes = await get_metadata_provider().fetch_volumes(cv_ids)
     except (CVRateLimitReached, InvalidComicVineApiKey):
-        if not _metron_is_configured():
+        if not is_metadata_provider_configured('metron'):
             raise
         metron = get_metadata_provider('metron')
         return await metron.fetch_volumes_by_comicvine_ids(cv_ids)  # type: ignore
 
-    if not _metron_is_configured():
+    if not is_metadata_provider_configured('metron'):
         return volumes
 
     returned_ids = {

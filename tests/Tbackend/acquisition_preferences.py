@@ -376,3 +376,148 @@ class getcomics_quality(TestCase):
             [entry['web_sub_title'] for entry in ordered],
             [entry['web_sub_title'] for entry in original]
         )
+
+
+# The rating components _rank_search_result() appends, in the order it appends
+# them. That ORDER is the actual ranking policy -- it is what decides that a
+# well-seeded wrong issue loses to a correct dead one -- and until now it was
+# documented only in inline comments and enforced only by pairwise tests that
+# each pinned one adjacent boundary. Every one of those can still pass while two
+# components are silently transposed, or a new component is inserted at the wrong
+# tier. This table states the whole order in one place.
+#
+# Each entry degrades EXACTLY ONE component relative to BASELINE_RESULT, listed
+# most significant first:
+#   name       -- what the component means
+#   mutation   -- the change to the search result that degrades it
+#   pack_rank  -- what the (patched) pack_preference_rank returns for this case
+#
+# pack_preference_rank is patched rather than driven through a real preference
+# because in production it and the issue-number tier share one input
+# (result['issue_number']), so there is no result that degrades the pack tier
+# alone. Patching its return value is what lets the pack tier be varied on its
+# own; it is the one coupling in the list worth knowing about.
+RANKING_TIERS = [
+    ('match', {'match': False}, 0),
+    ('title word overlap', {'series': 'batman annual special'}, 0),
+    ('volume/year', {'volume_number': 2}, 0),
+    ('peer availability', {'seeders': 0}, 0),
+    ('pack preference', {}, 1),
+    ('issue-number fit', {'issue_number': 7.0}, 0)
+]
+
+BASELINE_RESULT = {'seeders': 12}
+BASELINE_QUERY = ('batman', 1, (2020, 2020), 3.0)
+
+
+def rank_with_pack(overrides, pack_rank):
+    """Rank a result built from the baseline plus `overrides`."""
+    with patch(
+        'backend.features.search.pack_preference_rank', return_value=pack_rank
+    ):
+        return _rank_search_result(
+            {**result(3.0), **BASELINE_RESULT, **overrides}, *BASELINE_QUERY
+        )
+
+
+class search_ranking_tier_order(TestCase):
+    def test_each_entry_degrades_exactly_its_own_component(self):
+        # Guards the table itself: if a mutation leaks into a neighbouring
+        # component, the ordering assertion below could pass for the wrong
+        # reason. This also fails loudly when a new component is inserted,
+        # which is the point -- the table must be updated deliberately.
+        baseline = rank_with_pack({}, 0)
+        self.assertEqual(len(baseline), len(RANKING_TIERS))
+
+        for index, (name, mutation, pack_rank) in enumerate(RANKING_TIERS):
+            with self.subTest(tier=name):
+                degraded = rank_with_pack(mutation, pack_rank)
+                differing = [
+                    position
+                    for position, (before, after) in enumerate(
+                        zip(baseline, degraded)
+                    )
+                    if before != after
+                ]
+                self.assertEqual(differing, [index])
+                self.assertGreater(degraded[index], baseline[index])
+
+    def test_full_tier_order_in_one_place(self):
+        # Rank lists compare lexicographically, so a result degraded at tier N
+        # is worse than one degraded at any later tier, whatever the magnitudes
+        # involved. Sorting therefore reproduces the policy exactly backwards:
+        # the untouched result first, then the least significant degradation,
+        # up to the most significant one last.
+        ranked = [('unblemished', rank_with_pack({}, 0))] + [
+            (name, rank_with_pack(mutation, pack_rank))
+            for name, mutation, pack_rank in RANKING_TIERS
+        ]
+
+        self.assertEqual(
+            [name for name, _ in sorted(ranked, key=lambda entry: entry[1])],
+            [
+                'unblemished',
+                'issue-number fit',
+                'pack preference',
+                'peer availability',
+                'volume/year',
+                'title word overlap',
+                'match'
+            ]
+        )
+
+
+class neutral_ranking_components(TestCase):
+    """Every preference-driven component must be a no-op when not configured.
+
+    pack_preference_rank, getcomics_quality_rank and availability_rank each
+    share an unwritten contract: under their neutral setting they return 0 for
+    *every* result, so they add the same constant to every rating and preserve
+    the historical order exactly. Each is asserted individually elsewhere for
+    one or two inputs; this states the shared contract across the shapes that
+    actually reach them.
+    """
+
+    NEUTRAL_PREFERENCES = {
+        'acquisition_source_preference': ['direct', 'torrent', 'usenet'],
+        'getcomics_quality_preference': 'any',
+        'pack_preference': 'neutral'
+    }
+
+    def test_neutral_components_return_zero_for_every_result(self):
+        cases = [
+            (
+                'pack_preference_rank',
+                preferences.pack_preference_rank,
+                [(1.0, 5.0), 3.0, None]
+            ),
+            (
+                'getcomics_quality_rank',
+                preferences.getcomics_quality_rank,
+                [
+                    (group('Batman 001 HD'),),
+                    (group('Batman 001 SD'),),
+                    (group('Batman 001'),),
+                    ()
+                ]
+            ),
+            (
+                # availability_rank has no setting -- it is not a preference.
+                # Its neutral case is the absence of an explicit zero, which
+                # every non-torrent source is in permanently.
+                'availability_rank',
+                preferences.availability_rank,
+                [peer_result(), peer_result(seeders=None), peer_result(seeders=1),
+                 peer_result(seeders=500)]
+            )
+        ]
+
+        with patch.object(
+            preferences,
+            'get_acquisition_preferences',
+            return_value=self.NEUTRAL_PREFERENCES
+        ):
+            for name, component, inputs in cases:
+                for value in inputs:
+                    with self.subTest(component=name, value=value):
+                        self.assertEqual(component(value), 0)

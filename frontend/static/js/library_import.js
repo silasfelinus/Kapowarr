@@ -347,6 +347,26 @@ function importLibrary(api_key, rename=false) {
 	.catch(e => showImportError(e));
 };
 
+function renderContinuousProgress(checked, total, imported, remaining) {
+	LIEls.continuous.progress.max = Math.max(total, 1);
+	LIEls.continuous.progress.value = checked;
+	LIEls.continuous.checked.innerText = `${checked} / ${total}`;
+	LIEls.continuous.imported.innerText = imported;
+	LIEls.continuous.remaining.innerText = remaining;
+};
+
+// The review count is deliberately not taken from the running task's message.
+// Holds outlive the pass that produced them -- nothing imported them, so the
+// next pass finds the same files and queues the same folders -- and the durable
+// snapshot is the only place that knows the whole backlog.
+function renderContinuousReviewCount(folder_count) {
+	continuousReviewFolderCount = folder_count;
+	LIEls.continuous.review.innerText = folder_count;
+	LIEls.buttons.continuous_review.innerText =
+		`Review Holds (${folder_count})`;
+	LIEls.buttons.continuous_review.disabled = folder_count === 0;
+};
+
 function updateContinuousProgress(message) {
 	LIEls.continuous.status.innerText = message || 'Queued behind another background task...';
 	const match = (message || '').match(
@@ -355,18 +375,77 @@ function updateContinuousProgress(message) {
 	if (!match)
 		return;
 
-	const checked = parseInt(match[1]);
-	const total = parseInt(match[2]);
-	continuousReviewFolderCount = parseInt(match[4]);
-	LIEls.continuous.progress.max = Math.max(total, 1);
-	LIEls.continuous.progress.value = checked;
-	LIEls.continuous.checked.innerText = `${checked} / ${total}`;
-	LIEls.continuous.imported.innerText = match[3];
-	LIEls.continuous.review.innerText = match[4];
-	LIEls.continuous.remaining.innerText = match[5];
-	LIEls.buttons.continuous_review.innerText =
-		`Review Holds (${continuousReviewFolderCount})`;
-	LIEls.buttons.continuous_review.disabled = continuousReviewFolderCount === 0;
+	renderContinuousProgress(
+		parseInt(match[1]),
+		parseInt(match[2]),
+		match[3],
+		match[5]
+	);
+};
+
+// Durable job state, readable whether or not a task happens to be running.
+// `with_items` is for the moments that actually need the held rows -- opening
+// the review list -- rather than the poll, which only renders a count.
+function fetchContinuousSnapshot(api_key, with_items=false) {
+	const params = with_items ? {} : {items: 0};
+	return fetchAPI('/libraryimport/continuous', api_key, params)
+	.then(json => {
+		const snapshot = json.result;
+		if (snapshot.review_items_included)
+			continuousReviewCache = snapshot.review_items || [];
+		continuousLastSnapshotAt = Date.now();
+		renderContinuousReviewCount(snapshot.review_folders_outstanding || 0);
+		return snapshot;
+	});
+};
+
+// Paint a pass that is not currently running: finished, paused, or interrupted.
+// Returns whether there was anything worth showing.
+function applyContinuousSnapshot(snapshot) {
+	const job = snapshot.job;
+	if (job === null && !snapshot.review_folders_outstanding)
+		return false;
+
+	if (job !== null)
+		renderContinuousProgress(
+			job.checked_folders,
+			job.total_folders,
+			job.imported_volumes,
+			job.remaining_folders
+		);
+
+	return true;
+};
+
+// A pass that imports nothing looks identical to a pass that did nothing, so
+// say which reasons held the folders back.
+function describeReviewReasons(job) {
+	const labels = {
+		tie: 'tied',
+		weak_score: 'too weak to auto-import',
+		no_candidate: 'no candidate found'
+	};
+	const reasons = (job && job.review_reasons) || {};
+	const parts = Object.entries(reasons)
+		.filter(([, amount]) => amount > 0)
+		.map(([reason, amount]) => `${amount} ${labels[reason] || reason}`);
+
+	// Scoped to this pass on purpose. The Review Holds count beside it is the
+	// whole outstanding backlog, which can include folders held earlier.
+	return parts.length ? ` This pass held: ${parts.join(', ')}.` : '';
+};
+
+function describeFinishedJob(job) {
+	if (job === null)
+		return 'Continuous import finished. Any folders Kapowarr could not match were left untouched for review.';
+
+	if (job.status === 'paused')
+		return `Continuous import paused after ${job.checked_folders}/${job.total_folders} folders. Everything already imported is preserved; start it again to continue where it left off.${describeReviewReasons(job)}`;
+
+	if (job.status === 'running')
+		return `Continuous import was interrupted after ${job.checked_folders}/${job.total_folders} folders. It resumes automatically the next time Kapowarr starts.${describeReviewReasons(job)}`;
+
+	return `Continuous import finished: ${job.checked_folders}/${job.total_folders} folders checked, ${job.imported_volumes} volumes imported.${describeReviewReasons(job)} Anything held is waiting under Review Holds.`;
 };
 
 function showContinuousTask(task) {
@@ -389,16 +468,12 @@ function showContinuousTask(task) {
 	LIEls.buttons.continuous_stop.disabled = continuousStopRequested;
 };
 
-function refreshContinuousReviewCache(api_key, task_id=continuousTaskId) {
-	if (task_id === null)
-		return Promise.resolve(continuousReviewCache);
-
-	return fetchAPI(`/system/tasks/${task_id}`, api_key)
-	.then(json => {
-		continuousReviewCache = json.result.details?.review_items || [];
-		continuousLastSnapshotAt = Date.now();
-		return continuousReviewCache;
-	});
+function refreshContinuousReviewCache(api_key) {
+	// Reads the durable job rather than the running task's details. A task is
+	// dropped from the queue the moment it finishes, so asking it for the review
+	// queue only worked while a pass happened to be in flight.
+	return fetchContinuousSnapshot(api_key, true)
+		.then(() => continuousReviewCache);
 };
 
 function openContinuousReview(api_key) {
@@ -411,11 +486,6 @@ function openContinuousReview(api_key) {
 		continuousReviewOpen = true;
 		continuousPanelDismissed = true;
 		renderProposalResults(items, true);
-	};
-
-	if (continuousTaskId === null) {
-		show_items(continuousReviewCache);
-		return;
 	};
 
 	refreshContinuousReviewCache(api_key)
@@ -444,7 +514,7 @@ function stopContinuousImport(api_key) {
 	// remains the source of truth.
 	sendAPI('DELETE', `/system/tasks/${task_id}`, api_key)
 	.then(() => {
-		refreshContinuousReviewCache(api_key, task_id)
+		refreshContinuousReviewCache(api_key)
 		.catch(() => continuousReviewCache);
 	})
 	.catch(e => {
@@ -465,29 +535,60 @@ function pollContinuousTask(api_key) {
 		);
 		if (task) {
 			showContinuousTask(task);
-			if (
-				continuousReviewFolderCount > 0
-				&& Date.now() - continuousLastSnapshotAt >= 15000
-			) {
-				refreshContinuousReviewCache(api_key, task.id).catch(() => null);
-			};
+			if (Date.now() - continuousLastSnapshotAt >= 15000)
+				fetchContinuousSnapshot(api_key).catch(() => null);
 			return;
 		};
 
-		if (continuousWasRunning) {
-			continuousTaskId = null;
-			continuousWasRunning = false;
-			LIEls.buttons.continuous_stop.disabled = true;
-			LIEls.buttons.continuous_review.disabled =
-				continuousReviewCache.length === 0;
+		if (!continuousWasRunning)
+			return;
+
+		// The pass has left the queue. Everything it did is still on disk, so
+		// read the final state from the durable job instead of reporting
+		// whatever this page happened to have in memory.
+		continuousTaskId = null;
+		continuousWasRunning = false;
+		LIEls.buttons.continuous_stop.disabled = true;
+		fetchContinuousSnapshot(api_key)
+		.then(snapshot => {
+			applyContinuousSnapshot(snapshot);
 			LIEls.continuous.status.innerText = continuousStopRequested
 				? 'Continuous import stopped. Everything already imported is preserved, and the captured review holds are available below.'
-				: 'Continuous import finished. Any folders Kapowarr could not match were left untouched for review.';
-		};
+				: describeFinishedJob(snapshot.job);
+		})
+		.catch(() => {
+			LIEls.continuous.status.innerText = continuousStopRequested
+				? 'Continuous import stopped. Everything already imported is preserved, and the captured review holds are available below.'
+				: describeFinishedJob(null);
+		});
 	});
 
 	refresh();
 	continuousPoll = setInterval(refresh, 1000);
+};
+
+// A pass that already finished, or one interrupted by a restart, leaves nothing
+// in the task queue -- so without this the page opens on the start screen with
+// no sign that a backlog of held folders is waiting.
+function showSavedContinuousState(api_key) {
+	return fetchContinuousSnapshot(api_key)
+	.then(snapshot => {
+		if (!applyContinuousSnapshot(snapshot))
+			return;
+		// `task` is non-empty when a pass is queued or running; the poll owns the
+		// panel in that case and will paint live progress into it.
+		if (
+			(snapshot.task && snapshot.task.id !== undefined)
+			|| continuousTaskId !== null
+			|| continuousPanelDismissed
+		)
+			return;
+
+		LIEls.continuous.status.innerText = describeFinishedJob(snapshot.job);
+		LIEls.buttons.continuous_stop.disabled = true;
+		hide([LIEls.views.start], [LIEls.views.continuous]);
+	})
+	.catch(() => null);
 };
 
 function startContinuousImport(api_key) {
@@ -504,11 +605,10 @@ function startContinuousImport(api_key) {
 			return null;
 		};
 
-		continuousReviewCache = [];
-		continuousReviewFolderCount = 0;
+		// Holds from earlier passes are not cleared here. Nothing imported them,
+		// so they are still outstanding until this pass re-checks those folders
+		// and overwrites them; the next snapshot poll reports the real count.
 		continuousLastSnapshotAt = 0;
-		LIEls.buttons.continuous_review.innerText = 'Review Holds (0)';
-		LIEls.buttons.continuous_review.disabled = true;
 		LIEls.buttons.continuous_stop.disabled = false;
 		hide([LIEls.views.start], [LIEls.views.continuous]);
 		updateContinuousProgress('Starting the longbox conveyor...');
@@ -564,6 +664,7 @@ usingApiKey()
 	LIEls.buttons.import.onclick = e => importLibrary(api_key, false);
 	LIEls.buttons.import_rename.onclick = e => importLibrary(api_key, true);
 	pollContinuousTask(api_key);
+	showSavedContinuousState(api_key);
 });
 
 LIEls.search.bar.action = 'javascript:searchCV();';

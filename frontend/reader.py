@@ -9,6 +9,7 @@ existing UI/API blueprints without widening the main API router.
 from __future__ import annotations
 
 from io import BytesIO
+from tarfile import ReadError
 from zipfile import BadZipFile, ZipFile
 
 from flask import send_file
@@ -17,6 +18,7 @@ from backend.features.comic_reader import (
     get_issue_pages,
     get_issue_pdf,
     read_rar_member,
+    read_tar_member,
 )
 from backend.implementations.volumes import Library
 from frontend.api import api, auth, error_handler, return_api
@@ -81,8 +83,13 @@ def api_reader_page(issue_id: int, page_index: int):
                 conditional=True
             ), 200
 
-        if page.get('archive_type') == 'rar':
+        archive_type = page.get('archive_type')
+        if archive_type == 'rar':
             page_data = read_rar_member(page['filepath'], page['member'])
+            if page_data is None:
+                return return_api({}, 'ReaderPageUnavailable', 404)
+        elif archive_type == 'tar':
+            page_data = read_tar_member(page['filepath'], page['member'])
             if page_data is None:
                 return return_api({}, 'ReaderPageUnavailable', 404)
         else:
@@ -95,7 +102,7 @@ def api_reader_page(issue_id: int, page_index: int):
             max_age=3600
         ), 200
 
-    except (BadZipFile, FileNotFoundError, KeyError, OSError):
+    except (BadZipFile, ReadError, FileNotFoundError, KeyError, OSError):
         return return_api({}, 'ReaderPageUnavailable', 404)
 
 

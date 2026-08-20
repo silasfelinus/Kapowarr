@@ -19,12 +19,18 @@ What it deliberately does NOT do:
   that, and a low-quality file is still a file; a corrupt one is not.
 - It does not repair anything, and it never rewrites the file it is
   handed.
-- It does not open formats Kapowarr itself cannot open. `.cb7`/`.7z`,
-  `.cbt`/`.tar.gz`, `.epub`/`.mobi` appear in
-  `FileConstants.CONTAINER_EXTENSIONS`, but no reader or converter in
-  this codebase can read them, so there is no basis on which to call one
-  corrupt. Those return `UNSUPPORTED`, which is explicitly *not* a
-  failure -- see `IntegrityResult.ok`.
+- It does not open formats this module cannot open. `.cb7`/`.7z`,
+  `.epub`/`.mobi` appear in `FileConstants.CONTAINER_EXTENSIONS`, but
+  nothing in this codebase can read them, so there is no basis on which
+  to call one corrupt. Those return `UNSUPPORTED`, which is explicitly
+  *not* a failure -- see `IntegrityResult.ok`.
+- `.cbt`/`.tar.gz` is a narrower case and also returns `UNSUPPORTED`:
+  the reader gained tar support in `backend.features.comic_reader`, but
+  a tar carries no per-member checksum, so "opens cleanly" is all that
+  could ever be asserted about one -- weaker evidence than the CRC pass
+  this module's `CORRUPT` verdict is built on. Verifying tar means
+  deciding what a tar-shaped `OK` is worth, which is a separate call
+  from teaching the reader to display one.
 
 The last point is the module's governing bias, and it is not symmetric:
 a false negative costs a corrupt file in the library, which the reader

@@ -11,6 +11,7 @@ folder's checkpoint state, imported-volume count, and any held review rows.
 from __future__ import annotations
 
 from json import dumps, loads
+from os.path import exists
 from time import time
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
@@ -354,16 +355,50 @@ def _imported_filepaths() -> Set[str]:
     }
 
 
+def _review_item_is_live(
+    item: Dict[str, Any],
+    imported_paths: Set[str]
+) -> bool:
+    """Decide whether a held row still describes something worth reviewing.
+
+    A hold records the path a file had when the pass stopped at it. Three
+    things can retire that path afterwards, and only the first used to be
+    checked:
+
+    - The file was imported, so it is in ``files`` under the path it now has.
+    - It was never a volume candidate (artwork, cache, sidecar decoration).
+    - It moved. Importing a volume relocates its files into the volume folder
+      and renaming rewrites their basenames, so importing or renaming anything
+      that shared a folder with a hold leaves the hold pointing at a path that
+      no longer exists. The new path is in ``files``; the recorded one is in
+      neither ``files`` nor the filesystem, so a membership test alone keeps
+      the row forever.
+
+    A row that survives to the review list is a row the user can act on. One
+    naming a moved file cannot be imported at all -- it can only fail with
+    ``FileNotFoundError`` when they try, which is what a stale queue looked
+    like: every row erroring, nothing importable, and no way to clear them.
+    """
+    filepath = str(item.get('filepath') or '')
+    if not filepath:
+        return False
+    if filepath in imported_paths:
+        return False
+    if is_library_import_artifact(filepath):
+        return False
+    # Checked last: it is the only test that touches the disk, and the cheap
+    # in-memory tests above already retire most rows worth retiring.
+    return exists(filepath)
+
+
 def _prune_review_rows(
     rows: Sequence[Any],
     imported_paths: Set[str]
 ) -> Tuple[Dict[int, List[Dict[str, Any]]], bool]:
-    """Reconcile held rows against the canonical ``files`` table.
+    """Reconcile held rows against the ``files`` table and the filesystem.
 
     Manual review uses the normal import endpoint, not a special persistent-job
-    mutation, so the queue has to be reconciled when it is read. Artwork/cache
-    paths that should never have been volume-discovery candidates are dropped by
-    the same classifier the continuous importer uses.
+    mutation, so the queue has to be reconciled when it is read.
     """
     cursor = get_db()
     kept: Dict[int, List[Dict[str, Any]]] = {}
@@ -376,12 +411,7 @@ def _prune_review_rows(
         filtered = [
             item
             for item in items
-            if (
-                item.get('filepath') not in imported_paths
-                and not is_library_import_artifact(
-                    str(item.get('filepath') or '')
-                )
-            )
+            if _review_item_is_live(item, imported_paths)
         ]
 
         if len(filtered) != len(items):

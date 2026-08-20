@@ -107,6 +107,10 @@ main {
 	border-bottom: 0;
 }
 
+.logs-table tr:has(.log-details:not(.hidden)) td {
+	background: color-mix(in srgb, var(--accent-color) 7%, transparent);
+}
+
 .log-time,
 .log-level,
 .log-source {
@@ -117,24 +121,96 @@ main {
 	min-width: 24rem;
 }
 
-.log-message pre {
+.log-summary {
+	display: flex;
+	align-items: baseline;
+	gap: .5rem;
+	width: 100%;
 	margin: 0;
+	padding: 0;
+	border: 0;
+	background: none;
 	font: inherit;
+	color: inherit;
+	text-align: left;
+	overflow-wrap: anywhere;
+}
+
+.log-expand {
+	cursor: pointer;
+}
+
+.log-expand:hover .log-chevron,
+.log-expand:focus-visible .log-chevron {
+	color: var(--accent-color);
+}
+
+.log-chevron {
+	flex-shrink: 0;
+	width: .9rem;
+	color: var(--text-color-muted, var(--text-color));
+}
+
+/* Aligns a summary with no chevron against the ones that have one. */
+p.log-summary {
+	padding-left: 1.4rem;
+}
+
+.log-detail-count {
+	flex-shrink: 0;
+	margin-left: auto;
+	padding: .05rem .4rem;
+	border: 1px solid var(--border-color);
+	border-radius: 999px;
+	font-size: .75rem;
+	white-space: nowrap;
+	color: var(--text-color-muted, var(--text-color));
+}
+
+.log-details {
+	margin: .5rem 0 .25rem 1.4rem;
+	padding: .6rem .75rem;
+	border-left: 2px solid var(--border-color);
+	border-radius: 0 4px 4px 0;
+	background: var(--nav-background-color);
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	font-size: .8rem;
+	line-height: 1.45;
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
 }
 
-.log-level {
+.log-level-badge {
+	display: inline-block;
+	min-width: 4.5rem;
+	padding: .1rem .4rem;
+	border-radius: 3px;
+	background: var(--border-color);
+	font-size: .7rem;
 	font-weight: 700;
+	letter-spacing: .04em;
+	text-align: center;
+	text-transform: uppercase;
 }
 
-.log-warning .log-level {
-	color: var(--warning-color, #e7b416);
+.log-warning .log-level-badge {
+	background: var(--warning-color, #e7b416);
+	color: #1a1a1a;
 }
 
-.log-error .log-level,
-.log-critical .log-level {
-	color: var(--error-color);
+.log-error .log-level-badge,
+.log-critical .log-level-badge {
+	background: var(--error-color);
+	color: #fff;
+}
+
+.log-error .log-details,
+.log-critical .log-details {
+	border-left-color: var(--error-color);
+}
+
+.log-debug .log-level-badge {
+	opacity: .75;
 }
 
 #logs-empty {

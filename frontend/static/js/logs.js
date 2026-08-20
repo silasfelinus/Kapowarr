@@ -19,6 +19,89 @@ function formatLogTime(timestamp) {
 	return timestamp.replace('T', ' ');
 };
 
+// A log line and a stack trace are different things to read. The summary is
+// what you scan a hundred of; the trace is what you read one of. Rendering
+// every entry's full text inline turned a page with a handful of exceptions
+// into a wall of frames with the actual sequence of events buried inside it.
+function splitLogMessage(message) {
+	const newline = message.indexOf('\n');
+	if (newline === -1)
+		return {summary: message, details: ''};
+
+	return {
+		summary: message.slice(0, newline),
+		details: message.slice(newline + 1).replace(/\s+$/, '')
+	};
+};
+
+function buildLogRow(entry) {
+	const row = document.createElement('tr');
+	row.classList.add(`log-${entry.level.toLowerCase()}`);
+
+	const time = document.createElement('td');
+	time.classList.add('log-time');
+	time.textContent = formatLogTime(entry.timestamp);
+
+	const level = document.createElement('td');
+	level.classList.add('log-level');
+	const badge = document.createElement('span');
+	badge.classList.add('log-level-badge');
+	badge.textContent = entry.level;
+	level.appendChild(badge);
+
+	const source = document.createElement('td');
+	source.classList.add('log-source');
+	source.textContent = entry.source;
+	source.title = `${entry.process} · ${entry.thread}`;
+
+	const message = document.createElement('td');
+	message.classList.add('log-message');
+
+	const {summary, details} = splitLogMessage(entry.message);
+	if (!details) {
+		const text = document.createElement('p');
+		text.classList.add('log-summary');
+		text.textContent = summary;
+		message.appendChild(text);
+		row.append(time, level, source, message);
+		return row;
+	};
+
+	const toggle = document.createElement('button');
+	toggle.type = 'button';
+	toggle.classList.add('log-summary', 'log-expand');
+	toggle.setAttribute('aria-expanded', 'false');
+
+	const chevron = document.createElement('span');
+	chevron.classList.add('log-chevron');
+	chevron.setAttribute('aria-hidden', 'true');
+	chevron.textContent = '▸';
+
+	const label = document.createElement('span');
+	label.textContent = summary;
+
+	const count = document.createElement('span');
+	count.classList.add('log-detail-count');
+	const lines = details.split('\n').length;
+	count.textContent = `${lines} more line${lines === 1 ? '' : 's'}`;
+
+	toggle.append(chevron, label, count);
+
+	const body = document.createElement('pre');
+	body.classList.add('log-details', 'hidden');
+	body.textContent = details;
+
+	toggle.onclick = () => {
+		const open = body.classList.toggle('hidden') === false;
+		toggle.setAttribute('aria-expanded', String(open));
+		chevron.textContent = open ? '▾' : '▸';
+	};
+
+	message.append(toggle, body);
+	row.append(time, level, source, message);
+	return row;
+};
+
 function renderLogs() {
 	const query = LogEls.search.value.trim().toLowerCase();
 	const visible = query
@@ -35,32 +118,7 @@ function renderLogs() {
 	LogEls.rows.innerHTML = '';
 	const fragment = document.createDocumentFragment();
 
-	visible.forEach(entry => {
-		const row = document.createElement('tr');
-		row.classList.add(`log-${entry.level.toLowerCase()}`);
-
-		const time = document.createElement('td');
-		time.classList.add('log-time');
-		time.textContent = formatLogTime(entry.timestamp);
-
-		const level = document.createElement('td');
-		level.classList.add('log-level');
-		level.textContent = entry.level;
-
-		const source = document.createElement('td');
-		source.classList.add('log-source');
-		source.textContent = entry.source;
-		source.title = `${entry.process} · ${entry.thread}`;
-
-		const message = document.createElement('td');
-		message.classList.add('log-message');
-		const pre = document.createElement('pre');
-		pre.textContent = entry.message;
-		message.appendChild(pre);
-
-		row.append(time, level, source, message);
-		fragment.appendChild(row);
-	});
+	visible.forEach(entry => fragment.appendChild(buildLogRow(entry)));
 
 	LogEls.rows.appendChild(fragment);
 	LogEls.empty.classList.toggle('hidden', visible.length !== 0);

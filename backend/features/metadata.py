@@ -100,7 +100,8 @@ class MetadataProviderRegistry:
     #: settings/database import cycles.
     _builtin_modules: Dict[str, str] = {
         'comicvine': 'backend.implementations.comicvine',
-        'metron': 'backend.implementations.metron'
+        'metron': 'backend.implementations.metron',
+        'gcd': 'backend.implementations.gcd'
     }
 
     @staticmethod

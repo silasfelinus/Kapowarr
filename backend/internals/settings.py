@@ -75,6 +75,8 @@ class PublicSettingsValues:
     metron_api_token: str = ''
     metron_username: str = ''
     metron_password: str = ''
+    gcd_username: str = ''
+    gcd_password: str = ''
     api_key: str = ''
     flaresolverr_base_url: str = ''
 
@@ -158,7 +160,8 @@ class PublicSettingsValues:
         for k, v in result.items():
             if k in (
                 "auth_username", "auth_password", "proxy_password",
-                "metron_api_token", "metron_username", "metron_password"
+                "metron_api_token", "metron_username", "metron_password",
+                "gcd_username", "gcd_password"
             ) and v:
                 result[k] = Constants.CREDENTIAL_REPLACEMENT
 
@@ -197,6 +200,7 @@ SENSITIVE_SETTING_KEYS = frozenset((
     'comicvine_api_key',
     'metron_api_token',
     'metron_password',
+    'gcd_password',
     'proxy_password'
 ))
 
@@ -511,7 +515,8 @@ class Settings(metaclass=Singleton):
                 raise InvalidKeyValue(key, value)
 
         elif key in (
-            'metron_api_token', 'metron_username', 'metron_password'
+            'metron_api_token', 'metron_username', 'metron_password',
+            'gcd_username', 'gcd_password'
         ):
             if value == Constants.CREDENTIAL_REPLACEMENT:
                 converted_value = getattr(self.sv, key)

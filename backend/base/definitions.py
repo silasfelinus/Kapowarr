@@ -109,6 +109,26 @@ class Constants:
     METRON_API_URL = "https://metron.cloud/api"
     "The base URL of the Metron API"
 
+    GCD_SITE_URL = "https://www.comics.org"
+    "The base URL of the Grand Comics Database's human-facing site"
+
+    GCD_API_URL = "https://www.comics.org/api"
+    """
+    The base URL of the Grand Comics Database REST API. Distinct from
+    `GC_SITE_URL`/`GC_SOURCE_TERM` below, which are GetComics (a download
+    source), not the Grand Comics Database (a metadata provider).
+    """
+
+    GCD_SEARCH_PAGE_SIZE = 50
+    """
+    The Grand Comics Database's `/series/name/` endpoint ignores `page_size`
+    and `limit` entirely and always returns 50 results per page; this is
+    kept as a named constant (rather than a magic number in the provider)
+    because a search only ever reads its first page -- see
+    `backend.implementations.gcd`'s module docstring for why the endpoint's
+    own pagination cannot be followed to completion.
+    """
+
     GC_SITE_URL = "https://getcomics.org"
     "The base URL of GetComics"
 

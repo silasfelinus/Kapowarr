@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 
 from asyncio import gather, run
-from typing import Dict, List, Mapping, Sequence, Tuple, Type, Union
+from typing import (Dict, List, Mapping, NamedTuple, Sequence, Tuple, Type,
+                    Union)
 
 from backend.base.definitions import (DownloadType, MatchedSearchResultData,
                                       SearchResultData, SearchResultMatchData,
@@ -55,13 +56,38 @@ class SearchSources:
         ]
 
 
+class SearchResultRank(NamedTuple):
+    """The ranking tiers _rank_search_result() computes, most significant
+    first. This states the ranking policy in one place, by name, instead of
+    positionally in a bare list -- see RANKING_TIERS in
+    tests/Tbackend/acquisition_preferences.py for the full order and why it
+    matters.
+
+    Tuples compare lexicographically exactly like the List[int] this
+    replaces, so every sort/comparison call site is unaffected.
+
+    `issue_fit` defaults to 0: the volume-search branch (calculated_issue_number
+    is None) leaves it at that default when a result's issue_number is neither
+    a tuple nor a float, which is the one case that used to append nothing at
+    all. 0 is strictly less than every value the volume-search branch computes
+    otherwise -- (0, 1] -- so this preserves the old comparison exactly (a
+    shorter list sorts before a longer one it's a prefix of).
+    """
+    match: Union[int, float]
+    title_overlap: Union[int, float]
+    volume_year: Union[int, float]
+    availability: Union[int, float]
+    pack_preference: Union[int, float]
+    issue_fit: Union[int, float] = 0
+
+
 def _rank_search_result(
     result: MatchedSearchResultData,
     title: str,
     volume_number: int,
     year: Tuple[Union[int, None], Union[int, None]] = (None, None),
     calculated_issue_number: Union[float, None] = None
-) -> List[int]:
+) -> SearchResultRank:
     """Give a search result a rank, based on which you can sort.
 
     Args:
@@ -81,21 +107,19 @@ def _rank_search_result(
             Defaults to None.
 
     Returns:
-        List[int]: A list of numbers which determines the ranking of the result.
+        SearchResultRank: The tiered ranking of the result.
     """
-    rating = []
-
     # Prefer matches (False == 0 == higher rank)
-    rating.append(not result['match'])
+    match = not result['match']
 
     # The more words in the search term that are present in
     # the search results' title, the higher ranked it gets
     split_title = title.split(' ')
-    rating.append(len([
+    title_overlap = len([
         word
         for word in result['series'].split(' ')
         if word not in split_title
-    ]))
+    ])
 
     # Prefer volume number or year matches, even better if both match
     vy_score = 3
@@ -122,20 +146,22 @@ def _rank_search_result(
         # fuzzy match between start year and issue year
         vy_score -= 1
 
-    rating.append(vy_score)
+    volume_year = vy_score
 
     # Peer availability sits below match/title/year correctness -- a well-seeded
     # wrong issue is still the wrong issue -- but above pack preference, because
     # preferring the shape of a release nobody can download is meaningless.
     # Only an explicit zero-seeder count is demoted; see availability_rank().
-    rating.append(availability_rank(result))
+    availability = availability_rank(result)
 
     # User pack preference is deliberately below match/title/year correctness,
     # but above the historical issue-shape tie-breaker. Neutral adds the same
     # zero to every result and therefore preserves the old order exactly.
-    rating.append(pack_preference_rank(result['issue_number']))
+    pack_preference = pack_preference_rank(result['issue_number'])
 
-    # Sort on issue number fitting
+    # Sort on issue number fitting. Left at the class default (0) when the
+    # volume-search branch below has nothing to say about it.
+    issue_fit: Union[int, float] = 0
     if calculated_issue_number is not None:
         # Search was for issue
         if (
@@ -143,7 +169,7 @@ def _rank_search_result(
             and calculated_issue_number == result['issue_number']
         ):
             # Issue number is direct match
-            rating.append(0)
+            issue_fit = 0
 
         elif isinstance(result['issue_number'], tuple):
             if (
@@ -152,37 +178,38 @@ def _rank_search_result(
                 <= result['issue_number'][1]
             ):
                 # Issue number falls between range
-                rating.append(
-                    1 - (1 / (
-                        result['issue_number'][1] - result['issue_number'][0] + 1
-                    ))
-                )
+                issue_fit = 1 - (1 / (
+                    result['issue_number'][1] - result['issue_number'][0] + 1
+                ))
 
             else:
                 # Issue number falls outside so release is not useful
-                rating.append(3)
+                issue_fit = 3
 
         elif result['special_version'] is not None:
             # Issue number not found but is special version
-            rating.append(2)
+            issue_fit = 2
 
         else:
             # No issue number found and not special version
-            rating.append(3)
+            issue_fit = 3
 
     else:
         # Search was for volume
         if isinstance(result['issue_number'], tuple):
-            rating.append(
+            issue_fit = (
                 1.0
                 /
                 (result['issue_number'][1] - result['issue_number'][0] + 1)
             )
 
         elif isinstance(result['issue_number'], float):
-            rating.append(1)
+            issue_fit = 1
 
-    return rating
+    return SearchResultRank(
+        match, title_overlap, volume_year, availability, pack_preference,
+        issue_fit
+    )
 
 
 @SearchSources.register(DownloadType.DIRECT)

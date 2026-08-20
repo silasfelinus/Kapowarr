@@ -179,6 +179,12 @@ class ComicVine(MetadataProvider):
         'start_year'
     ))
     unavailable_errors = (CVRateLimitReached, InvalidComicVineApiKey)
+    instrument_operations = True
+    operation_outcomes = {
+        CVRateLimitReached: 'rate_limit',
+        InvalidComicVineApiKey: 'invalid_key',
+        VolumeNotMatched: 'not_found',
+    }
 
     @classmethod
     def is_configured(cls) -> bool:

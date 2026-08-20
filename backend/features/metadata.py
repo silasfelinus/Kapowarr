@@ -42,6 +42,15 @@ class MetadataProvider(ABC):
     #: these as long as another provider answered; anything else propagates.
     unavailable_errors: Tuple[type, ...] = ()
 
+    #: Opt in to have every operation wrapped with System Events counters.
+    #: False by default so nothing changes for providers that do not ask.
+    instrument_operations: bool = False
+
+    #: Exception type -> outcome bucket, consulted in declaration order by
+    #: the instrumentation wrapper. An exception matching none of these is
+    #: counted as `other_error`. Unused when `instrument_operations` is False.
+    operation_outcomes: Dict[type, str] = {}
+
     @classmethod
     def is_configured(cls) -> bool:
         """Whether this provider holds the credentials to take part in a
@@ -95,17 +104,21 @@ class MetadataProviderRegistry:
     }
 
     @staticmethod
-    def _instrument_comicvine(provider: type) -> type:
-        """Measure provider operations without changing ComicVine semantics."""
-        from backend.base.custom_exceptions import (
-            CVRateLimitReached,
-            InvalidComicVineApiKey,
-            VolumeNotMatched,
-        )
+    def _instrument_operations(provider: type) -> type:
+        """Measure provider operations without changing provider semantics.
+
+        The outcome bucket for a raised exception comes from the provider's
+        own `operation_outcomes` table (first matching type wins); anything
+        unmapped is counted as `other_error`. This keeps the wrapper generic
+        while letting each provider that opts in via `instrument_operations`
+        classify its own exception types.
+        """
         from backend.features.system_events import (
             begin_comicvine_operation,
             finish_comicvine_operation,
         )
+
+        outcome_map = getattr(provider, 'operation_outcomes', {})
 
         for operation in (
             'search_volumes',
@@ -123,17 +136,13 @@ class MetadataProviderRegistry:
                     operation_key = begin_comicvine_operation(operation_name)
                     try:
                         result = await method(self, *args, **kwargs)
-                    except CVRateLimitReached:
-                        finish_comicvine_operation(operation_key, 'rate_limit')
-                        raise
-                    except InvalidComicVineApiKey:
-                        finish_comicvine_operation(operation_key, 'invalid_key')
-                        raise
-                    except VolumeNotMatched:
-                        finish_comicvine_operation(operation_key, 'not_found')
-                        raise
-                    except Exception:
-                        finish_comicvine_operation(operation_key, 'other_error')
+                    except Exception as error:
+                        outcome = 'other_error'
+                        for error_type, mapped_outcome in outcome_map.items():
+                            if isinstance(error, error_type):
+                                outcome = mapped_outcome
+                                break
+                        finish_comicvine_operation(operation_key, outcome)
                         raise
 
                     finish_comicvine_operation(operation_key, 'success')
@@ -153,8 +162,8 @@ class MetadataProviderRegistry:
             raise ValueError('Metadata provider IDs must be stable lowercase keys')
         if provider_id in cls._providers and cls._providers[provider_id] is not provider:
             raise ValueError(f'Metadata provider already registered: {provider_id}')
-        if provider_id == 'comicvine':
-            provider = cls._instrument_comicvine(provider)
+        if getattr(provider, 'instrument_operations', False):
+            provider = cls._instrument_operations(provider)
         cls._providers[provider_id] = provider
         return provider
 

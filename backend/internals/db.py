@@ -125,6 +125,36 @@ class DBConnectionManager(type):
         return
 
 
+CONNECTION_PRAGMAS = (
+    "PRAGMA foreign_keys = ON;",
+
+    # The database is in WAL mode (see `setup_db`), which already lets readers
+    # run while a writer holds the write lock. `synchronous` is per-connection
+    # though, and defaults to FULL: every commit then waits on an fsync. Long
+    # write-heavy jobs (library import, refresh & scan, post-processing) commit
+    # in tight loops -- see `iter_commit` -- so with FULL they turn into a
+    # stream of fsyncs that saturates the disk and starves the read queries the
+    # web UI is waiting on. NORMAL is the value SQLite documents as the
+    # sensible pairing with WAL: a crash of Kapowarr itself still can't corrupt
+    # or lose committed data, only a power loss/OS crash can drop the most
+    # recent transactions, which for a library index is a re-scan and not a
+    # disaster.
+    "PRAGMA synchronous = NORMAL;",
+
+    # Negative values are KiB of page cache rather than a page count, so this
+    # is an 8 MiB cache per connection instead of the 2 MiB default. Modest
+    # rather than generous on purpose: this is paid per connection, and
+    # Kapowarr is routinely run on a Pi or a NAS where a per-thread 32 MiB
+    # cache would be a worse trade than the extra page reads it saves.
+    "PRAGMA cache_size = -8000;",
+
+    # Keep temp b-trees (ORDER BY, the correlated subqueries in the library
+    # listing) in memory instead of spilling them to a temp file.
+    "PRAGMA temp_store = MEMORY;",
+)
+"Applied to every new connection, in order."
+
+
 class DBConnection(Connection, metaclass=DBConnectionManager):
     file = ''
 
@@ -146,7 +176,9 @@ class DBConnection(Connection, metaclass=DBConnectionManager):
             timeout=timeout,
             detect_types=PARSE_DECLTYPES
         )
-        super().cursor().execute("PRAGMA foreign_keys = ON;")
+        c = super().cursor()
+        for pragma in CONNECTION_PRAGMAS:
+            c.execute(pragma)
         return
 
     def cursor( # type: ignore

@@ -2,10 +2,11 @@
 
 from asyncio import run
 from datetime import datetime
+from hashlib import sha256
 from io import BytesIO
 from typing import Any, Dict, List, Tuple, Type, Union
 
-from flask import Blueprint, request, send_file
+from flask import Blueprint, Response, make_response, request, send_file
 
 from backend.base.custom_exceptions import (InvalidKeyValue,
                                             KeyNotFound, TaskNotFound)
@@ -908,15 +909,35 @@ def api_volume(id: int):
         return return_api({})
 
 
+COVER_MAX_AGE = 3600
+"""How long a browser may reuse a cover without asking the server again."""
+
+
 @api.route('/volumes/<int:id>/cover', methods=['GET'])
 @error_handler
 @auth
 def api_volume_cover(id: int):
+    # The library page requests one of these per volume, on every single load,
+    # and covers are the largest thing the UI fetches. Without a validator the
+    # browser has no way to reuse the copy it already has, so a poster grid
+    # re-downloads the entire cover set every time the page is opened. Tagging
+    # each cover with a hash of its own bytes lets the browser revalidate with a
+    # near-empty 304 instead, and the short max-age keeps the common case --
+    # clicking into a volume and back -- from hitting the server at all, while
+    # still picking up a replaced cover within the hour.
     cover = Library.get_volume(id).get_cover()
-    return send_file(
-        cover,
-        mimetype='image/jpeg'
-    ), 200
+    etag = sha256(cover.getvalue()).hexdigest()[:32]
+
+    response: Response
+    if request.if_none_match.contains(etag):
+        response = make_response('', 304)
+    else:
+        cover.seek(0)
+        response = send_file(cover, mimetype='image/jpeg')
+
+    response.set_etag(etag)
+    response.headers['Cache-Control'] = f'private, max-age={COVER_MAX_AGE}'
+    return response, response.status_code
 
 
 @api.route('/issues/<int:id>', methods=['GET', 'PUT'])

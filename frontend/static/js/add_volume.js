@@ -73,7 +73,10 @@ function buildResults(results, api_key) {
 			result.year !== null
             ? `${result.title} (${result.year})`
             : result.title;
-		entry.dataset.cover = result.cover_link || `${url_base}/static/img/favicon.svg`;
+		// Placeholder for results without artwork. Points at the small PNG, not
+		// the 900 KB SVG master: a search can return a screenful of coverless
+		// results, and each one would rasterise that file at poster size.
+		entry.dataset.cover = result.cover_link || `${url_base}/static/img/icon-192.png`;
 		entry.dataset.providerId = result.provider_id;
 		entry.dataset.externalId = result.external_id;
 		entry.dataset.comicvineId = result.comicvine_id || '';

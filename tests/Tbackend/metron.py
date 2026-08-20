@@ -3,7 +3,7 @@
 from unittest import IsolatedAsyncioTestCase, TestCase
 from unittest.mock import AsyncMock, patch
 
-from backend.implementations.metron import Metron
+from backend.implementations.metron import Metron, MetronError
 
 
 class TestMetronFormatting(TestCase):
@@ -71,6 +71,24 @@ class TestMetronAuthentication(TestCase):
         self.assertEqual(
             provider.headers, {'Authorization': 'Bearer secret-token'}
         )
+
+
+class TestMetronKeyValidation(TestCase):
+    def test_test_key_returns_true_on_success(self):
+        provider = object.__new__(Metron)
+        provider._get = AsyncMock(return_value={'results': []})
+
+        result = provider.test_key()
+
+        self.assertIs(result, True)
+
+    def test_test_key_returns_false_on_metron_error(self):
+        provider = object.__new__(Metron)
+        provider._get = AsyncMock(side_effect=MetronError('bad key'))
+
+        result = provider.test_key()
+
+        self.assertIs(result, False)
 
 
 class TestMetronRequests(IsolatedAsyncioTestCase):

@@ -8,14 +8,14 @@ library entity, but this provider never substitutes one identifier for the
 other.
 """
 
+from asyncio import run
 from typing import Any, Dict, List, Sequence, Union
 
 from aiohttp import BasicAuth, ClientError
 
 from backend.base.definitions import Constants, IssueMetadata, VolumeMetadata
 from backend.base.file_extraction import extract_issue_number
-from backend.base.helpers import (AsyncSession, force_range,
-                                  normalise_string, run)
+from backend.base.helpers import AsyncSession, force_range, normalise_string
 from backend.features.metadata import (MetadataCapability,
                                        MetadataIdentityStore, MetadataProvider,
                                        MetadataProviderRegistry)

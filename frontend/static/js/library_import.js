@@ -301,33 +301,47 @@ function importLibrary(api_key, rename=false) {
 	sendAPI('POST', '/libraryimport', api_key, {rename_files: rename}, data)
 	.then(response => response.json())
 	.then(json => {
+		const imported = json.result.imported || [],
+			skipped = json.result.skipped || [],
+			failed = json.result.failed || [];
 		const imported_paths = new Set(
-			(json.result.imported || []).flatMap(entry => entry.filepaths)
+			imported.flatMap(entry => entry.filepaths)
 		);
-		const failures = [
-			...(json.result.failed || []),
-			...(json.result.skipped || [])
-		];
+		// Skipped is not failed. The backend skips a volume when there is
+		// nothing left to do with it -- most often because its files already
+		// moved -- so re-offering those rows just invites the same no-op. Only
+		// `failed` is worth keeping on screen to retry.
+		const resolved_paths = new Set([
+			...imported_paths,
+			...skipped.flatMap(entry => entry.filepaths || [])
+		]);
+		const failed_paths = new Set(
+			failed.flatMap(entry => entry.filepaths || [])
+		);
 
 		LIEls.proposal_list.querySelectorAll('tr').forEach(row => {
 			const item = rowid_to_filepath[row.dataset.rowid];
-			if (item && imported_paths.has(item.filepath))
+			if (item && resolved_paths.has(item.filepath))
 				row.remove();
 		});
 
-		if (failures.length) {
-			const failed_paths = new Set(
-				failures.flatMap(entry => entry.filepaths || [])
-			);
+		if (failed.length || skipped.length) {
 			LIEls.proposal_list.querySelectorAll('tr').forEach(row => {
 				const item = rowid_to_filepath[row.dataset.rowid];
 				const checkbox = row.querySelector('input[type="checkbox"]');
 				if (item && submitted_paths.has(item.filepath))
 					checkbox.checked = failed_paths.has(item.filepath);
 			});
-			const first = failures[0];
-			LIEls.import_result.innerText =
-				`${imported_paths.size} imported · ${failures.length} volume${failures.length === 1 ? '' : 's'} need attention. ${first.reason}`;
+
+			const parts = [`${imported.length} imported`];
+			if (skipped.length)
+				parts.push(`${skipped.length} skipped`);
+			if (failed.length)
+				parts.push(
+					`${failed.length} still need${failed.length === 1 ? 's' : ''} attention`
+				);
+			const detail = (failed[0] || skipped[0]).reason;
+			LIEls.import_result.innerText = `${parts.join(' · ')}. ${detail}`;
 			hide(
 				[LIEls.views.loading],
 				[LIEls.views.list, LIEls.import_result]

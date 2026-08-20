@@ -198,10 +198,15 @@ class library_import_review_artifact_pruning(unittest.TestCase):
             'commit',
             side_effect=self.connection.commit,
         )
+        # This covers which paths count as artwork, not whether they are on
+        # disk, so every held path is taken to exist.
+        self.exists_patch = patch.object(state, 'exists', return_value=True)
         self.get_db_patch.start()
         self.commit_patch.start()
+        self.exists_patch.start()
 
     def tearDown(self):
+        self.exists_patch.stop()
         self.commit_patch.stop()
         self.get_db_patch.stop()
         self.connection.close()

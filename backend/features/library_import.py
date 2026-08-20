@@ -3,7 +3,7 @@
 from asyncio import run, sleep as async_sleep
 from glob import glob
 from itertools import chain
-from os.path import abspath, basename, dirname, isfile, join, splitext
+from os.path import abspath, basename, dirname, exists, isfile, join, splitext
 from time import monotonic, sleep
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
@@ -420,8 +420,37 @@ def import_library(
         'imported': [], 'skipped': [], 'failed': []
     }
     root_folders = RootFolders().get_all()
-    for cv_id, files in cvid_to_filepath.items():
+    for cv_id, requested_files in cvid_to_filepath.items():
         try:
+            # A mapping records where a file was when it was proposed, and
+            # importing is not the only thing that moves files: importing any
+            # volume relocates its files into the volume folder, and renaming
+            # rewrites their basenames. Anything proposed earlier and imported
+            # later -- a review hold, a re-submitted list, a second tab -- can
+            # therefore name a path that has since moved. Attempting the move
+            # anyway raised FileNotFoundError from shutil and failed the whole
+            # volume, including the files that were still exactly where the
+            # mapping said. Import those; report the rest as already handled.
+            files = [f for f in requested_files if exists(f)]
+            moved_files = [f for f in requested_files if not exists(f)]
+            if not files:
+                result['skipped'].append({
+                    'id': cv_id, 'filepaths': requested_files,
+                    'reason': (
+                        'These files are no longer at the paths they were '
+                        'found at. They were most likely already imported, '
+                        'renamed or moved since this was proposed.'
+                    )
+                })
+                continue
+
+            if moved_files:
+                LOGGER.info(
+                    'Skipping %d file(s) for ComicVine ID %s that are no '
+                    'longer at their recorded paths: %s',
+                    len(moved_files), cv_id, moved_files
+                )
+
             for root_folder in root_folders:
                 if folder_is_inside_folder(root_folder.folder, files[0]):
                     break
@@ -484,7 +513,7 @@ def import_library(
             result['imported'].append({
                 'id': cv_id,
                 'volume_id': volume_id,
-                'filepaths': cvid_to_filepath[cv_id]
+                'filepaths': files
             })
 
         except CVRateLimitReached:

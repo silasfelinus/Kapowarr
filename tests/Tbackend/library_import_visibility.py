@@ -43,12 +43,20 @@ class _StateHarness(unittest.TestCase):
         self.connection.execute(
             "CREATE TABLE files(id INTEGER PRIMARY KEY, filepath TEXT UNIQUE);"
         )
+        # These cover job bookkeeping, not the filesystem, so held files are
+        # taken to exist unless a test says one moved. `moved_paths` is what a
+        # file being imported or renamed out from under a hold looks like here.
+        self.moved_paths = set()
         patches = (
             patch.object(
                 state, 'get_db',
                 side_effect=lambda *a, **k: self.connection.cursor()
             ),
             patch.object(state, 'commit', side_effect=self.connection.commit),
+            patch.object(
+                state, 'exists',
+                side_effect=lambda path: path not in self.moved_paths
+            ),
         )
         for p in patches:
             p.start()

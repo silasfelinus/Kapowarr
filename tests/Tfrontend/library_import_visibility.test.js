@@ -170,3 +170,21 @@ test('the cross-job review queue keeps folders whole and unduplicated', () => {
 	assert.match(outstanding, /seen_folders/);
 	assert.match(outstanding, /_prune_review_rows/);
 });
+
+test('a skipped volume leaves the review list instead of being re-offered', () => {
+	// The backend skips a volume when there is nothing left to do with it --
+	// most often because its files already moved. Re-checking those rows for
+	// another attempt just invites the same no-op, and they can never clear.
+	assert.match(libraryImport, /const resolved_paths = new Set\(\[/);
+	assert.match(libraryImport, /if \(item && resolved_paths\.has\(item\.filepath\)\)\s*\n\s*row\.remove\(\)/);
+	assert.match(
+		libraryImport,
+		/checkbox\.checked = failed_paths\.has\(item\.filepath\)/,
+		'only genuine failures stay checked for a retry'
+	);
+});
+
+test('the import summary counts skipped separately from failed', () => {
+	assert.match(libraryImport, /\$\{skipped\.length\} skipped/);
+	assert.match(libraryImport, /still need/);
+});

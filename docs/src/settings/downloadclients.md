@@ -13,6 +13,23 @@ By adding at least one torrent client, Kapowarr is able to download torrents.
 !!! warning "Using localhost in combination with a Docker container"
     If the torrent client is hosted on the host OS, and Kapowarr is running inside a Docker container, then it is not possible to use `localhost` in the base URL of the torrent client. Instead, the IP address used by the host OS must be used.
 
+## Usenet Clients
+
+By adding at least one Usenet client, Kapowarr is able to download NZBs found through Newznab indexers. Both **SABnzbd** and **NZBGet** are supported. SABnzbd authenticates with its API key; NZBGet uses its control username and password.
+
+!!! warning "The `kapowarr` category has to exist in the client"
+    Neither SABnzbd nor NZBGet lets Kapowarr say "download this particular job to this particular folder" the way the torrent clients do. Kapowarr instead submits every Usenet job under the category **`kapowarr`**, so you must create that category in the client and point its folder at the same place Kapowarr expects downloads:
+
+    - **SABnzbd** — Config > Categories
+    - **NZBGet** — Settings > Categories (`Category1.Name=kapowarr` and its `DestDir`)
+
+    Without it, jobs will download to the client's default folder and Kapowarr will not be able to import them.
+
+!!! note "Download speed shown for NZBGet"
+    NZBGet's API does not report a per-job download rate, only an instance-wide one. Kapowarr shows that global rate for whichever job is actively downloading, so with several jobs running at once the per-job speed reads high. Progress and size are exact either way — only the speed figure is affected.
+
+The same localhost/Docker caveat as for torrent clients applies here too.
+
 ## Remote Path Mappings
 
 When a remote download client and Kapowarr do not run on the same machine (because at least one of them is on another machine or in a Docker container), then filepaths could not match up. For example, a torrent client might be running in a Docker container where the download folder is at `/downloads` which maps to `/home/media/downloads` on the host while Kapowarr is running on the host. Then when Kapowarr reaches out to the torrent client, it'll report that the file is located at `/downloads/file.ext`. But Kapowarr can actually find it at `/home/media/downloads/file.ext`. 'Remote Path Mappings' allows you to add such a mapping so that Kapowarr can translate filepaths that are reported by the external download client to where it can actually find it.

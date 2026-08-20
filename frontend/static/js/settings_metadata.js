@@ -5,6 +5,8 @@ function fillSettings(api_key) {
 		document.querySelector('#metron-token-input').value = json.result.metron_api_token;
 		document.querySelector('#metron-username-input').value = json.result.metron_username;
 		document.querySelector('#metron-password-input').value = json.result.metron_password;
+		document.querySelector('#gcd-username-input').value = json.result.gcd_username;
+		document.querySelector('#gcd-password-input').value = json.result.gcd_password;
 	});
 };
 
@@ -14,7 +16,9 @@ function saveSettings(api_key) {
 		'date_type': document.querySelector('#date-type-input').value,
 		'metron_api_token': document.querySelector('#metron-token-input').value,
 		'metron_username': document.querySelector('#metron-username-input').value,
-		'metron_password': document.querySelector('#metron-password-input').value
+		'metron_password': document.querySelector('#metron-password-input').value,
+		'gcd_username': document.querySelector('#gcd-username-input').value,
+		'gcd_password': document.querySelector('#gcd-password-input').value
 	};
 	sendAPI('PUT', '/settings', api_key, {}, data)
 	.then(response => response.json())

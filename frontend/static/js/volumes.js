@@ -49,6 +49,23 @@ const pre_build_els = {
 const LIBRARY_RENDER_BATCH_SIZE = 50;
 let library_render_generation = 0;
 
+// Volume ID -> LibraryEntry, covering every volume in the current listing.
+// A keyed registry rather than a `.vol-<id>` querySelector per update: progress
+// and download-status events arrive one volume at a time, and looking each one
+// up by scanning the whole library made a busy download queue cost O(library)
+// per event.
+const library_entries = new Map();
+
+// The most recent `/volumes` payload, kept so that switching views can build the
+// other view without going back to the server.
+let library_volumes = [];
+
+// Only the visible view is built. A library of any size is otherwise paying
+// twice: the poster grid allocates an <img> per volume, and every table row
+// parses a full inline SVG through `setIcon`, so building the hidden view was
+// as expensive as building the one being looked at.
+const library_built_views = {list: false, table: false};
+
 function showLibraryPage(el) {
 	hide(Object.values(library_els.pages), [el]);
 };
@@ -61,12 +78,32 @@ function scheduleLibraryRender(callback) {
 	};
 };
 
+function inMassEdit() {
+	return library_els.mass_edit.toggle.hasAttribute('checked');
+};
+
+// Which view the user is actually looking at. Mass edit always shows the table
+// regardless of the view selector -- see the `#massedit-toggle` rules in
+// volumes.css -- so it is not simply the value of the dropdown.
+function activeLibraryView() {
+	if (inMassEdit())
+		return 'table';
+
+	return library_els.view_options.view.value === 'table' ? 'table' : 'list';
+};
+
 class LibraryEntry {
 	constructor(id, api_key) {
 		this.id = id;
 		this.api_key = api_key;
-		this.list_entry = library_els.views.list.querySelector(`.vol-${id}`);
-		this.table_entry = library_els.views.table.querySelector(`.vol-${id}`);
+		// Either may be null: a view is only built once it is looked at.
+		this.list_entry = null;
+		this.table_entry = null;
+
+		this.monitored = false;
+		this.downloaded_count = 0;
+		this.total_count = 0;
+		this.download_status = null;
 	};
 
 	setMonitored(monitored) {
@@ -74,156 +111,215 @@ class LibraryEntry {
 			monitored: monitored
 		})
 		.then(response => {
-			const monitored_button = this.table_entry.querySelector('.table-monitored');
-			monitored_button.onclick = e => new LibraryEntry(this.id, this.api_key)
-				.setMonitored(!monitored);
-
-			if (monitored) {
-				this.list_entry.setAttribute('monitored', '');
-				setIcon(monitored_button, icons.monitored, 'Monitored');
-
-			} else {
-				this.list_entry.removeAttribute('monitored');
-				setIcon(monitored_button, icons.unmonitored, 'Unmonitored');
-			};
+			this.monitored = monitored;
+			this.renderMonitored();
+			// The bar is coloured by monitored state, so it follows along.
+			this.renderProgressBar();
 		});
 	};
 
+	renderMonitored() {
+		if (this.list_entry !== null) {
+			if (this.monitored)
+				this.list_entry.setAttribute('monitored', '');
+			else
+				this.list_entry.removeAttribute('monitored');
+		};
+
+		if (this.table_entry !== null) {
+			const monitored_button =
+				this.table_entry.querySelector('.table-monitored');
+			monitored_button.onclick = e => this.setMonitored(!this.monitored);
+			if (this.monitored)
+				setIcon(monitored_button, icons.monitored, 'Monitored');
+			else
+				setIcon(monitored_button, icons.unmonitored, 'Unmonitored');
+		};
+	};
+
 	getProgress() {
-		return this.list_entry.querySelector('.list-prog-num').innerText
-			.split("/")
-			.map(n => parseInt(n));
+		return [this.downloaded_count, this.total_count];
 	};
 
 	setProgressBar(
 		downloaded_count,
 		total_count
 	) {
-		downloaded_count = Math.min(downloaded_count, total_count);
+		this.downloaded_count = Math.min(downloaded_count, total_count);
+		this.total_count = total_count;
+		this.renderProgressBar();
+		return;
+	};
 
-		const progress = downloaded_count / total_count * 100;
-		const list_bar = this.list_entry.querySelector('.list-prog-bar'),
-			table_bar = this.table_entry.querySelector('.table-prog-bar');
+	renderProgressBar() {
+		const progress = this.total_count > 0
+			? this.downloaded_count / this.total_count * 100
+			: 0;
 
-		this.list_entry.querySelector('.list-prog-num').innerText =
-		this.table_entry.querySelector('.table-prog-num').innerText =
-			`${downloaded_count}/${total_count}`;
-
-		list_bar.style.width =
-		table_bar.style.width =
-			`${progress}%`;
-
+		let color;
 		if (progress === 100)
-			list_bar.style.backgroundColor =
-			table_bar.style.backgroundColor =
-				'var(--success-color)';
-
-		else if (this.list_entry.hasAttribute('monitored'))
-			list_bar.style.backgroundColor =
-			table_bar.style.backgroundColor =
-				'var(--accent-color)';
-
+			color = 'var(--success-color)';
+		else if (this.monitored)
+			color = 'var(--accent-color)';
 		else
-			list_bar.style.backgroundColor =
-			table_bar.style.backgroundColor =
-				'var(--error-color)';
+			color = 'var(--error-color)';
+
+		const text = `${this.downloaded_count}/${this.total_count}`;
+
+		if (this.list_entry !== null) {
+			const bar = this.list_entry.querySelector('.list-prog-bar');
+			this.list_entry.querySelector('.list-prog-num').innerText = text;
+			bar.style.width = `${progress}%`;
+			bar.style.backgroundColor = color;
+		};
+
+		if (this.table_entry !== null) {
+			const bar = this.table_entry.querySelector('.table-prog-bar');
+			this.table_entry.querySelector('.table-prog-num').innerText = text;
+			bar.style.width = `${progress}%`;
+			bar.style.backgroundColor = color;
+		};
 
 		return;
 	};
 
 	setDownloadStatus(download_status) {
-		const elements = [
-			this.list_entry.querySelector('.list-download-status'),
-			this.table_entry.querySelector('.table-download-status')
-		];
+		this.download_status = download_status;
+		this.renderDownloadStatus();
+		return;
+	};
+
+	renderDownloadStatus() {
+		const elements = [];
+		if (this.list_entry !== null)
+			elements.push(this.list_entry.querySelector('.list-download-status'));
+		if (this.table_entry !== null)
+			elements.push(this.table_entry.querySelector('.table-download-status'));
 
 		elements.forEach(element => {
-			if (download_status === null) {
+			if (this.download_status === null) {
 				element.classList.add('hidden');
 				element.innerText = '';
 				delete element.dataset.status;
 				return;
 			};
 
-			element.innerText = download_status.text;
-			element.title = `${download_status.text}. View download queue.`;
-			element.dataset.status = download_status.status;
+			element.innerText = this.download_status.text;
+			element.title = `${this.download_status.text}. View download queue.`;
+			element.dataset.status = this.download_status.status;
 			element.classList.remove('hidden');
 		});
 	};
 };
 
-function buildLibraryEntry(volume, api_key, list_fragment, table_fragment) {
-	const list_entry = pre_build_els.list_entry.cloneNode(true),
-		table_entry = pre_build_els.table_entry.cloneNode(true);
+function buildListEntry(entry, volume, api_key, fragment) {
+	const list_entry = pre_build_els.list_entry.cloneNode(true);
 
-	// Label
-	list_entry.ariaLabel = table_entry.ariaLabel =
+	list_entry.ariaLabel =
 		`View the volume ${volume.title} (${volume.year}) Volume ${volume.volume_number}`;
-
-	// ID
 	list_entry.classList.add(`vol-${volume.id}`);
-	table_entry.classList.add(`vol-${volume.id}`);
-	table_entry.dataset.id = volume.id;
-
-	// Link
-	list_entry.href =
-	table_entry.querySelector('.table-link').href =
-		`${url_base}/volumes/${volume.id}`;
-
-	// Cover
+	list_entry.href = `${url_base}/volumes/${volume.id}`;
 	list_entry.querySelector('.list-img').src =
 		`${url_base}/api/volumes/${volume.id}/cover?api_key=${api_key}`;
 
-	// Title
 	const list_title = list_entry.querySelector('.list-title');
 	list_title.innerText =
 	list_title.title =
 		`${volume.title} (${volume.year})`;
-	table_entry.querySelector('.table-link').innerText =
-		volume.title;
-
-	// Year
-	table_entry.querySelector('.table-year').innerText =
-		volume.year;
-
-	// Volume Number
 	list_entry.querySelector('.list-volume').innerText =
+		`Volume ${volume.volume_number}`;
+
+	entry.list_entry = list_entry;
+	fragment.appendChild(list_entry);
+};
+
+function buildTableEntry(entry, volume, api_key, fragment) {
+	const table_entry = pre_build_els.table_entry.cloneNode(true);
+
+	table_entry.ariaLabel =
+		`View the volume ${volume.title} (${volume.year}) Volume ${volume.volume_number}`;
+	table_entry.classList.add(`vol-${volume.id}`);
+	table_entry.dataset.id = volume.id;
+
+	const link = table_entry.querySelector('.table-link');
+	link.href = `${url_base}/volumes/${volume.id}`;
+	link.innerText = volume.title;
+
+	table_entry.querySelector('.table-year').innerText = volume.year;
 	table_entry.querySelector('.table-volume').innerText =
 		`Volume ${volume.volume_number}`;
 
-	// Monitored
-	const library_entry = new LibraryEntry(volume.id, api_key);
-	library_entry.list_entry = list_entry;
-	library_entry.table_entry = table_entry;
-
-	const monitored_button = table_entry.querySelector('.table-monitored');
-	monitored_button.onclick = e => library_entry
-		.setMonitored(!volume.monitored);
-	if (volume.monitored) {
-		list_entry.setAttribute('monitored', '');
-		setIcon(monitored_button, icons.monitored, 'Monitored');
-	} else
-		setIcon(monitored_button, icons.unmonitored, 'Unmonitored');
-
-	// Progress Bar
-	library_entry.setProgressBar(
-		volume.issues_downloaded_monitored,
-		volume.issue_count_monitored
-	);
-	library_entry.setDownloadStatus(getVolumeDownloadStatus(volume.id));
-
-	// Add to view
-	list_fragment.appendChild(list_entry);
-	table_fragment.appendChild(table_entry);
+	entry.table_entry = table_entry;
+	fragment.appendChild(table_entry);
 };
 
-function populateLibrary(volumes, api_key, generation, on_first_batch) {
-	library_els.views.list.querySelectorAll('.list-entry').forEach(
-		e => e.remove()
-	);
-	library_els.views.table.innerHTML = '';
-	const space_taker = document.querySelector('.space-taker');
+const view_builders = {
+	list: buildListEntry,
+	table: buildTableEntry
+};
+
+// Build `view` for `volumes[offset:end]` and paint the results in one insert.
+function renderLibraryBatch(view, volumes, api_key, offset, end) {
+	const fragment = document.createDocumentFragment();
+
+	for (let i = offset; i < end; i++) {
+		const volume = volumes[i];
+
+		let entry = library_entries.get(volume.id);
+		if (entry === undefined) {
+			entry = new LibraryEntry(volume.id, api_key);
+			entry.monitored = Boolean(volume.monitored);
+			entry.setProgressBar(
+				volume.issues_downloaded_monitored,
+				volume.issue_count_monitored
+			);
+			entry.download_status = getVolumeDownloadStatus(volume.id);
+			library_entries.set(volume.id, entry);
+		};
+
+		view_builders[view](entry, volume, api_key, fragment);
+
+		// Applied after the element is attached to the entry so that the freshly
+		// built view picks up the state the entry is already carrying.
+		entry.renderMonitored();
+		entry.renderProgressBar();
+		entry.renderDownloadStatus();
+	};
+
+	if (view === 'list')
+		library_els.views.list.insertBefore(
+			fragment,
+			library_els.views.list.querySelector('.space-taker')
+		);
+	else
+		library_els.views.table.appendChild(fragment);
+};
+
+function clearLibraryView(view) {
+	if (view === 'list')
+		library_els.views.list.querySelectorAll('.list-entry').forEach(
+			e => e.remove()
+		);
+	else
+		library_els.views.table.innerHTML = '';
+
+	library_built_views[view] = false;
+	library_entries.forEach(entry => {
+		if (view === 'list')
+			entry.list_entry = null;
+		else
+			entry.table_entry = null;
+	});
+};
+
+// Build `view` in idle-time batches. `on_first_batch` fires once the first batch
+// is on screen, so the loading screen can be swapped out before the rest of a
+// large library has finished rendering.
+function buildLibraryView(view, api_key, generation, on_first_batch=null) {
+	clearLibraryView(view);
+	library_built_views[view] = true;
+
+	const volumes = library_volumes;
 	let offset = 0;
 	let first_batch = true;
 
@@ -231,25 +327,14 @@ function populateLibrary(volumes, api_key, generation, on_first_batch) {
 		if (generation !== library_render_generation)
 			return;
 
-		const list_fragment = document.createDocumentFragment(),
-			table_fragment = document.createDocumentFragment(),
-			end = Math.min(offset + LIBRARY_RENDER_BATCH_SIZE, volumes.length);
-
-		for (; offset < end; offset++) {
-			buildLibraryEntry(
-				volumes[offset],
-				api_key,
-				list_fragment,
-				table_fragment
-			);
-		};
-
-		library_els.views.list.insertBefore(list_fragment, space_taker);
-		library_els.views.table.appendChild(table_fragment);
+		const end = Math.min(offset + LIBRARY_RENDER_BATCH_SIZE, volumes.length);
+		renderLibraryBatch(view, volumes, api_key, offset, end);
+		offset = end;
 
 		if (first_batch) {
 			first_batch = false;
-			on_first_batch();
+			if (on_first_batch !== null)
+				on_first_batch();
 		};
 
 		if (offset < volumes.length) {
@@ -260,6 +345,30 @@ function populateLibrary(volumes, api_key, generation, on_first_batch) {
 	};
 
 	renderBatch();
+};
+
+// Make sure the view the user is about to look at exists, building it on the
+// spot if this is the first time it has been asked for.
+function ensureLibraryViewBuilt(api_key) {
+	const view = activeLibraryView();
+	if (library_built_views[view] || library_volumes.length === 0)
+		return;
+
+	buildLibraryView(view, api_key, library_render_generation);
+};
+
+function populateLibrary(volumes, api_key, generation, on_first_batch) {
+	library_volumes = volumes;
+	library_entries.clear();
+	clearLibraryView('list');
+	clearLibraryView('table');
+
+	buildLibraryView(
+		activeLibraryView(),
+		api_key,
+		generation,
+		on_first_batch
+	);
 };
 
 function fetchLibrary(api_key) {
@@ -282,6 +391,10 @@ function fetchLibrary(api_key) {
 			return;
 
 		if (json.result.length === 0) {
+			library_volumes = [];
+			library_entries.clear();
+			clearLibraryView('list');
+			clearLibraryView('table');
 			library_els.mass_edit.button.disabled = false;
 			showLibraryPage(library_els.pages.empty);
 		} else {
@@ -368,8 +481,12 @@ usingApiKey()
 		setLocalStorage({'lib_sorting': library_els.view_options.sort.value});
 		fetchLibrary(api_key);
 	};
-	library_els.view_options.view.onchange =
-		e => setLocalStorage({'lib_view': library_els.view_options.view.value});
+	library_els.view_options.view.onchange = e => {
+		setLocalStorage({'lib_view': library_els.view_options.view.value});
+		// Switching views needs no round trip -- the payload is already here,
+		// only the DOM for the newly selected view is missing.
+		ensureLibraryViewBuilt(api_key);
+	};
 	library_els.view_options.filter.onchange = e => {
 		setLocalStorage({'lib_filter': library_els.view_options.filter.value});
 		fetchLibrary(api_key);
@@ -379,9 +496,12 @@ usingApiKey()
     library_els.mass_edit.cancel.onclick =
         e => {
             const toggle = library_els.mass_edit.toggle;
-            if (toggle.hasAttribute('checked'))
+            if (toggle.hasAttribute('checked')) {
                 toggle.removeAttribute('checked');
-            else {
+                // Back to whatever the view selector says, which may never have
+                // been built if the session started in mass edit.
+                ensureLibraryViewBuilt(api_key);
+            } else {
                 const select = document.querySelector('select[name="root_folder_id"]');
                 if (select.querySelector('option') === null) {
                     fetchAPI('/rootfolder', api_key)
@@ -393,9 +513,14 @@ usingApiKey()
                             select.appendChild(entry);
                         });
                         toggle.setAttribute('checked', '');
+                        // Mass edit is always the table view, whatever the view
+                        // selector is set to.
+                        ensureLibraryViewBuilt(api_key);
                     });
-                } else
+                } else {
                     toggle.setAttribute('checked', '');
+                    ensureLibraryViewBuilt(api_key);
+                };
             }
         };
 	library_els.mass_edit.bar.querySelectorAll('.action-divider > button[data-action]').forEach(
@@ -434,25 +559,21 @@ usingApiKey()
 
 	document.addEventListener(
 		'kapowarr:download-queue-changed',
-		() => library_els.views.table
-			.querySelectorAll('.table-entry')
-			.forEach(entry => {
-				const id = parseInt(entry.dataset.id);
-				new LibraryEntry(id, api_key)
-					.setDownloadStatus(getVolumeDownloadStatus(id));
-			})
+		() => library_entries.forEach(
+			entry => entry.setDownloadStatus(getVolumeDownloadStatus(entry.id))
+		)
 	);
 
 	socket.on(
 		'downloaded_status',
 		data => {
-			const inst = new LibraryEntry(data.volume_id, api_key);
-			if (inst.list_entry === null)
+			const entry = library_entries.get(data.volume_id);
+			if (entry === undefined)
 				return;
-			const new_progress = inst.getProgress();
+			const new_progress = entry.getProgress();
 			new_progress[0] += data.downloaded_issues.length
 							- data.not_downloaded_issues.length;
-			inst.setProgressBar(new_progress[0], new_progress[1])
+			entry.setProgressBar(new_progress[0], new_progress[1])
 		}
 	);
 	// Socket is init after API key so wait for that like this

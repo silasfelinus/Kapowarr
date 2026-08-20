@@ -887,6 +887,16 @@ class Library:
     ) -> List[Dict[str, Any]]:
         """Get all the volumes in the library.
 
+        Deliberately does not include `description`. It is the single largest
+        column on the table -- ComicVine descriptions are multi-KB HTML blobs --
+        and nothing that reads a whole-library listing uses it: the library page
+        renders a poster grid, and the pull-list/Discover cross-references match
+        on title, year and publisher. Including it made the `/api/volumes`
+        response scale with the total size of every description in the library,
+        which is what made the library page slow to load over a phone or tablet
+        connection. The full description is still served per volume by
+        `Volume.get_public_data()`, which is where the UI actually shows it.
+
         Args:
             sort (LibrarySorting, optional): How to sort the list.
                 Defaults to LibrarySorting.TITLE.
@@ -924,7 +934,7 @@ class Library:
             SELECT
                 id, comicvine_id,
                 title, year, publisher,
-                volume_number, description,
+                volume_number,
                 monitored, monitor_new_issues,
                 folder,
                 (

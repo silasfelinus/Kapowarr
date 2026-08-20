@@ -441,6 +441,15 @@ const url_base = document.querySelector('#url_base').dataset.value;
 const volume_id = parseInt(window.location.pathname.split('/').at(-1)) || null;
 mapButtons(volume_id);
 
+// Has to come before anything that reads storage. `usingApiKey` starts by
+// parsing the `kapowarr` key, which on a browser that has never opened Kapowarr
+// before does not exist yet -- so calling it first threw, and on a genuinely
+// first visit the WebSocket never connected and the task queue stayed empty
+// until the page was reloaded.
+setupLocalStorage();
+if (getLocalStorage('theme')['theme'] === 'dark')
+	document.querySelector(':root').classList.add('dark-mode');
+
 let socket;
 usingApiKey()
 .then(api_key => {
@@ -448,10 +457,6 @@ usingApiKey()
 	socket = connectToWebSocket(api_key);
 	fillDownloadQueue(api_key);
 });
-
-setupLocalStorage();
-if (getLocalStorage('theme')['theme'] === 'dark')
-	document.querySelector(':root').classList.add('dark-mode');
 
 document.querySelector('#toggle-nav').onclick = e =>
 	document.querySelector('#nav-bar').classList.toggle('show-nav');

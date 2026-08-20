@@ -129,12 +129,18 @@ function setVolumeDownloadStatus() {
 function fillTable(issues, api_key) {
 	ViewEls.issues_list.innerHTML = '';
 
-	for (i = issues.length - 1; i >= 0; i--) {
+	// Built into a fragment and attached once. Appending each row to the live
+	// table instead meant a long-running volume paid a layout pass per issue,
+	// which is most of why opening a volume with hundreds of issues locked the
+	// page up before anything could be scrolled.
+	const fragment = document.createDocumentFragment();
+
+	for (let i = issues.length - 1; i >= 0; i--) {
 		const obj = issues[i];
 
 		const entry = ViewEls.pre_build.issue_entry.cloneNode(true);
 		entry.dataset.id = obj.id;
-		ViewEls.issues_list.appendChild(entry);
+		fragment.appendChild(entry);
 
 		const inst = new IssueEntry(obj.id, api_key, entry);
 
@@ -169,6 +175,8 @@ function fillTable(issues, api_key) {
 		);
 		inst.convert.onclick = e => showConvert(api_key, obj.id);
 	};
+
+	ViewEls.issues_list.appendChild(fragment);
 };
 
 function fillPage(data, api_key) {
@@ -237,7 +245,10 @@ function fillPage(data, api_key) {
 
 	// fill issue lists
 	fillTable(data.issues, api_key);
-	fillIssueMatchTable(data.issues);
+	// The match table is a second full copy of the issue list, living inside a
+	// window that most visits never open. Keep the issues around and build its
+	// rows the first time it is actually asked for.
+	issue_match_issues = data.issues;
 
 	mapButtons(volume_id);
 
@@ -726,6 +737,10 @@ function submitManagedIssues(api_key) {
 	.then(response => window.location.reload());
 };
 
+// Issues of the current volume, held for the lazily built match table.
+let issue_match_issues = [];
+let issue_match_table_built = false;
+
 function fillIssueMatchTable(issues) {
 	const table = document.querySelector('#issue-match-table tbody');
 	issues.forEach(issue => {
@@ -741,6 +756,14 @@ function fillIssueMatchTable(issues) {
 	});
 };
 
+function ensureIssueMatchTable() {
+	if (issue_match_table_built)
+		return;
+
+	issue_match_table_built = true;
+	fillIssueMatchTable(issue_match_issues);
+};
+
 function showMatchIssue() {
 	managed_issues = [...document.querySelectorAll(
 		'#manage-issues-table tbody tr:has(input[type="checkbox"]:checked)'
@@ -749,6 +772,7 @@ function showMatchIssue() {
 	if (!managed_issues.length)
 		return;
 
+	ensureIssueMatchTable();
 	setIssueMatchCheckboxes(false);
 	showWindow('match-window');
 };

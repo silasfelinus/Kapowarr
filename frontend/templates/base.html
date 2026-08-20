@@ -8,21 +8,52 @@
 	<meta id="url_base" data-value="{{url_base}}">
 
 	<link rel="manifest" href="{{url_base}}/manifest.json">
-	<link rel="apple-touch-icon" href="{{ url_for('static', filename='img/favicon.svg') }}">
+	{#
+		favicon.svg is the 900 KB Inkscape master (three embedded bitmaps, patterns,
+		clip paths). It stays in the repo as the source artwork, but referencing it
+		here meant every page load downloaded and rasterised it three times over --
+		icon, touch icon, and the header logo -- which on a tablet is seconds of work
+		before anything is interactive. These PNGs are rendered from it at the sizes
+		actually used.
+	#}
+	<link rel="apple-touch-icon" href="{{ url_for('static', filename='img/icon-192.png') }}">
 	<meta name="apple-mobile-web-app-status-bar" content="#ebc700">
 	<meta name="theme-color" content="#ebc700">
 
-	<link rel="shortcut icon" href="{{ url_for('static', filename='img/favicon.svg') }}" type="image/x-icon">
+	<link rel="icon" href="{{ url_for('static', filename='img/icon-32.png') }}" type="image/png" sizes="32x32">
 
+	{#
+		Kapowarr is usually reached over a LAN, and often from a device with no
+		working route to the internet at all. A render-blocking stylesheet from
+		fonts.googleapis.com then stalls first paint until the connection attempt
+		gives up. Loading it as a print stylesheet and promoting it on load keeps it
+		off the critical path; general.css already declares a full fallback stack, so
+		text renders immediately in a system font and swaps to Roboto if it arrives.
+	#}
 	<link rel="preconnect" href="https://fonts.googleapis.com">
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-	<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+	<link
+		href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap"
+		rel="stylesheet"
+		media="print"
+		onload="this.media='all'; this.onload=null;"
+	>
+	<noscript>
+		<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+	</noscript>
 
 	<link rel="stylesheet" href="{{ url_for('static', filename='css/general.css') }}">
 	{% block css %}
 	{% endblock css %}
-	<script src="https://cdn.socket.io/4.7.5/socket.io.min.js" integrity="sha384-2huaZvOR9iDzHqslqwpR87isEmrfxqyWOF7hr7BY6KG0+hVKLoEXMPUJw3ynWuhO" crossorigin="anonymous"></script>
-	<script src="{{ url_for('static', filename='js/auth.js') }}"></script>
+	{#
+		Vendored rather than loaded from cdn.socket.io: this is a self-hosted app, and
+		a blocking <script> to a third-party CDN means the whole page waits on an
+		external request that may never complete on an offline LAN. The file is the
+		byte-identical 4.7.5 build the CDN tag pinned via SRI. Deferred like the rest,
+		so it still executes before general.js, which is what needs `io`.
+	#}
+	<script src="{{ url_for('static', filename='js/vendor/socket.io.min.js') }}" defer></script>
+	<script src="{{ url_for('static', filename='js/auth.js') }}" defer></script>
 	<script src="{{ url_for('static', filename='js/general.js') }}" defer></script>
 	<script src="{{ url_for('static', filename='js/loading_lines.js') }}" defer></script>
 	<script src="{{ url_for('static', filename='js/launch_flair.js') }}" defer></script>
@@ -56,7 +87,13 @@
 				<img src="{{url_base}}/static/img/menu.svg" alt="">
 			</button>
 			<a href="{{url_base}}/" aria-label="Go to homepage">
-				<img src="{{ url_for('static', filename='img/favicon.svg') }}" alt="">
+				<img
+					src="{{ url_for('static', filename='img/icon-192.png') }}"
+					alt=""
+					width="48"
+					height="48"
+					decoding="async"
+				>
 			</a>
 			<p id="launch-flair" aria-live="polite"></p>
 		</div>

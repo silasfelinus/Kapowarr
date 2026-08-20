@@ -38,12 +38,10 @@ READER_RAR_ARCHIVE_EXTENSIONS = ('.cbr', '.rar')
 # the compressed forms are double extensions: `splitext('x.tar.gz')[1]` is
 # `.gz`, which on its own says nothing about tar. `tarfile` sniffs the
 # compression itself, so every suffix here opens through the same call.
-READER_TAR_ARCHIVE_SUFFIXES = (
-    '.cbt', '.tar',
-    '.tar.gz', '.tgz',
-    '.tar.bz2', '.tbz2',
-    '.tar.xz', '.txz'
-)
+# Shared with `backend.features.archive_integrity` via `FileConstants` so
+# the set the reader can display and the set the verifier inspects cannot
+# drift apart.
+READER_TAR_ARCHIVE_SUFFIXES = FileConstants.TAR_ARCHIVE_SUFFIXES
 READER_ARCHIVE_EXTENSIONS = (
     READER_ZIP_ARCHIVE_EXTENSIONS + READER_RAR_ARCHIVE_EXTENSIONS
 )

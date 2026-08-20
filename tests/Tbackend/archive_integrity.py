@@ -1,6 +1,9 @@
 import unittest
-from os.path import join
+from errno import EIO
+from io import BytesIO
+from os.path import getsize, join
 from subprocess import CompletedProcess
+from tarfile import DIRTYPE, SYMTYPE, TarInfo, open as tar_open
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
@@ -11,6 +14,14 @@ from backend.features.archive_integrity import IntegrityStatus, verify_archive
 # A one-pixel-ish payload that actually compresses, so corrupting the
 # compressed bytes reliably breaks the CRC rather than being ignored.
 PAGE_BYTES = b'\x89PNG\r\n\x1a\n' + (b'kapowarr' * 512)
+
+# A page that does NOT compress, so a gzipped archive of several of them
+# is large enough to damage somewhere in the middle rather than in its
+# header. Deterministic on purpose -- a random fixture that only
+# sometimes reproduces the shape it is named after is worse than none.
+INCOMPRESSIBLE_PAGE_BYTES = bytes(
+    (i * 2654435761) % 251 for i in range(20000)
+)
 
 
 def _write_zip(path: str, members: dict, compress=ZIP_DEFLATED) -> str:
@@ -52,6 +63,81 @@ def _corrupt_payload(path: str) -> str:
     with open(path, 'wb') as f:
         f.write(bytes(raw))
     return path
+
+
+def _write_tar(path: str, mode: str, members: dict) -> str:
+    """Write a TAR-family archive. `mode` picks the wrapper (`w`, `w:gz`,
+    `w:bz2`, `w:xz`) independently of what the filename claims, so the
+    mislabelled cases can be built deliberately."""
+    with tar_open(path, mode) as archive:
+        for name, data in members.items():
+            info = TarInfo(name)
+            info.size = len(data)
+            archive.addfile(info, BytesIO(data))
+    return path
+
+
+def _truncate(path: str, keep: float = 0.4) -> str:
+    """Cut a file short, the shape a download interrupted part-way
+    through leaves behind.
+
+    The default deliberately lands mid-block. A bare tar is a sequence of
+    512-byte blocks with no index, so a cut that happens to land exactly
+    on a block boundary leaves data that still parses as a complete (if
+    shorter) archive -- see
+    `test_a_block_aligned_bare_tar_truncation_is_undetectable`.
+    """
+    with open(path, 'rb') as f:
+        raw = f.read()
+
+    keep_bytes = int(len(raw) * keep)
+    if keep_bytes % 512 == 0:
+        keep_bytes += 100
+
+    with open(path, 'wb') as f:
+        f.write(raw[:keep_bytes])
+    return path
+
+
+def _flip_bytes(path: str, offset: int, count: int) -> str:
+    with open(path, 'rb') as f:
+        raw = bytearray(f.read())
+
+    flipped = 0
+    for i in range(offset, min(offset + count, len(raw))):
+        raw[i] ^= 0xFF
+        flipped += 1
+
+    if not flipped:
+        raise AssertionError(
+            f'fixture flipped nothing: {path} is only {len(raw)} bytes, '
+            f'offset {offset} is past the end'
+        )
+
+    with open(path, 'wb') as f:
+        f.write(bytes(raw))
+    return path
+
+
+def _corrupt_compressed_body(path: str) -> str:
+    """Damage the compressed payload, just past the wrapper's header.
+
+    Offset 32 clears the gzip, bzip2 and xz headers alike while staying
+    inside the compressed data, so this is bit-rot in the payload rather
+    than a mangled container -- the case only a stream checksum can
+    catch.
+    """
+    return _flip_bytes(path, 32, 64)
+
+
+def _corrupt_member_payload(path: str) -> str:
+    """Damage a bare tar's stored member bytes, leaving headers intact.
+
+    A tar header block is 512 bytes, so starting after the first one
+    lands inside the first member's data. Every header, name and size
+    field survives, which is exactly why nothing can detect this.
+    """
+    return _flip_bytes(path, 512 + 64, 256)
 
 
 def _rar_result(returncode: int, stdout: str = '') -> CompletedProcess:
@@ -405,6 +491,238 @@ class extension_fallback(unittest.TestCase):
             with open(path, 'wb') as f:
                 f.write(b'<!doctype html><title>404 Not Found</title>')
             result = verify_archive(path)
+
+        self.assertEqual(result.status, IntegrityStatus.UNREADABLE)
+        self.assertFalse(result.ok)
+
+
+class tar_verification(unittest.TestCase):
+    """What a TAR-family archive can and cannot be judged on.
+
+    The split these tests pin down is the whole point of the tar path:
+    a compressed tar carries a stream checksum and so can be proven
+    damaged, while a bare `.tar` carries nothing and so can never be.
+    """
+
+    def test_a_healthy_cbt_passes(self):
+        with TemporaryDirectory() as tmp:
+            path = _write_tar(join(tmp, 'comic.cbt'), 'w:gz', {
+                'pages/01.jpg': PAGE_BYTES,
+                'pages/02.jpg': PAGE_BYTES,
+                'ComicInfo.xml': b'<ComicInfo/>'
+            })
+            result = verify_archive(path)
+
+        self.assertEqual(result.status, IntegrityStatus.OK)
+        self.assertTrue(result.ok)
+
+    def test_every_compressed_form_is_verified(self):
+        # `.cbt` is only one of the names these arrive under, and
+        # `splitext` splits the double extensions in the wrong place, so
+        # each one is worth asserting rather than assuming.
+        for name, mode in (
+            ('comic.cbt', 'w:gz'),
+            ('comic.tar.gz', 'w:gz'),
+            ('comic.tgz', 'w:gz'),
+            ('comic.tar.bz2', 'w:bz2'),
+            ('comic.tbz2', 'w:bz2'),
+            ('comic.tar.xz', 'w:xz'),
+            ('comic.txz', 'w:xz'),
+        ):
+            with self.subTest(name=name):
+                with TemporaryDirectory() as tmp:
+                    path = _write_tar(join(tmp, name), mode, {
+                        '01.jpg': PAGE_BYTES
+                    })
+                    healthy = verify_archive(path)
+
+                    _corrupt_compressed_body(path)
+                    damaged = verify_archive(path)
+
+                self.assertEqual(healthy.status, IntegrityStatus.OK)
+                self.assertEqual(damaged.status, IntegrityStatus.CORRUPT)
+                self.assertFalse(damaged.ok)
+
+    def test_a_corrupted_gzip_tar_is_not_silently_downgraded_to_ok(self):
+        # The regression this whole path exists for. Verifying a
+        # compressed tar by iterating TarFile members instead of reading
+        # the stream out does not report damage -- it reports a SHORTER
+        # MEMBER LIST, which `_judge_contents` is perfectly happy to call
+        # OK. A five-page archive comes back as a healthy one-page
+        # archive. Asserting the member list actually shrinks is what
+        # makes this a test of the fix rather than of the fixture.
+        with TemporaryDirectory() as tmp:
+            path = _write_tar(join(tmp, 'comic.cbt'), 'w:gz', {
+                f'{i:02}.jpg': INCOMPRESSIBLE_PAGE_BYTES for i in range(1, 6)
+            })
+            _flip_bytes(path, getsize(path) // 2, 512)
+
+            with tar_open(path, 'r:*') as archive:
+                survivors = [m.name for m in archive.getmembers()]
+
+            result = verify_archive(path)
+
+        self.assertLess(
+            len(survivors), 5,
+            'fixture no longer reproduces the silent-truncation shape'
+        )
+        # Deliberately not pinned to CORRUPT. Damage this heavy
+        # desynchronises deflate so far that the stream hits EOF before
+        # its CRC trailer, which is honestly an early end rather than a
+        # checksum mismatch -- `test_every_compressed_form_is_verified`
+        # is where CORRUPT itself is pinned, on lighter payload bit-rot.
+        # What matters here is the invariant: a damaged compressed tar
+        # must never come back OK on a member list that damage itself
+        # shortened.
+        self.assertIn(
+            result.status,
+            (IntegrityStatus.CORRUPT, IntegrityStatus.UNREADABLE)
+        )
+        self.assertFalse(result.ok)
+
+    def test_a_truncated_tar_is_unreadable_in_every_form(self):
+        for name, mode in (
+            ('comic.tar', 'w'),
+            ('comic.cbt', 'w:gz'),
+            ('comic.tar.bz2', 'w:bz2'),
+            ('comic.tar.xz', 'w:xz'),
+        ):
+            with self.subTest(name=name):
+                with TemporaryDirectory() as tmp:
+                    path = _write_tar(join(tmp, name), mode, {
+                        f'{i:02}.jpg': PAGE_BYTES for i in range(1, 6)
+                    })
+                    _truncate(path)
+                    result = verify_archive(path)
+
+                self.assertEqual(result.status, IntegrityStatus.UNREADABLE)
+                self.assertFalse(result.ok)
+
+    def test_a_block_aligned_bare_tar_truncation_is_undetectable(self):
+        # The limit of what the bare-tar path can promise, pinned so it
+        # is not mistaken for a bug later. A tar is a run of 512-byte
+        # blocks with no index and no trailer worth checking, so a cut
+        # that lands exactly on a block boundary leaves something that
+        # parses as a complete, shorter archive. Only a mid-block cut
+        # leaves a partial header for `tarfile` to reject. A compressed
+        # tar has no such hole -- its wrapper knows how long the stream
+        # should be, which is why the same case above is caught.
+        with TemporaryDirectory() as tmp:
+            path = _write_tar(join(tmp, 'comic.tar'), 'w', {
+                f'{i:02}.jpg': PAGE_BYTES for i in range(1, 6)
+            })
+            with open(path, 'rb') as f:
+                raw = f.read()
+
+            aligned = (len(raw) // 2 // 512) * 512
+            with open(path, 'wb') as f:
+                f.write(raw[:aligned])
+
+            result = verify_archive(path)
+
+        self.assertEqual(result.status, IntegrityStatus.OK)
+        self.assertTrue(result.ok)
+
+    def test_a_damaged_bare_tar_passes_because_nothing_can_prove_it(self):
+        # Not an oversight, and the reason this is asserted rather than
+        # left implicit: a bare tar has no checksum at any level, so a
+        # flipped page body reads back with the right member names and
+        # the right member sizes. Reporting CORRUPT here would mean
+        # blocklisting and deleting on no evidence, which is the one
+        # thing this module refuses to do. If a future change makes this
+        # test fail by returning CORRUPT, that change is wrong.
+        with TemporaryDirectory() as tmp:
+            path = _write_tar(join(tmp, 'comic.tar'), 'w', {
+                '01.jpg': PAGE_BYTES,
+                '02.jpg': PAGE_BYTES
+            })
+            _corrupt_member_payload(path)
+
+            # Precondition: every header survived, so the archive still
+            # reports the right names and the right sizes. This is what
+            # makes the damage unprovable, not a weak check.
+            with tar_open(path, 'r:*') as archive:
+                self.assertEqual(
+                    [(m.name, m.size) for m in archive.getmembers()],
+                    [('01.jpg', len(PAGE_BYTES)), ('02.jpg', len(PAGE_BYTES))]
+                )
+
+            result = verify_archive(path)
+
+        self.assertEqual(result.status, IntegrityStatus.OK)
+        self.assertTrue(result.ok)
+
+    def test_a_tar_holding_only_junk_is_empty(self):
+        with TemporaryDirectory() as tmp:
+            path = _write_tar(join(tmp, 'comic.cbt'), 'w:gz', {
+                'readme.txt': b'get it at example.invalid',
+                'scene.nfo': b'x'
+            })
+            result = verify_archive(path)
+
+        self.assertEqual(result.status, IntegrityStatus.EMPTY)
+        self.assertFalse(result.ok)
+
+    def test_tar_directory_and_link_members_do_not_count_as_pages(self):
+        # Only regular files can be pages. A tar can also carry
+        # directories and symlinks, and counting a symlink as content
+        # would let an archive of nothing but links look populated.
+        with TemporaryDirectory() as tmp:
+            path = join(tmp, 'comic.cbt')
+            with tar_open(path, 'w:gz') as archive:
+                directory = TarInfo('pages.d')
+                directory.type = DIRTYPE
+                archive.addfile(directory)
+
+                link = TarInfo('01.jpg')
+                link.type = SYMTYPE
+                link.linkname = '/etc/passwd'
+                archive.addfile(link)
+
+            result = verify_archive(path)
+
+        self.assertEqual(result.status, IntegrityStatus.EMPTY)
+        self.assertFalse(result.ok)
+
+    def test_an_html_error_page_saved_as_cbt_is_unreadable(self):
+        with TemporaryDirectory() as tmp:
+            path = join(tmp, 'comic.cbt')
+            with open(path, 'wb') as f:
+                f.write(b'<!doctype html><title>404 Not Found</title>')
+            result = verify_archive(path)
+
+        self.assertEqual(result.status, IntegrityStatus.UNREADABLE)
+        self.assertFalse(result.ok)
+
+    def test_a_mislabelled_tar_is_dispatched_on_its_bytes(self):
+        # Same bias as the rest of the module: a tar named `.cbz` is
+        # still a tar. A bare tar has no signature at offset 0, so this
+        # is the one dispatch that has to look at offset 257 instead.
+        with TemporaryDirectory() as tmp:
+            path = _write_tar(join(tmp, 'comic.cbz'), 'w', {
+                '01.jpg': PAGE_BYTES
+            })
+            result = verify_archive(path)
+
+        self.assertEqual(result.status, IntegrityStatus.OK)
+        self.assertTrue(result.ok)
+
+    def test_a_real_io_error_is_never_reported_as_corrupt(self):
+        # bz2 signals corruption with a plain OSError, which a genuine
+        # disk failure also raises. Only the decompressor leaves errno
+        # unset, and getting this backwards would blocklist a good
+        # release over a local I/O problem.
+        with TemporaryDirectory() as tmp:
+            path = _write_tar(join(tmp, 'comic.tar.bz2'), 'w:bz2', {
+                '01.jpg': PAGE_BYTES
+            })
+            disk_failure = OSError(EIO, 'Input/output error')
+
+            with patch.dict(
+                ai.TAR_COMPRESSION_OPENERS,
+                {'bzip2': lambda *a, **kw: (_ for _ in ()).throw(disk_failure)}
+            ):
+                result = verify_archive(path)
 
         self.assertEqual(result.status, IntegrityStatus.UNREADABLE)
         self.assertFalse(result.ok)

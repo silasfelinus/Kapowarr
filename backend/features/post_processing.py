@@ -8,13 +8,14 @@ from __future__ import annotations
 
 from os.path import basename, exists, isfile, join, splitext
 from time import time
-from typing import TYPE_CHECKING, Dict
+from typing import TYPE_CHECKING, Dict, Union
 
 from backend.base.definitions import (BlocklistReason, DownloadState,
                                       FileConstants, NotificationEvent)
 from backend.base.files import (delete_file_folder, rename_file,
                                 set_detected_extension)
 from backend.base.logging import LOGGER
+from backend.features.archive_integrity import IntegrityResult, verify_archive
 from backend.features.file_provenance import record_download_file_provenance
 from backend.features.pack_normalization import (
     normalize_downloaded_range_pack,
@@ -125,8 +126,8 @@ def add_file_to_database(download: Download) -> None:
 
 
 # region Blocklist
-def add_dl_to_blocklist(download: Download) -> None:
-    "Add the download to the blocklist in the database"
+def _blocklist_dl(download: Download, reason: BlocklistReason) -> None:
+    "Add the download's link to the blocklist under a specific reason"
     add_to_blocklist(
         download.web_link,
         download.web_title,
@@ -135,8 +136,25 @@ def add_dl_to_blocklist(download: Download) -> None:
         download.source_type,
         download.volume_id,
         download.issue_id,
-        BlocklistReason.LINK_BROKEN
+        reason
     )
+    return
+
+
+def add_dl_to_blocklist(download: Download) -> None:
+    "Add the download to the blocklist in the database"
+    _blocklist_dl(download, BlocklistReason.LINK_BROKEN)
+    return
+
+
+def add_corrupt_dl_to_blocklist(download: Download) -> None:
+    """Blocklist a download whose link worked but whose file was damaged.
+
+    Recorded under its own reason so the blocklist page distinguishes
+    "the indexer's link is dead" from "this particular release is a bad
+    rip" -- different problems with different fixes.
+    """
+    _blocklist_dl(download, BlocklistReason.DOWNLOAD_CORRUPT)
     return
 
 
@@ -338,6 +356,36 @@ def set_file_properties(download: Download) -> None:
     return
 
 
+# region Integrity
+def failed_integrity_check(download: Download) -> Union[IntegrityResult, None]:
+    """Check a completed download's files before anything imports them.
+
+    Only regular files are checked. A torrent whose payload is a folder
+    still has that folder as `download.files[0]` at this point (it is
+    `_expand_external_download_root` that resolves it, well after this
+    gate), and `verify_archive` reports a directory as `UNSUPPORTED` --
+    so folder-shaped torrents pass through unchecked rather than being
+    condemned. Narrowing that is worth its own task; silently failing
+    them here would be worse than not checking them.
+
+    Args:
+        download (Download): The completed download.
+
+    Returns:
+        Union[IntegrityResult, None]: The first failing result, or `None`
+        when every file passed (or the check is switched off).
+    """
+    if not Settings().sv.verify_downloaded_archives:
+        return None
+
+    for file in download.files or []:
+        result = verify_archive(file)
+        if not result.ok:
+            return result
+
+    return None
+
+
 # region Post-Processors
 class PostProcessor:
     actions_success = [
@@ -375,6 +423,33 @@ class PostProcessor:
         delete_file
     ]
 
+    actions_integrity_failed = [
+        remove_from_queue,
+        add_to_history,
+        add_corrupt_dl_to_blocklist,
+        delete_file
+    ]
+    """
+    A download that arrived intact-looking but failed
+    `verify_archive`. Same shape as `actions_perm_failed`, under a
+    different blocklist reason -- and, critically, run *instead of*
+    `actions_success` rather than after it, so `add_file_to_database`
+    never registers the file. An issue only stops being `wanted` once a
+    file is linked to it, so skipping registration is what leaves the
+    issue eligible for the next `auto_search` to find a different
+    release. Blocklisting alone would not: it would stop this link being
+    picked again while leaving the corrupt file in place as the issue's
+    file.
+    """
+
+    verify_integrity_on_success = True
+    """
+    Whether `success()` is the phase that decides whether this
+    download's files may enter the library. True wherever `success()`
+    still runs before the import steps; see
+    `PostProcessorTorrentsCopy` for the one processor where it does not.
+    """
+
     @staticmethod
     def _run_actions(actions: list, download) -> None:
         for action in actions:
@@ -383,6 +458,28 @@ class PostProcessor:
 
     @classmethod
     def success(cls, download) -> None:
+        failure = (
+            failed_integrity_check(download)
+            if cls.verify_integrity_on_success
+            else None
+        )
+        if failure is not None:
+            LOGGER.error(
+                'Rejecting download %s: %s (%s)',
+                download.id, failure.status.value, failure.detail
+            )
+            # `add_to_history` derives its `success` column from the
+            # download's state, so this has to be set before the actions
+            # run or the rejection is filed as a successful import.
+            download.state = DownloadState.FAILED_STATE
+            cls._run_actions(cls.actions_integrity_failed, download)
+            send_notification(
+                NotificationEvent.IMPORT_FAILED,
+                'Download failed integrity check',
+                f'{download.title} ({failure.detail})'
+            )
+            return
+
         LOGGER.info(f'Postprocessing of successful download: {download.id}')
         cls._run_actions(cls.actions_success, download)
         send_notification(
@@ -442,6 +539,16 @@ class PostProcessorTorrentsComplete(PostProcessor):
 
 
 class PostProcessorTorrentsCopy(PostProcessor):
+    # The only processor whose import does NOT happen under `success()`:
+    # `copy_file_torrent` has already put the file in the library by the
+    # time `success()` runs, so gating there would blocklist and delete
+    # the seeding torrent's copy while leaving the imported one behind --
+    # the worst of both outcomes. Gating `seeding()` instead needs its own
+    # answer for what to do with a torrent still being seeded, which is
+    # more than an integrity check should decide; tracked as follow-up
+    # rather than guessed at here.
+    verify_integrity_on_success = False
+
     actions_success = [
         remove_from_queue,
         delete_file

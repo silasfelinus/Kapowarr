@@ -116,6 +116,15 @@ class PublicSettingsValues:
 
     convert: bool = False
     extract_issue_ranges: bool = False
+    verify_downloaded_archives: bool = True
+    """
+    Check a completed download opens and holds plausible pages before it
+    is imported, and blocklist + re-search it if not. See
+    `backend.features.archive_integrity`. On by default: the check reads
+    each archive once, which is cheap next to the download that preceded
+    it, and the alternative is discovering the damage in the reader once
+    the issue is no longer `wanted`.
+    """
     format_preference: CommaList = field(default_factory=lambda: CommaList(''))
 
     service_preference: CommaList = field(default_factory=lambda: CommaList(

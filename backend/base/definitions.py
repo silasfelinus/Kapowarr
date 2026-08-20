@@ -455,6 +455,9 @@ class BlocklistReasonID(BaseEnum):
     LINK_BROKEN = 1
     NO_WORKING_LINKS = 3
     ADDED_BY_USER = 4
+    DOWNLOAD_CORRUPT = 5
+    # 2 is retired and must not be reused -- rows written under it may
+    # still exist in long-lived databases.
 
 
 class BlocklistReason(BaseEnum):
@@ -463,6 +466,14 @@ class BlocklistReason(BaseEnum):
     LINK_BROKEN = "Link broken"
     NO_WORKING_LINKS = "No supported or working links"
     ADDED_BY_USER = "Added by user"
+    DOWNLOAD_CORRUPT = "Downloaded file was damaged or empty"
+    """
+    The download completed but the file failed
+    `backend.features.archive_integrity.verify_archive` -- it could not be
+    opened, a member failed its CRC check, or it held no pages at all.
+    Distinct from LINK_BROKEN: the link worked fine, what it served did
+    not.
+    """
 
 
 class BrokenClientReason(BaseEnum):

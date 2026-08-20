@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, patch
 
 from backend.base.definitions import DownloadType
 from backend.features import acquisition_preferences as preferences
-from backend.features.search import (SearchIndexers, SearchTorznab,
-                                     _rank_search_result)
+from backend.features.search import (SearchIndexers, SearchResultRank,
+                                     SearchTorznab, _rank_search_result)
 
 
 def group(title):
@@ -378,17 +378,19 @@ class getcomics_quality(TestCase):
         )
 
 
-# The rating components _rank_search_result() appends, in the order it appends
-# them. That ORDER is the actual ranking policy -- it is what decides that a
-# well-seeded wrong issue loses to a correct dead one -- and until now it was
-# documented only in inline comments and enforced only by pairwise tests that
-# each pinned one adjacent boundary. Every one of those can still pass while two
-# components are silently transposed, or a new component is inserted at the wrong
-# tier. This table states the whole order in one place.
+# The rating components _rank_search_result() computes, in the order they sit
+# in SearchResultRank. That ORDER is the actual ranking policy -- it is what
+# decides that a well-seeded wrong issue loses to a correct dead one. Since
+# t-065, SearchResultRank's field order is the primary statement of that
+# policy (a NamedTuple, not a positional list), so this table is now a
+# redundant second statement of it rather than the only one -- kept anyway,
+# because reading the whole policy as one flat table next to the tests that
+# exercise it is worth the duplication, and test_tier_names_match_field_order
+# below pins the two together so the redundancy can't silently drift.
 #
 # Each entry degrades EXACTLY ONE component relative to BASELINE_RESULT, listed
 # most significant first:
-#   name       -- what the component means
+#   name       -- the SearchResultRank field this tier corresponds to
 #   mutation   -- the change to the search result that degrades it
 #   pack_rank  -- what the (patched) pack_preference_rank returns for this case
 #
@@ -399,11 +401,11 @@ class getcomics_quality(TestCase):
 # own; it is the one coupling in the list worth knowing about.
 RANKING_TIERS = [
     ('match', {'match': False}, 0),
-    ('title word overlap', {'series': 'batman annual special'}, 0),
-    ('volume/year', {'volume_number': 2}, 0),
-    ('peer availability', {'seeders': 0}, 0),
-    ('pack preference', {}, 1),
-    ('issue-number fit', {'issue_number': 7.0}, 0)
+    ('title_overlap', {'series': 'batman annual special'}, 0),
+    ('volume_year', {'volume_number': 2}, 0),
+    ('availability', {'seeders': 0}, 0),
+    ('pack_preference', {}, 1),
+    ('issue_fit', {'issue_number': 7.0}, 0)
 ]
 
 BASELINE_RESULT = {'seeders': 12}
@@ -421,29 +423,44 @@ def rank_with_pack(overrides, pack_rank):
 
 
 class search_ranking_tier_order(TestCase):
+    def test_tier_names_match_field_order(self):
+        # RANKING_TIERS is a redundant restatement of SearchResultRank's field
+        # order -- this is what keeps the redundancy honest. If the NamedTuple
+        # is ever reordered without updating this table (or vice versa), this
+        # fails immediately instead of the two silently drifting apart.
+        self.assertEqual(
+            [name for name, _, _ in RANKING_TIERS],
+            list(SearchResultRank._fields)
+        )
+
     def test_each_entry_degrades_exactly_its_own_component(self):
         # Guards the table itself: if a mutation leaks into a neighbouring
         # component, the ordering assertion below could pass for the wrong
-        # reason. This also fails loudly when a new component is inserted,
-        # which is the point -- the table must be updated deliberately.
+        # reason. This also fails loudly when a new component is added to
+        # SearchResultRank, which is the point -- the table must be updated
+        # deliberately. Comparing by field name rather than position is
+        # strictly stronger than the old index-based check: a mutation that
+        # leaks into a neighbour is caught even if the two fields happen to
+        # sit at the same tuple position across baseline/degraded (which
+        # position-based zip() comparison couldn't distinguish).
         baseline = rank_with_pack({}, 0)
         self.assertEqual(len(baseline), len(RANKING_TIERS))
 
-        for index, (name, mutation, pack_rank) in enumerate(RANKING_TIERS):
+        for name, mutation, pack_rank in RANKING_TIERS:
             with self.subTest(tier=name):
                 degraded = rank_with_pack(mutation, pack_rank)
                 differing = [
-                    position
-                    for position, (before, after) in enumerate(
-                        zip(baseline, degraded)
-                    )
-                    if before != after
+                    field
+                    for field in SearchResultRank._fields
+                    if getattr(baseline, field) != getattr(degraded, field)
                 ]
-                self.assertEqual(differing, [index])
-                self.assertGreater(degraded[index], baseline[index])
+                self.assertEqual(differing, [name])
+                self.assertGreater(
+                    getattr(degraded, name), getattr(baseline, name)
+                )
 
     def test_full_tier_order_in_one_place(self):
-        # Rank lists compare lexicographically, so a result degraded at tier N
+        # Rank tuples compare lexicographically, so a result degraded at tier N
         # is worse than one degraded at any later tier, whatever the magnitudes
         # involved. Sorting therefore reproduces the policy exactly backwards:
         # the untouched result first, then the least significant degradation,
@@ -457,14 +474,42 @@ class search_ranking_tier_order(TestCase):
             [name for name, _ in sorted(ranked, key=lambda entry: entry[1])],
             [
                 'unblemished',
-                'issue-number fit',
-                'pack preference',
-                'peer availability',
-                'volume/year',
-                'title word overlap',
+                'issue_fit',
+                'pack_preference',
+                'availability',
+                'volume_year',
+                'title_overlap',
                 'match'
             ]
         )
+
+
+class volume_search_issue_fit_default(TestCase):
+    """The volume-search branch (calculated_issue_number=None) leaves
+    issue_fit at SearchResultRank's default when a result's issue_number is
+    neither a tuple nor a float -- previously _rank_search_result appended
+    nothing at all for this case, so a shorter list sorted ahead of a longer
+    one it was a prefix of. The NamedTuple has no equivalent "shorter", so 0
+    has to reproduce that same ordering by being strictly better than every
+    value the branch computes for the tuple/float cases (0, 1].
+    """
+
+    @patch('backend.features.search.pack_preference_rank', return_value=0)
+    def test_neither_tuple_nor_float_defaults_to_zero(self, _pack_rank):
+        rank = _rank_search_result(result(None), 'batman', 1, (2020, 2020))
+        self.assertEqual(rank.issue_fit, 0)
+
+    @patch('backend.features.search.pack_preference_rank', return_value=0)
+    def test_default_still_ranks_ahead_of_computed_tuple_and_float(
+        self, _pack_rank
+    ):
+        missing = _rank_search_result(result(None), 'batman', 1, (2020, 2020))
+        as_float = _rank_search_result(result(3.0), 'batman', 1, (2020, 2020))
+        as_tuple = _rank_search_result(
+            result((1.0, 5.0)), 'batman', 1, (2020, 2020)
+        )
+        self.assertLess(missing, as_float)
+        self.assertLess(missing, as_tuple)
 
 
 class neutral_ranking_components(TestCase):

@@ -47,7 +47,7 @@ Silence is not a decision. Missing expected features should become visible roadm
 
 | Shared setting concept | Kapowarr status | Kapowarr interpretation |
 | --- | --- | --- |
-| Custom Formats | Partial | Protocol/source priority, GetComics HD/SD preference, pack preference, indexer/client priority and format preference cover some intent. A composable scoring/rule system does not yet exist. |
+| Custom Formats | Partial | Protocol/source priority, GetComics HD/SD preference, pack preference, indexer/client priority and format preference cover some intent, and search ranking demotes releases an indexer reports as having zero seeders. A composable scoring/rule system does not yet exist. |
 | Download Clients | Supported | Multiple torrent clients (qBittorrent, Transmission) and Usenet clients (SABnzbd, NZBGet), with priority/load-balancing behavior, are first-class. |
 | General | Supported | Authentication, API key, hosting, proxy, UI title and logging controls are present. |
 | Import Lists | Supported / expanding | Remote CBL is the first comic-native provider. Automatic Add deliberately requires exact embedded ComicVine volume identity; unresolved title-only entries do not trigger fuzzy metadata storms. |

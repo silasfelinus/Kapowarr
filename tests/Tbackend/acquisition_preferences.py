@@ -216,6 +216,97 @@ class pack_policy(TestCase):
         self.assertLess(matched_single, mismatched_pack)
 
 
+def peer_result(issue_number=3.0, match=True, **availability):
+    """A search result carrying (or deliberately omitting) peer counts.
+
+    Passing no keyword arguments produces the GetComics/Newznab shape: the
+    ``seeders``/``leechers`` keys are absent entirely, because
+    ``SearchResultAvailabilityData`` is ``total=False``.
+    """
+    return {**result(issue_number, match=match), **availability}
+
+
+class search_result_availability(TestCase):
+    def test_absent_none_and_healthy_all_rank_neutrally(self):
+        # A non-torrent source omits the key entirely; Torznab can send an
+        # explicit None. Neither may be scored worse than a healthy torrent,
+        # or the change quietly demotes every source that has no peer data.
+        self.assertEqual(preferences.availability_rank(peer_result()), 0)
+        self.assertEqual(
+            preferences.availability_rank(peer_result(seeders=None)), 0
+        )
+        self.assertEqual(
+            preferences.availability_rank(peer_result(seeders=1)), 0
+        )
+        self.assertEqual(
+            preferences.availability_rank(peer_result(seeders=500)), 0
+        )
+
+    def test_only_an_explicit_zero_is_demoted(self):
+        self.assertGreater(
+            preferences.availability_rank(peer_result(seeders=0)),
+            preferences.availability_rank(peer_result(seeders=1))
+        )
+        self.assertGreater(
+            preferences.availability_rank(peer_result(seeders=0)),
+            preferences.availability_rank(peer_result())
+        )
+
+    def test_negative_counts_are_treated_as_dead_not_as_best(self):
+        # A malformed indexer response must not sort to the front.
+        self.assertEqual(
+            preferences.availability_rank(peer_result(seeders=-1)), 1
+        )
+
+    # pack_preference_rank reads the settings database; availability_rank
+    # deliberately does not, because a dead release is not a user preference.
+    # These cases neutralise the pack component so they exercise ranking
+    # rather than the settings layer, matching the pattern above.
+    @patch('backend.features.search.pack_preference_rank', return_value=0)
+    def test_healthy_release_outranks_dead_one_all_else_equal(self, _pack_rank):
+        healthy = _rank_search_result(
+            peer_result(seeders=12), 'batman', 1, (2020, 2020), 3.0
+        )
+        dead = _rank_search_result(
+            peer_result(seeders=0), 'batman', 1, (2020, 2020), 3.0
+        )
+        self.assertLess(healthy, dead)
+
+    @patch('backend.features.search.pack_preference_rank', return_value=0)
+    def test_source_without_peer_data_is_not_demoted(self, _pack_rank):
+        no_data = _rank_search_result(
+            peer_result(), 'batman', 1, (2020, 2020), 3.0
+        )
+        healthy = _rank_search_result(
+            peer_result(seeders=12), 'batman', 1, (2020, 2020), 3.0
+        )
+        self.assertEqual(no_data, healthy)
+
+    @patch('backend.features.search.pack_preference_rank', return_value=0)
+    def test_availability_never_outranks_match_correctness(self, _pack_rank):
+        # A well-seeded wrong issue is still the wrong issue.
+        matched_dead = _rank_search_result(
+            peer_result(match=True, seeders=0), 'batman', 1, (2020, 2020), 3.0
+        )
+        mismatched_healthy = _rank_search_result(
+            peer_result(match=False, seeders=99), 'batman', 1, (2020, 2020), 3.0
+        )
+        self.assertLess(matched_dead, mismatched_healthy)
+
+    @patch('backend.features.search.pack_preference_rank')
+    def test_availability_outranks_pack_preference(self, pack_rank):
+        # Preferring the shape of a release nobody can download is meaningless,
+        # so availability is checked first.
+        pack_rank.side_effect = lambda issue: 0 if isinstance(issue, tuple) else 1
+        healthy_single = _rank_search_result(
+            peer_result(3.0, seeders=12), 'batman', 1, (2020, 2020), 3.0
+        )
+        dead_pack = _rank_search_result(
+            peer_result((1.0, 5.0), seeders=0), 'batman', 1, (2020, 2020), 3.0
+        )
+        self.assertLess(healthy_single, dead_pack)
+
+
 class getcomics_quality(TestCase):
     def test_quality_labels_use_token_boundaries(self):
         self.assertEqual(preferences.getcomics_quality_label('Batman 001 (HD)'), 'hd')

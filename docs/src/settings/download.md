@@ -6,6 +6,21 @@ This is where the files being downloaded get written to before being processed a
 
 If you run Kapowarr using Docker, leave this set to the default value of `/app/temp_downloads` and instead change the value of `/path/to/download_folder` in the [Docker command](../installation/docker.md#launch-container). If you have a manual install, you can change this value to whatever you want. It is required to be outside your root folders.
 
+### Watched Folder
+
+A folder that Kapowarr checks every 15 minutes for comics you got hold of somewhere other than Kapowarr — another download client, a copy off a NAS, a share mounted into the container. Leave it empty to switch the feature off; that is the default.
+
+Every 15 minutes, each comic file in the folder (including in sub-folders) is considered for import. A file is only imported when both of the following are true:
+
+- **It has finished being written.** A file has to sit unmodified for two minutes first, so a large archive still being copied in is left alone until the next run.
+- **It matches exactly one volume already in your library.** Matching uses the same filename rules as a normal library scan. A file that matches nothing, or that two volumes could both claim, is left exactly where it is for you to import by hand from the Wanted page.
+
+Files that are imported are moved into the volume's folder and then renamed, converted and have their file properties set, following the same settings a normal download would. Nothing is ever deleted: only sub-folders that end up empty because their files were imported get cleaned up.
+
+The watched folder is deliberately **not** a way to add new series. Identifying an unknown series needs ComicVine lookups, which is what [Library Import](../general_info/library_import.md) is for. Kapowarr will not let you set a watched folder that is inside (or contains) one of your root folders or the temporary download folder, because it would then be competing with Library Import or grabbing downloads that are still being written.
+
+The result of each run — how many files were imported, unmatched or still downloading — is shown on the Tasks page as **Watched Folder Import**.
+
 ### Empty Temporary Download Folder
 
 This isn't so much of a setting as it is a tool. It will delete all files from the download folder that aren't actively being downloaded. This can be handy if the application crashed while downloading, leading to half-downloaded 'ghost' files in the folder.  

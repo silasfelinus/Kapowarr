@@ -7,6 +7,7 @@ function fillSettings(api_key) {
 		const settings = settingsJson.result;
 		const acquisition = acquisitionJson.result;
 		document.querySelector('#download-folder-input').value = settings.download_folder;
+		document.querySelector('#watched-folder-input').value = settings.watched_folder;
 		document.querySelector('#concurrent-direct-downloads-input').value = settings.concurrent_direct_downloads;
 		document.querySelector('#download-timeout-input').value = ((settings.failing_download_timeout || 0) / 60) || '';
 		document.querySelector('#seeding-handling-input').value = settings.seeding_handling;
@@ -25,8 +26,10 @@ function fillSettings(api_key) {
 function saveSettings(api_key) {
 	document.querySelector("#save-button p").innerText = 'Saving';
 	document.querySelector('#download-folder-input').classList.remove('error-input');
+	document.querySelector('#watched-folder-input').classList.remove('error-input');
 	const settingsData = {
 		'download_folder': document.querySelector('#download-folder-input').value,
+		'watched_folder': document.querySelector('#watched-folder-input').value,
 		'concurrent_direct_downloads': parseInt(document.querySelector('#concurrent-direct-downloads-input').value),
 		'failing_download_timeout': parseInt(document.querySelector('#download-timeout-input').value || 0) * 60,
 		'seeding_handling': document.querySelector('#seeding-handling-input').value,
@@ -48,13 +51,22 @@ function saveSettings(api_key) {
 	.catch(e => {
 		document.querySelector("#save-button p").innerText = 'Failed';
 		e.json().then(e => {
-			if (
-				e.error === "InvalidKeyValue"
-				&& e.result.key === "download_folder"
-				||
-				e.error === "FolderNotFound"
-			)
+			// FolderNotFound doesn't name the key it came from, so fall back to
+			// flagging whichever folder input the user actually filled in that
+			// doesn't look like the other one's known-good saved value.
+			const key = e.error === "InvalidKeyValue" ? e.result.key : null;
+
+			if (key === "watched_folder")
+				document.querySelector('#watched-folder-input').classList.add('error-input');
+
+			else if (key === "download_folder")
 				document.querySelector('#download-folder-input').classList.add('error-input');
+
+			else if (e.error === "FolderNotFound") {
+				document.querySelector('#download-folder-input').classList.add('error-input');
+				if (document.querySelector('#watched-folder-input').value)
+					document.querySelector('#watched-folder-input').classList.add('error-input');
+			}
 
 			else
 				console.log(e);

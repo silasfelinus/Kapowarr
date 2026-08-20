@@ -122,6 +122,7 @@ class PublicSettingsValues:
         (s.value for s in GCDownloadSource._member_map_.values())
     ))
     download_folder: str = folder_path('temp_downloads')
+    watched_folder: str = ''
     concurrent_direct_downloads: int = 1
     failing_download_timeout: int = 0
     seeding_handling: SeedingHandling = SeedingHandling.COPY
@@ -174,7 +175,11 @@ task_intervals = {
     # but per se after each other, put them in that order in the dict.
     'update_all': 3600, # every hour
     'search_all': 86400, # every day
-    'weekly_pull_list_check': 604800 # every week
+    'weekly_pull_list_check': 604800, # every week
+    # Enrolled for every install, but a no-op until `watched_folder` is set.
+    # Cheap enough to run unconditionally: with no folder configured it returns
+    # before touching the filesystem at all.
+    'watched_folder_import': 900 # every 15 minutes
 }
 
 SENSITIVE_SETTING_KEYS = frozenset((
@@ -514,11 +519,47 @@ class Settings(metaclass=Singleton):
                 force_suffix(abspath(value))
             )
 
+            # The watched folder is checked here for the same reason it checks
+            # against this one: an overlap would leave the watched-folder
+            # importer picking up direct downloads that are still being
+            # written. Checked from both sides so neither setting can be moved
+            # onto the other after the fact.
             if are_folders_colliding(
                 converted_value,
-                RootFolders().get_folder_list()
+                [
+                    *RootFolders().get_folder_list(),
+                    *([self.sv.watched_folder] if self.sv.watched_folder else [])
+                ]
             ):
                 raise InvalidKeyValue(key, value)
+
+        elif key == 'watched_folder':
+            from backend.implementations.root_folders import RootFolders
+
+            # Empty is the default and means the feature is off, so it must
+            # stay settable even when no such folder exists on disk.
+            if not value:
+                converted_value = ''
+
+            else:
+                if not isdir(value):
+                    raise FolderNotFound(value)
+
+                converted_value = uppercase_drive_letter(
+                    force_suffix(abspath(value))
+                )
+
+                # A watched folder inside a root folder would fight Continuous
+                # Library Import over the same files; one overlapping the
+                # download folder would grab direct downloads mid-write.
+                if are_folders_colliding(
+                    converted_value,
+                    [
+                        *RootFolders().get_folder_list(),
+                        self.sv.download_folder
+                    ]
+                ):
+                    raise InvalidKeyValue(key, value)
 
         elif key == 'concurrent_direct_downloads' and value <= 0:
             raise InvalidKeyValue(key, value)

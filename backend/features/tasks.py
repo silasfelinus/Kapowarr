@@ -21,6 +21,8 @@ from backend.features.download_queue import DownloadHandler
 from backend.features.pull_list import (check_weekly_pull_list,
                                         process_publisher_subscriptions)
 from backend.features.search import auto_search
+from backend.features.watched_folder_import import (describe_summary,
+                                                    run_watched_folder_import)
 from backend.implementations.conversion import mass_convert
 from backend.implementations.naming import mass_rename
 from backend.implementations.volumes import Volume, refresh_and_scan
@@ -518,6 +520,42 @@ class WeeklyPullListCheck(Task):
         self.message = "Applying publisher subscriptions"
         WebSocket().emit(TaskStatusEvent(self.message))
         return process_publisher_subscriptions(entries)
+
+
+class WatchedFolderImport(Task):
+    "Import externally acquired files dropped into the watched folder"
+
+    stop = False
+    message = ''
+    action = 'watched_folder_import'
+    display_title = 'Watched Folder Import'
+    category = ''
+
+    @property
+    def volume_id(self) -> None:
+        return None
+
+    @property
+    def issue_id(self) -> None:
+        return None
+
+    def __init__(self) -> None:
+        return
+
+    def run(self) -> None:
+        # Declared here, beside the other interval tasks, so `task_library`'s
+        # `get_subclasses(Task)` sweep registers it without the module needing
+        # to be imported first -- the interval is seeded for every install, so
+        # a lookup miss would break the whole interval loop, not just this
+        # task. The work itself lives in backend.features.watched_folder_import.
+        self.message = 'Scanning the watched folder'
+        WebSocket().emit(TaskStatusEvent(self.message))
+
+        summary = run_watched_folder_import(lambda: self.stop)
+
+        self.message = describe_summary(summary)
+        WebSocket().emit(TaskStatusEvent(self.message))
+        return
 
 
 # =====================

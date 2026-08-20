@@ -1,4 +1,6 @@
+import io
 import os
+import tarfile
 import tempfile
 import unittest
 from subprocess import CompletedProcess
@@ -9,11 +11,23 @@ from backend.features.comic_reader import (
     build_pages_for_files,
     find_pdf_file,
     is_reader_supported_file,
+    is_tar_archive_file,
     list_archive_pages,
     list_rar_pages,
+    list_tar_pages,
     natural_sort_key,
     read_rar_member,
+    read_tar_member,
 )
+
+
+def _write_tar(path, members, mode='w'):
+    """Write a tar holding ``members`` as {name: bytes} regular files."""
+    with tarfile.open(path, mode) as archive:
+        for name, payload in members.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(payload)
+            archive.addfile(info, io.BytesIO(payload))
 
 
 class ComicReaderTest(unittest.TestCase):
@@ -177,6 +191,129 @@ class ComicReaderTest(unittest.TestCase):
             with open(archive_path, 'wb') as broken:
                 broken.write(b'not a zip')
             self.assertEqual(list_archive_pages(archive_path), [])
+
+
+class ComicReaderTarTest(unittest.TestCase):
+    def test_tar_detection_covers_double_extensions_only(self):
+        for name in (
+            '/library/Issue 1.cbt',
+            '/library/Issue 1.CBT',
+            '/library/Issue 1.tar',
+            '/library/Issue 1.tar.gz',
+            '/library/Issue 1.tgz',
+            '/library/Issue 1.tar.bz2',
+            '/library/Issue 1.tar.xz'
+        ):
+            self.assertTrue(is_tar_archive_file(name), name)
+
+        # A bare compressed file is one stream, not an archive of pages.
+        for name in ('/library/Issue 1.gz', '/library/scan.xz'):
+            self.assertFalse(is_tar_archive_file(name), name)
+
+    def test_reader_support_includes_tar_but_not_7z(self):
+        self.assertTrue(is_reader_supported_file('/library/Issue 1.cbt'))
+        self.assertTrue(is_reader_supported_file('/library/Issue 1.tar.gz'))
+        # Nothing in this codebase can open a 7z container, so the reader
+        # declines it up front rather than listing pages it cannot serve.
+        self.assertFalse(is_reader_supported_file('/library/Issue 1.cb7'))
+        self.assertFalse(is_reader_supported_file('/library/Issue 1.7z'))
+
+    def test_tar_pages_ignore_metadata_and_sort_images(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_path = os.path.join(tmp, 'issue.cbt')
+            _write_tar(archive_path, {
+                'ComicInfo.xml': b'<ComicInfo/>',
+                'pages/10.jpg': b'ten',
+                'pages/2.jpg': b'two',
+                'pages/1.png': b'one'
+            })
+
+            self.assertEqual(
+                list_tar_pages(archive_path),
+                ['pages/1.png', 'pages/2.jpg', 'pages/10.jpg']
+            )
+
+    def test_compressed_tar_is_listed_through_the_same_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_path = os.path.join(tmp, 'issue.tar.gz')
+            _write_tar(
+                archive_path,
+                {'001.jpg': b'one', '002.jpg': b'two'},
+                mode='w:gz'
+            )
+
+            self.assertEqual(
+                list_tar_pages(archive_path),
+                ['001.jpg', '002.jpg']
+            )
+
+    def test_tar_member_is_read_without_extraction(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_path = os.path.join(tmp, 'issue.cbt')
+            _write_tar(archive_path, {'pages/001.jpg': b'image-bytes'})
+
+            self.assertEqual(
+                read_tar_member(archive_path, 'pages/001.jpg'),
+                b'image-bytes'
+            )
+            # Nothing may be written next to the archive.
+            self.assertEqual(os.listdir(tmp), ['issue.cbt'])
+
+    def test_tar_link_members_are_neither_listed_nor_served(self):
+        # A symlink member resolves outside the archive on extract, so it
+        # would turn the authenticated page endpoint into a file-read
+        # primitive. It must not survive either code path.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_path = os.path.join(tmp, 'issue.cbt')
+            with tarfile.open(archive_path, 'w') as archive:
+                link = tarfile.TarInfo('001.jpg')
+                link.type = tarfile.SYMTYPE
+                link.linkname = '/etc/passwd'
+                archive.addfile(link)
+
+                real = tarfile.TarInfo('002.jpg')
+                real.size = 3
+                archive.addfile(real, io.BytesIO(b'two'))
+
+            self.assertEqual(list_tar_pages(archive_path), ['002.jpg'])
+            self.assertIsNone(read_tar_member(archive_path, '001.jpg'))
+
+    def test_missing_tar_member_is_reported_as_unavailable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_path = os.path.join(tmp, 'issue.cbt')
+            _write_tar(archive_path, {'001.jpg': b'one'})
+
+            self.assertIsNone(read_tar_member(archive_path, 'nope.jpg'))
+
+    def test_bad_tar_produces_no_pages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_path = os.path.join(tmp, 'broken.cbt')
+            with open(archive_path, 'wb') as broken:
+                broken.write(b'not a tar')
+
+            self.assertEqual(list_tar_pages(archive_path), [])
+            self.assertIsNone(read_tar_member(archive_path, '001.jpg'))
+
+    def test_build_pages_adds_cbt_members_as_tar_pages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_path = os.path.join(tmp, 'issue.cbt')
+            _write_tar(archive_path, {'001.jpg': b'one', '002.png': b'two'})
+
+            pages = build_pages_for_files([
+                {'id': 7, 'filepath': archive_path, 'size': 10}
+            ])
+
+            self.assertEqual(len(pages), 2)
+            self.assertEqual(
+                [page['archive_type'] for page in pages],
+                ['tar', 'tar']
+            )
+            self.assertEqual(
+                [page['member'] for page in pages],
+                ['001.jpg', '002.png']
+            )
+            self.assertEqual(pages[0]['mimetype'], 'image/jpeg')
+            self.assertEqual(pages[1]['mimetype'], 'image/png')
 
 
 if __name__ == '__main__':

@@ -243,6 +243,26 @@ def pack_preference_rank(issue_number: Any) -> int:
     return 1 if is_pack else 0
 
 
+def availability_rank(result: Mapping[str, Any]) -> int:
+    """Return a small ranking component for known-dead peer availability.
+
+    Lower is better. This is not a user preference: a release with zero
+    seeders cannot be downloaded, so it belongs behind one that can.
+
+    Absent data ranks neutrally, and that is the whole design constraint.
+    ``SearchResultAvailabilityData`` is ``total=False`` and only Torznab
+    populates it -- GetComics and Newznab results carry no peer counts at
+    all. Scoring "unknown" as anything worse than "healthy" would quietly
+    demote every non-torrent source, so only a result that explicitly
+    reports zero seeders is demoted; missing, ``None`` and positive counts
+    are all equally neutral.
+    """
+    seeders = result.get('seeders')
+    if seeders is None:
+        return 0
+    return 1 if seeders <= 0 else 0
+
+
 def getcomics_quality_label(title: str) -> str:
     """Classify an explicit GetComics group title as HD, SD, or unknown."""
     if _HD_RE.search(title):

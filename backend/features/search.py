@@ -11,7 +11,8 @@ from backend.base.helpers import (AsyncSession, check_overlapping_issues,
                                   extract_year_from_date, force_range,
                                   normalise_query_string)
 from backend.base.logging import LOGGER
-from backend.features.acquisition_preferences import (indexer_priority,
+from backend.features.acquisition_preferences import (availability_rank,
+                                                       indexer_priority,
                                                        ordered_download_types,
                                                        pack_preference_rank)
 from backend.implementations.getcomics import search_getcomics
@@ -122,6 +123,12 @@ def _rank_search_result(
         vy_score -= 1
 
     rating.append(vy_score)
+
+    # Peer availability sits below match/title/year correctness -- a well-seeded
+    # wrong issue is still the wrong issue -- but above pack preference, because
+    # preferring the shape of a release nobody can download is meaningless.
+    # Only an explicit zero-seeder count is demoted; see availability_rank().
+    rating.append(availability_rank(result))
 
     # User pack preference is deliberately below match/title/year correctness,
     # but above the historical issue-shape tie-breaker. Neutral adds the same

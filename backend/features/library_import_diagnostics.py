@@ -21,6 +21,7 @@ from backend.base.logging import LOGGER
 from backend.features.library_import_policy import (
     AUTO_IMPORT_MIN_MATCH_SCORE,
     AUTO_IMPORT_MIN_SCORE_MARGIN,
+    _policy_score,
 )
 from backend.implementations.matching import _rank_volume_results_for_file
 from backend.internals.db import DBConnection
@@ -80,18 +81,39 @@ def build_review_diagnostics(
         search_results,
         only_english
     )
+
+    # The decision is made on the policy score, not the base ranking score:
+    # continuous import adds an exact-year bonus and an issue-capacity
+    # bonus/penalty, and re-sorts on the result. Recording the base score
+    # beside `thresholds.minimum_score` meant a record could not explain its
+    # own verdict -- a hold could show a best score above the minimum it was
+    # supposedly held for, or below one it passed. Both are recorded now, and
+    # the decision fields are the ones the matcher actually compared.
+    policy_ranked = sorted(
+        (
+            (result, base_score, _policy_score(group, result, base_score))
+            for result, base_score in ranked_results
+        ),
+        key=lambda item: item[2],
+        reverse=True
+    )
     viable_scores = {
         result['comicvine_id']: score
         for result, score in ranked_results
     }
+    policy_scores = {
+        result['comicvine_id']: policy
+        for result, _, policy in policy_ranked
+    }
 
-    best_score = ranked_results[0][1] if ranked_results else None
-    runner_up_score = ranked_results[1][1] if len(ranked_results) > 1 else None
+    best_score = policy_ranked[0][2] if policy_ranked else None
+    runner_up_score = policy_ranked[1][2] if len(policy_ranked) > 1 else None
     score_margin = (
         best_score - runner_up_score
         if best_score is not None and runner_up_score is not None
         else None
     )
+    best_base_score = policy_ranked[0][1] if policy_ranked else None
 
     first_file = next(iter(group.values()))
     return {
@@ -107,7 +129,10 @@ def build_review_diagnostics(
             'runner_up_score': runner_up_score,
             'score_margin': score_margin,
             'raw_result_count': len(search_results),
-            'viable_candidate_count': len(ranked_results)
+            'viable_candidate_count': len(ranked_results),
+            # What the base ranker gave the same winner, for comparison with
+            # the policy score the decision used.
+            'best_base_score': best_base_score
         },
         'files': [
             {
@@ -123,7 +148,8 @@ def build_review_diagnostics(
         'raw_search_results': [
             {
                 **_candidate_snapshot(result),
-                'viable_score': viable_scores.get(result['comicvine_id'])
+                'viable_score': viable_scores.get(result['comicvine_id']),
+                'policy_score': policy_scores.get(result['comicvine_id'])
             }
             for result in search_results[:RAW_SEARCH_CAPTURE_LIMIT]
         ]

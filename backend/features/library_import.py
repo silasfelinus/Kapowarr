@@ -144,7 +144,12 @@ def _collect_unimported_files(
             if d in image_folders:
                 continue
             image_folders.add(d)
-            d, f = dirname(d), d
+            # An unpacked/image comic is represented by its directory, but the
+            # directory remains the scan/checkpoint boundary. Hoisting `d` to
+            # its parent collapses every top-level image comic into the entire
+            # configured root folder (for example /content), creating one huge
+            # synthetic final work item instead of one checkpoint per comic.
+            f = d
 
         scan_folder = dirname(d) if limit_parent_folder else d
         unimported_files[f] = file_data

@@ -6,11 +6,18 @@
 {% endblock %}
 {% block js %}
 	<script src="{{ url_for('static', filename='js/pull_list.js') }}" defer></script>
+	<script src="{{ url_for('static', filename='js/pull_list_publisher_tools.js') }}" defer></script>
 {% endblock %}
 
 {% block pre_build_els %}
 <div class="publisher-rule">
 	<span class="publisher-rule-name"></span>
+	<button
+		class="publisher-info-button"
+		type="button"
+		aria-label="About this publisher"
+		title="About this publisher"
+	>?</button>
 	<span class="publisher-rule-count"></span>
 	<select class="publisher-rule-mode" aria-label="Publisher automation mode">
 		<option value="off">Off</option>
@@ -56,16 +63,51 @@
 		<section id="publisher-rules" class="publisher-rules hidden">
 			<h2>Publisher automation</h2>
 			<p>
-				Rules are opt-in. Auto-add monitors newly released series; auto-grab
-				also searches enabled download sources for each released issue. Rules
-				apply to the current week on the next scheduled or manual check.
+				Rules are opt-in. Auto-add adds and monitors newly released series;
+				auto-add &amp; grab also searches enabled download sources for each
+				released issue. Rules apply to the current week on the next scheduled
+				or manual check.
 			</p>
-			<label>
-				Root folder
-				<select id="publisher-root-folder"></select>
-			</label>
+			<div class="publisher-bulk-controls">
+				<label>
+					Root folder
+					<select id="publisher-root-folder"></select>
+				</label>
+				<button id="publisher-grab-all" type="button">
+					Auto-add &amp; grab all listed publishers
+				</button>
+			</div>
+			<p class="publisher-bulk-note">
+				“All listed” means publishers currently present in the stored release
+				catalogue. Publishers discovered later stay off until you enable them.
+			</p>
 			<div id="publisher-rule-list"></div>
 		</section>
+
+		<dialog id="publisher-info-dialog" class="publisher-info-dialog">
+			<div class="publisher-info-heading">
+				<h2 id="publisher-info-name"></h2>
+				<button id="publisher-info-close" type="button" aria-label="Close publisher info">×</button>
+			</div>
+			<p id="publisher-info-description"></p>
+			<dl class="publisher-info-grid">
+				<div>
+					<dt>Stored releases</dt>
+					<dd id="publisher-info-stored"></dd>
+				</div>
+				<div>
+					<dt>This displayed week</dt>
+					<dd id="publisher-info-week"></dd>
+				</div>
+				<div>
+					<dt>Automation</dt>
+					<dd id="publisher-info-automation"></dd>
+				</div>
+			</dl>
+			<p class="publisher-info-more">
+				<a id="publisher-info-search" target="_blank" rel="noopener noreferrer">Search Wikipedia for this publisher</a>
+			</p>
+		</dialog>
 
 		<section class="release-filters" aria-label="Release filters">
 			<input id="release-search" type="search" placeholder="Filter titles" aria-label="Filter release titles">
@@ -81,6 +123,12 @@
 		<p class="source-explanation">
 			Release metadata comes from the publisher-aware Mylar release provider.
 			Download availability is checked separately against enabled sources.
+		</p>
+		<p class="action-explanation">
+			<strong>Add + want</strong> adds a series to Kapowarr and monitors it.
+			<strong>Want</strong> monitors a series already in your library.
+			<strong>Grab</strong> does the same monitoring step and immediately searches
+			enabled download sources for that released issue.
 		</p>
 		<p id="pull-list-check-status" class="hidden" role="status"></p>
 

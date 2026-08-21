@@ -1,19 +1,22 @@
 const LogEls = {
-	capture_level: document.querySelector('#log-capture-level'),
 	view_level: document.querySelector('#log-view-level'),
-	search: document.querySelector('#log-search'),
-	auto_refresh: document.querySelector('#log-auto-refresh'),
+	page_size: document.querySelector('#log-page-size'),
 	refresh: document.querySelector('#refresh-logs'),
+	clear: document.querySelector('#clear-logs'),
 	download: document.querySelector('#download-logs'),
 	rows: document.querySelector('#log-rows'),
 	empty: document.querySelector('#logs-empty'),
-	status: document.querySelector('#logs-status')
+	status: document.querySelector('#logs-status'),
+	page_label: document.querySelector('#log-page-label'),
+	first: document.querySelector('#log-first'),
+	prev: document.querySelector('#log-prev'),
+	next: document.querySelector('#log-next'),
+	last: document.querySelector('#log-last')
 };
 
 let log_api_key = null;
-let log_entries = [];
-let auto_refresh_timer = null;
-let last_capture_level = null;
+let log_page = 1;
+let log_pagination = {page: 1, total_pages: 1, total_entries: 0};
 
 function formatLogTime(timestamp) {
 	return timestamp.replace('T', ' ');
@@ -22,7 +25,7 @@ function formatLogTime(timestamp) {
 // A log line and a stack trace are different things to read. The summary is
 // what you scan a hundred of; the trace is what you read one of. Rendering
 // every entry's full text inline turned a page with a handful of exceptions
-// into a wall of frames with the actual sequence of events buried inside it.
+// into a wall of frames with the actual sequence of events buried in it.
 function splitLogMessage(message) {
 	const newline = message.indexOf('\n');
 	if (newline === -1)
@@ -49,13 +52,11 @@ function buildLogRow(entry) {
 	badge.textContent = entry.level;
 	level.appendChild(badge);
 
-	const source = document.createElement('td');
-	source.classList.add('log-source');
-	source.textContent = entry.source;
-	source.title = `${entry.process} · ${entry.thread}`;
-
 	const message = document.createElement('td');
 	message.classList.add('log-message');
+	// The source and thread stay available without spending a column on them:
+	// they matter once you are already reading one entry, not while scanning.
+	message.title = `${entry.source} · ${entry.process} · ${entry.thread}`;
 
 	const {summary, details} = splitLogMessage(entry.message);
 	if (!details) {
@@ -63,7 +64,7 @@ function buildLogRow(entry) {
 		text.classList.add('log-summary');
 		text.textContent = summary;
 		message.appendChild(text);
-		row.append(time, level, source, message);
+		row.append(time, level, message);
 		return row;
 	};
 
@@ -98,31 +99,29 @@ function buildLogRow(entry) {
 	};
 
 	message.append(toggle, body);
-	row.append(time, level, source, message);
+	row.append(time, level, message);
 	return row;
 };
 
-function renderLogs() {
-	const query = LogEls.search.value.trim().toLowerCase();
-	const visible = query
-		? log_entries.filter(entry => [
-			entry.timestamp,
-			entry.level,
-			entry.source,
-			entry.process,
-			entry.thread,
-			entry.message
-		].join(' ').toLowerCase().includes(query))
-		: log_entries;
+function renderPagination() {
+	const {page, total_pages, total_entries} = log_pagination;
 
+	LogEls.page_label.textContent = `Page ${page} of ${total_pages}`;
+	LogEls.status.textContent = total_entries === 1
+		? '1 entry'
+		: `${total_entries} entries`;
+
+	LogEls.first.disabled = LogEls.prev.disabled = page <= 1;
+	LogEls.next.disabled = LogEls.last.disabled = page >= total_pages;
+};
+
+function renderLogs(entries) {
 	LogEls.rows.innerHTML = '';
 	const fragment = document.createDocumentFragment();
-
-	visible.forEach(entry => fragment.appendChild(buildLogRow(entry)));
-
+	entries.forEach(entry => fragment.appendChild(buildLogRow(entry)));
 	LogEls.rows.appendChild(fragment);
-	LogEls.empty.classList.toggle('hidden', visible.length !== 0);
-	LogEls.status.textContent = `${visible.length} shown · ${log_entries.length} loaded`;
+	LogEls.empty.classList.toggle('hidden', entries.length !== 0);
+	renderPagination();
 };
 
 async function refreshLogs() {
@@ -130,16 +129,18 @@ async function refreshLogs() {
 		return;
 
 	LogEls.refresh.disabled = true;
-	LogEls.status.textContent = 'Refreshing…';
 	try {
 		const json = await fetchAPI('/system/logs/view', log_api_key, {
 			level: LogEls.view_level.value,
-			limit: 1000
+			page_size: LogEls.page_size.value,
+			page: log_page
 		});
-		log_entries = json.result.entries;
-		last_capture_level = String(json.result.capture_level);
-		LogEls.capture_level.value = last_capture_level;
-		renderLogs();
+		const result = json.result;
+		log_pagination = result;
+		// The server clamps a page past the end, so follow it back rather than
+		// asking for a page that no longer exists on every later refresh.
+		log_page = result.page;
+		renderLogs(result.entries);
 	} catch (error) {
 		console.error(error);
 		LogEls.status.textContent = 'Could not load logs.';
@@ -148,55 +149,42 @@ async function refreshLogs() {
 	};
 };
 
-async function changeCaptureLevel() {
+function goToPage(page) {
+	log_page = page;
+	refreshLogs();
+};
+
+async function clearLogs() {
 	if (!log_api_key)
 		return;
 
-	const next_level = Number(LogEls.capture_level.value),
-		previous_level = last_capture_level;
-	LogEls.capture_level.disabled = true;
-	LogEls.status.textContent = next_level === 10
-		? 'Enabling debug capture…'
-		: 'Returning capture to info…';
+	if (!confirm('Clear the log file? This cannot be undone.'))
+		return;
 
+	LogEls.clear.disabled = true;
+	LogEls.status.textContent = 'Clearing…';
 	try {
-		await sendAPI('PUT', '/settings', log_api_key, {}, {
-			log_level: next_level
-		});
-		last_capture_level = String(next_level);
-		LogEls.status.textContent = next_level === 10
-			? 'Debug capture enabled.'
-			: 'Info capture enabled.';
+		await sendAPI('POST', '/system/logs/clear', log_api_key);
+		log_page = 1;
+		await refreshLogs();
 	} catch (error) {
 		console.error(error);
-		if (previous_level !== null)
-			LogEls.capture_level.value = previous_level;
-		LogEls.status.textContent = 'Could not change capture level.';
+		LogEls.status.textContent = 'Could not clear the log.';
 	} finally {
-		LogEls.capture_level.disabled = false;
+		LogEls.clear.disabled = false;
 	};
 };
 
-function updateAutoRefresh() {
-	if (auto_refresh_timer !== null) {
-		clearInterval(auto_refresh_timer);
-		auto_refresh_timer = null;
-	};
+LogEls.refresh.onclick = () => refreshLogs();
+LogEls.clear.onclick = clearLogs;
+LogEls.first.onclick = () => goToPage(1);
+LogEls.prev.onclick = () => goToPage(log_pagination.page - 1);
+LogEls.next.onclick = () => goToPage(log_pagination.page + 1);
+LogEls.last.onclick = () => goToPage(log_pagination.total_pages);
 
-	if (LogEls.auto_refresh.checked)
-		auto_refresh_timer = setInterval(refreshLogs, 5000);
-};
-
-LogEls.refresh.onclick = refreshLogs;
-LogEls.view_level.onchange = refreshLogs;
-LogEls.search.oninput = renderLogs;
-LogEls.capture_level.onchange = changeCaptureLevel;
-LogEls.auto_refresh.onchange = updateAutoRefresh;
-
-document.addEventListener('visibilitychange', () => {
-	if (!document.hidden && LogEls.auto_refresh.checked)
-		refreshLogs();
-});
+// Changing what is shown starts the reader over at the top of the new list.
+LogEls.view_level.onchange = () => goToPage(1);
+LogEls.page_size.onchange = () => goToPage(1);
 
 usingApiKey()
 .then(api_key => {

@@ -1,3 +1,9 @@
+/*
+	`--nav-background-color` and `--text-color` are the same colour in the light
+	theme (both #464b51), so any surface pairing them rendered as unreadable
+	near-black text on near-black. `--foreground-color` is the token defined to
+	contrast with `--text-color` in both themes.
+*/
 .import-lists-settings {
 	max-width: 78rem;
 }
@@ -72,7 +78,7 @@
 .form-actions .secondary,
 .import-list-actions .secondary,
 .exclusion-entry button {
-	background: var(--nav-background-color);
+	background: var(--foreground-color);
 	color: var(--text-color);
 }
 

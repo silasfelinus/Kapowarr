@@ -30,9 +30,23 @@ BACKUP_DB_MEMBER = Constants.DB_NAME
 BACKUP_MANIFEST_MEMBER = 'manifest.json'
 PENDING_RESTORE_SUFFIX = '.restore'
 SECONDS_PER_DAY = 86_400
-AUTO_BACKUP_INTERVAL_DAYS = 7
-AUTO_BACKUP_INTERVAL_SECONDS = AUTO_BACKUP_INTERVAL_DAYS * SECONDS_PER_DAY
-BACKUP_RETENTION_DAYS = 28
+
+# Backups a restore created of the state it was about to replace. They exist so
+# a restore can be undone, which is exactly when the retention count is least
+# worth trusting, so they are kept outside it.
+PRE_RESTORE_KIND = 'pre-restore'
+
+
+def get_backup_schedule() -> Dict[str, int]:
+    """Read the configured backup frequency and retention count."""
+    from backend.internals.settings import Settings
+
+    settings = Settings().sv
+    return {
+        'interval_days': settings.backup_interval_days,
+        'interval_seconds': settings.backup_interval_days * SECONDS_PER_DAY,
+        'keep_count': settings.backup_keep_count,
+    }
 
 
 def get_backup_folder() -> str:
@@ -201,13 +215,33 @@ def delete_backup(filename: str) -> None:
 
 
 def prune_backups() -> None:
-    """Delete backup archives older than the familiar 28-day *arr window."""
-    cutoff = time() - (BACKUP_RETENTION_DAYS * SECONDS_PER_DAY)
+    """Keep the newest `backup_keep_count` archives and delete the rest.
+
+    Retention used to be a fixed 28-day window, which answers a different
+    question than the one people actually ask of it: a window says how long an
+    archive survives, while what you want to know is how many restore points
+    you have. A count also makes the disk cost predictable, which a window
+    cannot -- shorten the interval and a window silently holds more.
+
+    Pre-restore archives do not count towards the limit and are never pruned
+    here. They are the undo for a restore, so retention pressure from ordinary
+    scheduled backups must not be able to delete one.
+    """
+    keep = get_backup_schedule()['keep_count']
+    kept = 0
     for backup in list_backups():
-        path = join(get_backup_folder(), backup['filename'])
-        if getmtime(path) < cutoff:
-            remove(path)
-            LOGGER.info('Pruned expired database backup: %s', backup['filename'])
+        if backup['kind'] == PRE_RESTORE_KIND:
+            continue
+
+        kept += 1
+        if kept <= keep:
+            continue
+
+        remove(join(get_backup_folder(), backup['filename']))
+        LOGGER.info(
+            'Pruned database backup beyond the %d kept: %s',
+            keep, backup['filename']
+        )
 
 
 def stage_restore(filename: str) -> Dict[str, Any]:
@@ -318,15 +352,30 @@ task_library[DatabaseBackup.action] = DatabaseBackup
 
 
 def ensure_backup_interval() -> None:
-    """Ensure the persistent weekly task exists without resetting its next run."""
+    """Register the scheduled backup at the configured frequency.
+
+    Called both at startup and whenever the frequency setting changes, so it
+    has to tell those apart. A startup call must leave `next_run` alone or the
+    backup would be pushed out by another full interval on every restart and,
+    on a machine that restarts often, never run at all. A frequency change must
+    move it, or the pending run would keep the old schedule -- shortening the
+    interval from monthly to daily would otherwise still mean waiting out the
+    rest of the month.
+    """
+    interval = get_backup_schedule()['interval_seconds']
     current_time = round(time())
     get_db().execute(
         """
         INSERT INTO task_intervals(task_name, interval, next_run)
         VALUES (?, ?, ?)
-        ON CONFLICT(task_name) DO UPDATE SET interval = excluded.interval;
+        ON CONFLICT(task_name) DO UPDATE SET
+            interval = excluded.interval,
+            next_run = CASE
+                WHEN task_intervals.interval != excluded.interval THEN ?
+                ELSE task_intervals.next_run
+            END;
         """,
-        (DatabaseBackup.action, AUTO_BACKUP_INTERVAL_SECONDS, current_time)
+        (DatabaseBackup.action, interval, current_time, current_time + interval)
     )
     commit()
 

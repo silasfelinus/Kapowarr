@@ -12,7 +12,7 @@
 	<section class="backup-header">
 		<div>
 			<h1>Backup</h1>
-			<p>Kapowarr automatically creates a database backup every 7 days and keeps backups for 28 days.</p>
+			<p id="backup-schedule-summary">Kapowarr automatically creates a database backup on a schedule you set below.</p>
 			<p class="backup-note">Backups include Kapowarr settings and credentials stored in the database. Downloads and uploads require your authenticated API key.</p>
 		</div>
 		<div class="backup-header-actions">
@@ -23,6 +23,23 @@
 	</section>
 
 	<p id="backup-status" aria-live="polite"></p>
+
+	<section class="backup-schedule" aria-label="Backup schedule">
+		<h2>Schedule</h2>
+		<label for="backup-interval">
+			<span>Run every (days)</span>
+			<input id="backup-interval" type="number" min="1" max="365" step="1">
+		</label>
+		<label for="backup-keep">
+			<span>Backups to keep</span>
+			<input id="backup-keep" type="number" min="1" max="100" step="1">
+		</label>
+		<button id="backup-schedule-save" type="button">Save Schedule</button>
+		<p class="backup-hint">
+			Older automatic backups are deleted once this many exist. Pre-restore
+			backups are kept outside this count, so restoring can always be undone.
+		</p>
+	</section>
 
 	<section class="backup-table-wrap" aria-label="Database backups">
 		<table class="backup-table">

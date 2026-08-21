@@ -25,11 +25,69 @@ const css = fs.readFileSync(
 	'utf8'
 );
 
-test('logs page separates capture granularity from view granularity', () => {
-	assert.match(template, /id="log-capture-level"/);
+test('the toolbar is actions on the left and filters on the right', () => {
+	const actions = template.indexOf('class="logs-actions"');
+	const filters = template.indexOf('class="logs-filters"');
+	assert.notEqual(actions, -1);
+	assert.notEqual(filters, -1);
+	assert.ok(actions < filters, 'actions come before filters in the toolbar');
+
+	assert.match(template, /id="refresh-logs"/);
+	assert.match(template, /id="clear-logs"/);
+	assert.match(template, /id="log-page-size"/);
 	assert.match(template, /id="log-view-level"/);
-	assert.match(template, /Debug \+/);
-	assert.match(template, /Errors \+/);
+});
+
+test('the level filter selects one level rather than a minimum', () => {
+	assert.match(template, /value="ALL" selected/);
+	assert.match(template, /All levels/);
+	// "Info +" style options promised a minimum, which buried the level you
+	// picked under everything less severe than it.
+	assert.doesNotMatch(template, /Debug \+/);
+	assert.doesNotMatch(template, /Errors \+/);
+});
+
+test('capture level is no longer a control on this page', () => {
+	// Persisting debug output is a settings decision, not something to change
+	// while reading; leaving it here invited turning it on and forgetting.
+	assert.doesNotMatch(template, /id="log-capture-level"/);
+	assert.doesNotMatch(script, /log_level/);
+});
+
+test('the table shows time, type and message', () => {
+	assert.match(template, />Time</);
+	assert.match(template, />Type</);
+	assert.match(template, />Message</);
+});
+
+test('pagination controls sit below the table', () => {
+	const table = template.indexOf('logs-table-wrap');
+	const pager = template.indexOf('logs-pagination');
+	assert.ok(table !== -1 && pager !== -1);
+	assert.ok(table < pager, 'the pager follows the table');
+	assert.match(template, /id="log-first"/);
+	assert.match(template, /id="log-prev"/);
+	assert.match(template, /id="log-next"/);
+	assert.match(template, /id="log-last"/);
+});
+
+test('clearing the log asks first and goes through its own endpoint', () => {
+	assert.match(script, /if \(!confirm\(/);
+	assert.match(script, /sendAPI\('POST', '\/system\/logs\/clear'/);
+});
+
+test('the log table is given the space left on the page', () => {
+	// A fixed `calc(100vh - …)` cap assumed a particular toolbar height, so
+	// the table showed a sliver of rows with the rest of the screen empty.
+	assert.match(css, /\.logs-table-wrap \{[^}]*flex: 1/);
+	assert.doesNotMatch(css, /max-height: calc\(100vh/);
+});
+
+test('controls do not paint text on a background of the same colour', () => {
+	// --nav-background-color and --text-color are the same value in the light
+	// theme, so pairing them rendered an unreadable black-on-black block.
+	const pairs = css.match(/background: var\(--nav-background-color\)/g) || [];
+	assert.equal(pairs.length, 0);
 });
 
 test('logs viewer renders log content as text instead of injecting markup', () => {
@@ -58,15 +116,10 @@ test('levels are rendered as badges the eye can sort on', () => {
 	assert.match(css, /\.log-warning \.log-level-badge/);
 });
 
-test('logs page changes capture level through the existing settings API', () => {
-	assert.match(script, /sendAPI\('PUT', '\/settings'/);
-	assert.match(script, /log_level: next_level/);
-});
-
-test('system status exposes logs as a visible system surface', () => {
-	assert.match(status, /aria-label="Logs"/);
-	assert.match(status, /href="\{\{url_base\}\}\/system\/logs"/);
-	assert.match(status, />View Logs<\/a>/);
+test('logs are a system tab and are not also listed on status', () => {
+	assert.match(base, /href="\{\{url_base\}\}\/system\/logs"/);
+	// Listed once. Two entries read as two destinations rather than one.
+	assert.doesNotMatch(status, /\/system\/logs/);
 });
 
 test('logs are reachable from the system navigation, not only from status', () => {

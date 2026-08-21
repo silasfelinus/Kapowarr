@@ -33,13 +33,21 @@ main {
 	font-size: .9rem;
 }
 
+/*
+	`--nav-background-color` and `--text-color` resolve to the same colour in
+	the light theme (both #464b51), so `.secondary` was painting near-black
+	text on a near-black background -- an unreadable block where a button
+	should be. `--foreground-color` is the token defined to contrast with
+	`--text-color` in both themes, and the accent is the same yellow in both,
+	so its ink is the one the header already uses on it.
+*/
 #backup-now,
 .backup-action {
 	border: 1px solid var(--border-color);
 	border-radius: 4px;
 	padding: .5rem .7rem;
 	background: var(--accent-color);
-	color: var(--nav-background-color);
+	color: var(--header-color);
 	font: inherit;
 	font-weight: 600;
 	cursor: pointer;
@@ -53,8 +61,12 @@ main {
 }
 
 .backup-action.secondary {
-	background: var(--nav-background-color);
+	background: var(--foreground-color);
 	color: var(--text-color);
+}
+
+.backup-action.secondary:hover:not(:disabled) {
+	border-color: var(--accent-color);
 }
 
 .backup-action.danger {
@@ -65,6 +77,49 @@ main {
 #backup-status {
 	min-height: 1.25rem;
 	margin: .8rem 0;
+}
+
+.backup-schedule {
+	display: flex;
+	align-items: end;
+	gap: 1rem;
+	flex-wrap: wrap;
+	margin: 1rem 0;
+	padding: .9rem 1rem;
+	border: 1px solid var(--border-color);
+	border-radius: 4px;
+	background: var(--foreground-color);
+}
+
+.backup-schedule h2 {
+	width: 100%;
+	margin: 0;
+	font-size: 1rem;
+}
+
+.backup-schedule label {
+	display: flex;
+	flex-direction: column;
+	gap: .3rem;
+	font-size: .85rem;
+}
+
+.backup-schedule input {
+	width: 7rem;
+	min-height: 2.3rem;
+	border: 1px solid var(--border-color);
+	border-radius: 4px;
+	padding: .45rem .65rem;
+	font: inherit;
+	background: var(--background-color);
+	color: var(--text-color);
+}
+
+.backup-schedule .backup-hint {
+	flex-basis: 100%;
+	margin: 0;
+	font-size: .85rem;
+	color: var(--dimmed-text-color);
 }
 
 .backup-table-wrap {

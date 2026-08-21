@@ -3,7 +3,11 @@ const BackupEls = {
 	upload: document.querySelector('#backup-upload'),
 	status: document.querySelector('#backup-status'),
 	rows: document.querySelector('#backup-rows'),
-	empty: document.querySelector('#backup-empty')
+	empty: document.querySelector('#backup-empty'),
+	interval: document.querySelector('#backup-interval'),
+	keep: document.querySelector('#backup-keep'),
+	save_schedule: document.querySelector('#backup-schedule-save'),
+	schedule_summary: document.querySelector('#backup-schedule-summary')
 };
 
 let backup_api_key = null;
@@ -193,11 +197,76 @@ async function restoreUploadedBackup() {
 	};
 };
 
+function describeSchedule(interval, keep) {
+	const every = interval === 1 ? 'every day' : `every ${interval} days`;
+	const kept = keep === 1 ? '1 backup' : `${keep} backups`;
+	return `Kapowarr automatically creates a database backup ${every} and keeps the newest ${kept}.`;
+};
+
+async function loadSchedule() {
+	if (!backup_api_key)
+		return;
+
+	try {
+		const json = await fetchAPI('/settings', backup_api_key);
+		const interval = json.result.backup_interval_days,
+			keep = json.result.backup_keep_count;
+		BackupEls.interval.value = interval;
+		BackupEls.keep.value = keep;
+		BackupEls.schedule_summary.textContent = describeSchedule(interval, keep);
+	} catch (error) {
+		console.error(error);
+	};
+};
+
+async function saveSchedule() {
+	if (!backup_api_key)
+		return;
+
+	const interval = Number(BackupEls.interval.value),
+		keep = Number(BackupEls.keep.value);
+
+	// Checked here as well as by the backend so a typo produces a sentence
+	// rather than a rejected request the user has to interpret.
+	if (!Number.isInteger(interval) || interval < 1 || interval > 365) {
+		BackupEls.status.textContent = 'Run every must be between 1 and 365 days.';
+		return;
+	};
+	if (!Number.isInteger(keep) || keep < 1 || keep > 100) {
+		BackupEls.status.textContent = 'Backups to keep must be between 1 and 100.';
+		return;
+	};
+
+	BackupEls.save_schedule.disabled = true;
+	BackupEls.status.textContent = 'Saving schedule…';
+	try {
+		const response = await sendAPI('PUT', '/settings', backup_api_key, {}, {
+			backup_interval_days: interval,
+			backup_keep_count: keep
+		});
+		await requireBackupResponse(response);
+		BackupEls.schedule_summary.textContent = describeSchedule(interval, keep);
+		BackupEls.status.textContent = 'Schedule saved.';
+		// Lowering the count takes effect at the next backup, not retroactively,
+		// so the list on screen is still accurate -- but reload it anyway in case
+		// a backup ran while this page was open.
+		refreshBackups();
+	} catch (error) {
+		console.error(error);
+		BackupEls.status.textContent = 'Could not save the schedule.';
+		loadSchedule();
+	} finally {
+		BackupEls.save_schedule.disabled = false;
+	};
+};
+
 BackupEls.create.onclick = createBackupNow;
 BackupEls.upload.onchange = restoreUploadedBackup;
+BackupEls.save_schedule.onclick = saveSchedule;
 
 usingApiKey()
 .then(api_key => {
 	backup_api_key = api_key;
+	loadSchedule();
 	refreshBackups();
 });

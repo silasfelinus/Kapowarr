@@ -1,5 +1,6 @@
 import sqlite3
 import unittest
+from asyncio import sleep
 from datetime import date, timedelta
 from unittest.mock import AsyncMock, patch
 
@@ -19,6 +20,12 @@ from backend.internals.db import KapowarrCursor
 def _current_week():
     today = date.today()
     return (today - timedelta(days=today.weekday())).isoformat()
+
+
+def _previous_week():
+    return (
+        date.fromisoformat(_current_week()) - timedelta(weeks=1)
+    ).isoformat()
 
 
 def _release(series, issue_number='1', year=None,
@@ -121,6 +128,23 @@ class weekly_release_sources_registry(unittest.TestCase):
             self.assertIn(_DummySource, WeeklyReleaseSources.sources)
         finally:
             WeeklyReleaseSources.sources = original_sources
+
+
+class weekly_release_source_timeout(unittest.IsolatedAsyncioTestCase):
+    async def test_slow_source_is_bounded_and_skipped(self):
+        class _SlowSource(WeeklyReleaseSource):
+            async def fetch(self, session, requested_date=None):
+                await sleep(0.05)
+                return [_release('Too Late')]
+
+        with patch.object(
+            pull_list_module, 'WEEKLY_RELEASE_FETCH_TIMEOUT', 0.001
+        ):
+            releases = await pull_list_module._fetch_release_source(
+                _SlowSource(), None, date.today()
+            )
+
+        self.assertEqual(releases, [])
 
 
 class weekly_pull_list_persistence(unittest.TestCase):
@@ -235,6 +259,34 @@ class weekly_pull_list_persistence(unittest.TestCase):
             self._check([])
         self.assertEqual(len(get_pull_list(_current_week())), 1)
 
+    def test_missing_current_week_preserves_previous_results_and_fails(self):
+        self._check([_release('Batman')])
+        previous = _release('Old Batman')
+        previous['week_start'] = _previous_week()
+
+        with self.assertRaisesRegex(
+            RuntimeError, 'No current-week publisher releases'
+        ):
+            self._check([previous])
+
+        stored = get_pull_list(_current_week())
+        self.assertEqual([row['release_title'] for row in stored], ['Batman'])
+
+    def test_availability_only_result_does_not_replace_catalogue(self):
+        self._check([_release('Batman')])
+        available = _release(
+            'Batman', source='GetComics', publisher=None
+        )
+        available['availability_source'] = 'GetComics'
+        available['availability_link'] = 'https://getcomics.example/batman'
+
+        with self.assertRaisesRegex(
+            RuntimeError, 'No current-week publisher releases'
+        ):
+            self._check([available])
+
+        self.assertEqual(len(get_pull_list(_current_week())), 1)
+
     def test_publisher_subscription_is_returned_with_counts(self):
         self._check([_release('Batman'), _release('Nightwing')])
         set_publisher_subscription('DC Comics', 1, True)
@@ -243,7 +295,22 @@ class weekly_pull_list_persistence(unittest.TestCase):
 
         self.assertEqual(publishers[0]['publisher'], 'DC Comics')
         self.assertEqual(publishers[0]['release_count'], 2)
+        self.assertEqual(
+            publishers[0]['release_counts'][_current_week()], 2
+        )
         self.assertEqual(publishers[0]['auto_search'], 1)
+
+    def test_publisher_counts_are_broken_out_by_week(self):
+        current = _release('Batman')
+        previous = _release('Nightwing')
+        previous['week_start'] = _previous_week()
+        self._check([current, previous])
+
+        publisher = get_publishers()[0]
+
+        self.assertEqual(publisher['release_count'], 2)
+        self.assertEqual(publisher['release_counts'][_current_week()], 1)
+        self.assertEqual(publisher['release_counts'][_previous_week()], 1)
 
 
 if __name__ == '__main__':

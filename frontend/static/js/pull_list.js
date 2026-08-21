@@ -28,6 +28,7 @@ const PullListEls = {
 const pullListState = {
 	entries: [],
 	publishers: [],
+	stored_weeks: [],
 	week: startOfWeek(new Date()),
 	page: 0,
 	page_size: 50
@@ -39,6 +40,10 @@ function startOfWeek(value) {
 	const day = result.getDay();
 	result.setDate(result.getDate() - (day === 0 ? 6 : day - 1));
 	return result;
+};
+
+function dateFromIso(value) {
+	return new Date(`${value}T12:00:00`);
 };
 
 function isoDate(value) {
@@ -80,6 +85,24 @@ function actionButton(label, action, entry, api_key) {
 	return button;
 };
 
+function updateEmptyMessage(filtered_count) {
+	if (filtered_count > 0)
+		return;
+
+	const selected = isoDate(pullListState.week);
+	if (!pullListState.stored_weeks.length) {
+		PullListEls.empty_message.innerText =
+			'No release catalogue is stored yet. Run “Check Now” to fetch it.';
+		return;
+	};
+
+	const newest = pullListState.stored_weeks[0].week_start;
+	const oldest = pullListState.stored_weeks[pullListState.stored_weeks.length - 1].week_start;
+	PullListEls.empty_message.innerText =
+		`No releases are stored for ${selected}. Stored release data runs from `
+		+ `${oldest} through ${newest}. Run “Check Now” to refresh it.`;
+};
+
 function renderList(api_key) {
 	PullListEls.table.innerHTML = '';
 	const filtered = filteredEntries();
@@ -89,6 +112,7 @@ function renderList(api_key) {
 	const rows = filtered.slice(first, first + pullListState.page_size);
 
 	PullListEls.empty_message.classList.toggle('hidden', filtered.length > 0);
+	updateEmptyMessage(filtered.length);
 	PullListEls.page_label.innerText = `Page ${pullListState.page + 1} of ${page_count}`;
 	PullListEls.buttons.previous_page.disabled = pullListState.page === 0;
 	PullListEls.buttons.next_page.disabled = pullListState.page >= page_count - 1;
@@ -192,13 +216,36 @@ function loadPublishers(api_key) {
 	});
 };
 
-function loadList(api_key) {
+function loadStoredWeeks(api_key) {
+	return fetchAPI('/pulllist/weeks', api_key).then(json => {
+		pullListState.stored_weeks = json.result;
+	});
+};
+
+function loadList(api_key, fallback_to_stored=false) {
 	formatWeek();
+	const requested_week = isoDate(pullListState.week);
 	return Promise.all([
-		fetchAPI('/pulllist', api_key, {week_start: isoDate(pullListState.week)}),
-		loadPublishers(api_key)
+		fetchAPI('/pulllist', api_key, {week_start: requested_week}),
+		loadPublishers(api_key),
+		loadStoredWeeks(api_key)
 	]).then(results => {
 		pullListState.entries = results[0].result;
+		if (
+			fallback_to_stored
+			&& pullListState.entries.length === 0
+			&& pullListState.stored_weeks.length > 0
+		) {
+			const newest_week = pullListState.stored_weeks[0].week_start;
+			if (newest_week !== requested_week) {
+				pullListState.week = dateFromIso(newest_week);
+				setCheckStatus(
+					`No releases were stored for ${requested_week}; `
+					+ `showing the newest stored week, ${newest_week}.`
+				);
+				return loadList(api_key, false);
+			};
+		};
 		pullListState.page = 0;
 		renderList(api_key);
 	});
@@ -260,60 +307,36 @@ function stopCheckSpinner() {
 	PullListEls.buttons.check.querySelector('img').classList.remove('spinning');
 };
 
-function latestCheckFailure(history) {
-	const entry = history.find(item => item.task_name === 'weekly_pull_list_check');
-	if (!entry || !entry.display_title.includes('Failed:'))
-		return null;
-	return entry.display_title.split('Failed:', 2)[1].trim();
-};
-
-function finishCheck(api_key) {
-	return fetchAPI('/system/tasks/history', api_key)
+function pollUntilCheckFinished(api_key, check_id) {
+	fetchAPI(`/pulllist/check/${check_id}`, api_key)
 	.then(json => {
-		const failure = latestCheckFailure(json.result);
-		return loadList(api_key).then(() => {
-			if (failure)
-				setCheckStatus(`Check failed: ${failure}`, true);
-			else
-				setCheckStatus('Release calendar updated.');
-		});
-	})
-	.catch(error => {
-		setCheckStatus(
-			`Check failed: ${error.message || 'unable to read task status'}`,
-			true
-		);
-	})
-	.finally(stopCheckSpinner);
-};
-
-function pollUntilCheckFinished(api_key, task_id) {
-	fetchAPI('/system/tasks', api_key)
-	.then(json => {
-		const task = json.result.find(
-			entry => entry.id === task_id
-				&& entry.action === 'weekly_pull_list_check'
-		);
-		if (!task) {
-			finishCheck(api_key);
+		const check = json.result;
+		if (check.status === 'queued' || check.status === 'running') {
+			setCheckStatus(check.message || 'Refreshing the release calendar...');
+			setTimeout(() => pollUntilCheckFinished(api_key, check_id), 1500);
 			return;
 		};
 
-		if (task.status === 'queued') {
-			const running = json.result.find(entry => entry.status === 'running');
-			setCheckStatus(
-				running && running.id !== task_id
-					? `Queued behind ${running.display_title}.`
-					: 'Release calendar check is queued.'
-			);
-		} else {
-			setCheckStatus(task.message || 'Refreshing the release calendar...');
+		if (check.status === 'failed') {
+			setCheckStatus(check.message || 'Release calendar check failed.', true);
+			stopCheckSpinner();
+			return;
 		};
-		setTimeout(() => pollUntilCheckFinished(api_key, task_id), 1500);
+
+		pullListState.week = startOfWeek(new Date());
+		loadList(api_key, false)
+			.then(() => setCheckStatus(
+				`Release calendar updated (${check.release_count} releases).`
+			))
+			.catch(error => setCheckStatus(
+				`Calendar refreshed but reload failed: ${error.message || 'request failed'}`,
+				true
+			))
+			.finally(stopCheckSpinner);
 	})
 	.catch(error => {
 		setCheckStatus(
-			`Check status failed: ${error.message || 'unable to poll tasks'}`,
+			`Check status failed: ${error.message || 'unable to poll check'}`,
 			true
 		);
 		stopCheckSpinner();
@@ -324,7 +347,7 @@ function checkNow(api_key) {
 	PullListEls.buttons.check.disabled = true;
 	PullListEls.buttons.check.querySelector('img').classList.add('spinning');
 	setCheckStatus('Starting release calendar check...');
-	sendAPI('POST', '/system/tasks', api_key, {}, {cmd: 'weekly_pull_list_check'})
+	sendAPI('POST', '/pulllist/check', api_key)
 		.then(response => response.json())
 		.then(json => pollUntilCheckFinished(api_key, json.result.id))
 		.catch(error => {
@@ -342,7 +365,7 @@ function moveWeek(amount, api_key) {
 };
 
 usingApiKey().then(api_key => {
-	loadRootFolders(api_key).then(() => loadList(api_key));
+	loadRootFolders(api_key).then(() => loadList(api_key, true));
 	PullListEls.buttons.refresh.onclick = () => loadList(api_key);
 	PullListEls.buttons.check.onclick = () => checkNow(api_key);
 	PullListEls.buttons.reading_lists.onclick = () => {

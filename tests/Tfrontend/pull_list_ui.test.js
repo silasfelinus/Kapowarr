@@ -23,14 +23,24 @@ test('publisher filter shows counts for the displayed week only', () => {
 	);
 });
 
-test('Check Now tracks its exact task and always exposes a failure path', () => {
-	assert.match(script, /response => response\.json\(\)/);
+test('Check Now uses the pull-list parallel lane instead of TaskHandler', () => {
+	assert.match(script, /sendAPI\('POST', '\/pulllist\/check'/);
+	assert.match(script, /fetchAPI\(`\/pulllist\/check\/\$\{check_id\}`/);
 	assert.match(script, /json\.result\.id/);
-	assert.match(script, /entry\.id === task_id/);
-	assert.match(script, /entry\.action === 'weekly_pull_list_check'/);
-	assert.match(script, /\.catch\(error => \{/);
+	assert.doesNotMatch(
+		script,
+		/sendAPI\('POST', '\/system\/tasks'[^\n]*weekly_pull_list_check/
+	);
+	assert.doesNotMatch(script, /Queued behind/);
 	assert.match(script, /stopCheckSpinner\(\)/);
-	assert.match(script, /Queued behind \$\{running\.display_title\}/);
+});
+
+test('empty current week falls back to the newest actually stored week', () => {
+	assert.match(script, /fetchAPI\('\/pulllist\/weeks'/);
+	assert.match(script, /fallback_to_stored/);
+	assert.match(script, /pullListState\.stored_weeks\[0\]\.week_start/);
+	assert.match(script, /showing the newest stored week/);
+	assert.match(script, /Stored release data runs from/);
 });
 
 test('pull-list page has an inline status surface for refresh progress', () => {
@@ -38,7 +48,7 @@ test('pull-list page has an inline status surface for refresh progress', () => {
 		template,
 		/<p id="pull-list-check-status" class="hidden" role="status"><\/p>/
 	);
-	assert.match(script, /latestCheckFailure/);
-	assert.match(script, /Check failed:/);
-	assert.match(script, /Release calendar updated\./);
+	assert.match(script, /check\.status === 'failed'/);
+	assert.match(script, /Release calendar check failed\./);
+	assert.match(script, /Release calendar updated/);
 });

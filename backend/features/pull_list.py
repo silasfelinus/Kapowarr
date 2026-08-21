@@ -360,8 +360,13 @@ def get_publishers() -> List[Dict[str, Any]]:
         GROUP BY publisher, week_start;
         """
     ).fetchalldict():
+        week_start = row['week_start']
+        if hasattr(week_start, 'isoformat'):
+            week_start = week_start.isoformat()
+        else:
+            week_start = str(week_start)
         counts_by_publisher.setdefault(row['publisher'], {})[
-            row['week_start']
+            week_start
         ] = row['release_count']
     for publisher in publishers:
         publisher['release_counts'] = counts_by_publisher.get(

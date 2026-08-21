@@ -167,3 +167,4 @@ import frontend.import_lists  # noqa: E402,F401  # isort: skip
 import frontend.library_import_status  # noqa: E402,F401  # isort: skip
 import frontend.provenance  # noqa: E402,F401  # isort: skip
 import frontend.portable_metadata  # noqa: E402,F401  # isort: skip
+import frontend.pull_list_status  # noqa: E402,F401  # isort: skip

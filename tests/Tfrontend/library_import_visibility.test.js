@@ -188,3 +188,33 @@ test('the import summary counts skipped separately from failed', () => {
 	assert.match(libraryImport, /\$\{skipped\.length\} skipped/);
 	assert.match(libraryImport, /still need/);
 });
+
+test('the review list is built in batches instead of one blocking pass', () => {
+	// A continuous pass holds whole folders, so this list is not the handful of
+	// rows a manual proposal produces -- a few hundred held folders is several
+	// thousand rows. Building them synchronously, appending each to the live
+	// list, is a layout per row on the main thread.
+	assert.match(libraryImport, /function scheduleProposalRender/);
+	assert.match(libraryImport, /requestIdleCallback/);
+	assert.match(libraryImport, /PROPOSAL_RENDER_BATCH_SIZE/);
+	assert.match(
+		libraryImport,
+		/fragment\.appendChild\(row\)/,
+		'rows are collected in a fragment, not appended to the live list'
+	);
+});
+
+test('a stale render cannot append rows onto a newer list', () => {
+	assert.match(libraryImport, /proposalRenderGeneration/);
+	assert.match(
+		libraryImport,
+		/if \(generation !== proposalRenderGeneration\)\s*\n\s*return/
+	);
+});
+
+test('a batch respects Select All rather than the template default', () => {
+	assert.match(
+		libraryImport,
+		/row\.querySelector\('input\[type="checkbox"\]'\)\.checked = checked/
+	);
+});

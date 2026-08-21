@@ -51,6 +51,10 @@ let continuousStopRequested = false;
 let continuousPanelDismissed = false;
 let continuousReviewOpen = false;
 let continuousReviewCache = [];
+const PROPOSAL_RENDER_BATCH_SIZE = 50;
+// Bumped per render so a batch left over from a previous list stops instead of
+// appending its rows onto the new one.
+let proposalRenderGeneration = 0;
 let continuousReviewFolderCount = 0;
 let continuousLastSnapshotAt = 0;
 
@@ -110,46 +114,93 @@ function formatReviewReason(reason) {
 	}[reason] || '';
 };
 
+function buildProposalRow(result, rowid) {
+	const entry = LIEls.pre_build.li_result.cloneNode(true);
+	entry.dataset.rowid = rowid;
+	entry.dataset.group_number = result.group_number;
+	rowid_to_filepath[rowid] = {
+		cv_id: result.cv.id || null,
+		filepath: result.filepath
+	};
+
+	const title = entry.querySelector('.file-column');
+	title.innerText = result.file_title;
+	title.title = result.filepath;
+
+	const CV_link = entry.querySelector('a');
+	CV_link.href = result.cv.link || '';
+	CV_link.innerText = result.cv.title || '';
+
+	entry.querySelector('.issue-count').innerText =
+		result.cv.issue_count === null ? '' : result.cv.issue_count;
+	entry.querySelector('.review-reason').innerText =
+		formatReviewReason(result.review_reason);
+
+	entry.querySelector('button').onclick = e => openEditCVMatch(rowid);
+	return entry;
+};
+
+function scheduleProposalRender(callback) {
+	if (typeof window.requestIdleCallback === 'function')
+		window.requestIdleCallback(callback, {timeout: 100});
+	else
+		setTimeout(callback, 0);
+};
+
+// A continuous pass holds a whole folder at a time, so this list is not the
+// handful of rows a manual proposal produces -- a few hundred held folders is
+// several thousand rows, each with its own button. Building them in one
+// synchronous pass, appending each row directly to the live list, is a layout
+// per row on the main thread: the page stops responding until the last one
+// lands, which on a tablet is long enough to look like a hang.
+//
+// Rows go into a fragment and are inserted a batch at a time between frames,
+// the same way the library grid is built. The list is shown after the first
+// batch, so it is scrollable while the rest fills in behind it.
 function renderProposalResults(results, from_continuous=false) {
 	LIEls.proposal_list.innerHTML = '';
 	LIEls.select_all.checked = true;
 	Object.keys(rowid_to_filepath).forEach(key => delete rowid_to_filepath[key]);
 
-	results.forEach((result, rowid) => {
-		const entry = LIEls.pre_build.li_result.cloneNode(true);
-		entry.dataset.rowid = rowid;
-		entry.dataset.group_number = result.group_number;
-		rowid_to_filepath[rowid] = {
-			cv_id: result.cv.id || null,
-			filepath: result.filepath
+	const generation = ++proposalRenderGeneration;
+	let offset = 0;
+
+	const renderBatch = () => {
+		if (generation !== proposalRenderGeneration)
+			return;
+
+		const end = Math.min(offset + PROPOSAL_RENDER_BATCH_SIZE, results.length);
+		const fragment = document.createDocumentFragment();
+		// Rows clone from a template that ships checked, so a batch arriving
+		// after the user cleared Select All would come in selected against
+		// their choice.
+		const checked = LIEls.select_all.checked;
+		for (let rowid = offset; rowid < end; rowid++) {
+			const row = buildProposalRow(results[rowid], rowid);
+			row.querySelector('input[type="checkbox"]').checked = checked;
+			fragment.appendChild(row);
 		};
+		LIEls.proposal_list.appendChild(fragment);
+		offset = end;
 
-		const title = entry.querySelector('.file-column');
-		title.innerText = result.file_title;
-		title.title = result.filepath;
-
-		const CV_link = entry.querySelector('a');
-		CV_link.href = result.cv.link || '';
-		CV_link.innerText = result.cv.title || '';
-
-		entry.querySelector('.issue-count').innerText =
-			result.cv.issue_count === null ? '' : result.cv.issue_count;
-		entry.querySelector('.review-reason').innerText =
-			formatReviewReason(result.review_reason);
-
-		entry.querySelector('button').onclick = e => openEditCVMatch(rowid);
-		LIEls.proposal_list.appendChild(entry);
-	});
+		if (offset < results.length)
+			scheduleProposalRender(renderBatch);
+	};
 
 	if (from_continuous)
 		hide([], [LIEls.proposal_note]);
 	else
 		hide([LIEls.proposal_note]);
 
-	if (results.length > 0)
-		hide([LIEls.views.loading, LIEls.views.continuous], [LIEls.views.list]);
-	else
+	if (results.length === 0) {
 		hide([LIEls.views.loading], [LIEls.views.no_result]);
+		return;
+	};
+
+	// The first batch is painted before the list is revealed so it is never
+	// shown empty, and the remainder streams in without blocking scrolling.
+	renderBatch();
+	hide([LIEls.views.loading, LIEls.views.continuous], [LIEls.views.list]);
 };
 
 function loadProposal(api_key) {

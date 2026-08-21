@@ -1,4 +1,24 @@
+/*
+	`--nav-background-color` and `--text-color` resolve to the same colour in
+	the light theme (both #464b51), so a control painted with one on the other
+	rendered as an unreadable black-on-black block. Content surfaces here use
+	`--foreground-color`, which is the token that is defined to contrast with
+	`--text-color` in both themes.
+*/
+
 main {
+	/*
+		The table used to be capped at a fixed `calc(100vh - …)` that assumed
+		the toolbar and a help panel above it. Once anything else was on the
+		page the cap was far shorter than the space actually left, so the log
+		showed a handful of rows in a sliver with the rest of the screen empty.
+		The page is a flex column instead: the table takes whatever is left
+		between the toolbar and the pager, whatever those turn out to be.
+	*/
+	display: flex;
+	flex-direction: column;
+	gap: .75rem;
+	height: calc(100vh - var(--header-height));
 	padding: 1rem;
 	color: var(--text-color);
 }
@@ -6,79 +26,68 @@ main {
 .logs-toolbar {
 	display: flex;
 	justify-content: space-between;
-	align-items: end;
+	align-items: center;
 	gap: 1rem;
-	padding-bottom: 1rem;
-	border-bottom: 1px solid var(--border-color);
-}
-
-.logs-controls,
-.logs-actions {
-	display: flex;
-	align-items: end;
-	gap: .75rem;
 	flex-wrap: wrap;
 }
 
-.logs-controls label:not(.auto-refresh-label) {
+.logs-actions,
+.logs-filters {
 	display: flex;
-	flex-direction: column;
-	gap: .3rem;
-	font-size: .85rem;
+	align-items: center;
+	gap: .5rem;
+	flex-wrap: wrap;
 }
 
-.logs-controls :where(select, input[type="search"]),
-.logs-actions :where(button, a) {
+.logs-filters label {
+	display: flex;
+	align-items: center;
+	gap: .4rem;
+	font-size: .85rem;
+	white-space: nowrap;
+}
+
+.logs-toolbar :where(button, select, a) {
 	min-height: 2.3rem;
 	border: 1px solid var(--border-color);
 	border-radius: 4px;
 	padding: .45rem .65rem;
-	background: var(--nav-background-color);
+	font: inherit;
+	background: var(--foreground-color);
 	color: var(--text-color);
-}
-
-.log-search-label {
-	min-width: min(24rem, 55vw);
-	flex: 1;
-}
-
-.auto-refresh-label {
-	display: flex;
-	align-items: center;
-	gap: .4rem;
-	min-height: 2.3rem;
-	white-space: nowrap;
-}
-
-.logs-actions :where(button, a) {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	background: var(--accent-color);
-	color: var(--nav-background-color);
-	font-weight: 600;
 	cursor: pointer;
 }
 
-.logs-help {
-	padding: .75rem 0;
-	font-size: .9rem;
-	line-height: 1.4;
+.logs-actions #refresh-logs {
+	background: var(--accent-color);
+	/* The accent is the same yellow in both themes, so its ink is the one the
+	   header already uses on it rather than a theme-flipping token. */
+	color: var(--header-color);
+	font-weight: 600;
 }
 
-.logs-help p {
-	margin: .25rem 0;
+.logs-toolbar a {
+	display: inline-flex;
+	align-items: center;
+	text-decoration: none;
 }
 
-#logs-status {
-	color: var(--text-color-muted, var(--text-color));
+.logs-toolbar :where(button, a):hover {
+	border-color: var(--accent-color);
+}
+
+.logs-toolbar button:disabled {
+	opacity: .55;
+	cursor: default;
 }
 
 .logs-table-wrap {
+	flex: 1;
+	min-height: 0;
 	overflow: auto;
-	max-height: calc(100vh - 13rem);
 	border: 1px solid var(--border-color);
 	border-radius: 4px;
+	background: var(--foreground-color);
 }
 
 .logs-table {
@@ -92,7 +101,7 @@ main {
 	top: 0;
 	z-index: 1;
 	padding: .55rem .6rem;
-	background: var(--nav-background-color);
+	background: var(--foreground-color);
 	border-bottom: 1px solid var(--border-color);
 	text-align: left;
 }
@@ -107,18 +116,16 @@ main {
 	border-bottom: 0;
 }
 
-.logs-table tr:has(.log-details:not(.hidden)) td {
-	background: color-mix(in srgb, var(--accent-color) 7%, transparent);
-}
-
-.log-time,
-.log-level,
-.log-source {
+.log-col-time,
+.log-time {
+	width: 1%;
 	white-space: nowrap;
 }
 
-.log-message {
-	min-width: 24rem;
+.log-col-level,
+.log-level {
+	width: 1%;
+	white-space: nowrap;
 }
 
 .log-summary {
@@ -148,7 +155,7 @@ main {
 .log-chevron {
 	flex-shrink: 0;
 	width: .9rem;
-	color: var(--text-color-muted, var(--text-color));
+	color: var(--dimmed-text-color);
 }
 
 /* Aligns a summary with no chevron against the ones that have one. */
@@ -164,7 +171,7 @@ p.log-summary {
 	border-radius: 999px;
 	font-size: .75rem;
 	white-space: nowrap;
-	color: var(--text-color-muted, var(--text-color));
+	color: var(--dimmed-text-color);
 }
 
 .log-details {
@@ -172,7 +179,7 @@ p.log-summary {
 	padding: .6rem .75rem;
 	border-left: 2px solid var(--border-color);
 	border-radius: 0 4px 4px 0;
-	background: var(--nav-background-color);
+	background: var(--background-color);
 	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 	font-size: .8rem;
 	line-height: 1.45;
@@ -186,6 +193,7 @@ p.log-summary {
 	padding: .1rem .4rem;
 	border-radius: 3px;
 	background: var(--border-color);
+	color: var(--text-color);
 	font-size: .7rem;
 	font-weight: 700;
 	letter-spacing: .04em;
@@ -194,8 +202,8 @@ p.log-summary {
 }
 
 .log-warning .log-level-badge {
-	background: var(--warning-color, #e7b416);
-	color: #1a1a1a;
+	background: var(--accent-color);
+	color: var(--header-color);
 }
 
 .log-error .log-level-badge,
@@ -218,7 +226,58 @@ p.log-summary {
 	text-align: center;
 }
 
+.logs-pagination {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 1rem;
+	flex-wrap: wrap;
+}
+
+#logs-status {
+	margin: 0;
+	font-size: .85rem;
+	color: var(--dimmed-text-color);
+}
+
+.logs-page-buttons {
+	display: flex;
+	align-items: center;
+	gap: .4rem;
+}
+
+.logs-page-buttons button {
+	min-width: 2.3rem;
+	min-height: 2.3rem;
+	border: 1px solid var(--border-color);
+	border-radius: 4px;
+	background: var(--foreground-color);
+	color: var(--text-color);
+	font: inherit;
+	cursor: pointer;
+}
+
+.logs-page-buttons button:hover:not(:disabled) {
+	border-color: var(--accent-color);
+}
+
+.logs-page-buttons button:disabled {
+	opacity: .45;
+	cursor: default;
+}
+
+#log-page-label {
+	padding: 0 .5rem;
+	font-size: .85rem;
+	white-space: nowrap;
+}
+
 @media (max-width: 800px) {
+	main {
+		height: auto;
+		min-height: calc(100vh - var(--header-height));
+	}
+
 	.logs-toolbar {
 		align-items: stretch;
 		flex-direction: column;
@@ -226,17 +285,14 @@ p.log-summary {
 
 	.logs-actions > * {
 		flex: 1;
+		justify-content: center;
 	}
 
 	.logs-table-wrap {
-		max-height: calc(100vh - 18rem);
+		min-height: 60vh;
 	}
 
-	.log-source {
-		display: none;
-	}
-
-	.log-search-label {
-		min-width: min(100%, 18rem);
+	.logs-pagination {
+		justify-content: center;
 	}
 }

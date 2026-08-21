@@ -57,38 +57,55 @@ class BackupTest(unittest.TestCase):
         finally:
             connection.close()
 
+    def _schedule(self, interval_days=7, keep_count=4):
+        return patch.object(
+            backups,
+            'get_backup_schedule',
+            return_value={
+                'interval_days': interval_days,
+                'interval_seconds': interval_days * backups.SECONDS_PER_DAY,
+                'keep_count': keep_count,
+            },
+        )
+
     def test_backup_task_is_registered_with_shared_task_scheduler(self):
         self.assertIs(
             task_library[backups.DatabaseBackup.action],
             backups.DatabaseBackup,
         )
-        self.assertEqual(backups.AUTO_BACKUP_INTERVAL_SECONDS, 7 * 86_400)
 
     def test_scheduler_adapter_enrolls_persistent_interval(self):
         with patch.object(backups, 'ensure_backup_interval') as ensure:
             backups.BackupScheduler().start(object())
         ensure.assert_called_once_with()
 
-    def test_ensure_backup_interval_preserves_existing_next_run(self):
+    def _interval_db(self):
         connection = sqlite3.connect(':memory:')
         self.addCleanup(connection.close)
         connection.execute(
             'CREATE TABLE task_intervals('
             'task_name PRIMARY KEY, interval INTEGER NOT NULL, next_run INTEGER NOT NULL);'
         )
+        return connection
+
+    def _read_interval(self, connection):
+        return connection.execute(
+            'SELECT interval, next_run FROM task_intervals WHERE task_name = ?;',
+            (backups.DatabaseBackup.action,),
+        ).fetchone()
+
+    def test_ensure_backup_interval_preserves_existing_next_run(self):
+        """A restart must not push the pending backup out by another interval."""
+        connection = self._interval_db()
         cursor = connection.cursor()
 
         with patch.object(backups, 'get_db', return_value=cursor), patch.object(
-            backups,
-            'commit',
-            side_effect=connection.commit,
-        ):
+            backups, 'commit', side_effect=connection.commit,
+        ), self._schedule(interval_days=7):
             backups.ensure_backup_interval()
-            first = connection.execute(
-                'SELECT interval, next_run FROM task_intervals WHERE task_name = ?;',
-                (backups.DatabaseBackup.action,),
-            ).fetchone()
-            self.assertEqual(first[0], backups.AUTO_BACKUP_INTERVAL_SECONDS)
+            self.assertEqual(
+                self._read_interval(connection)[0], 7 * backups.SECONDS_PER_DAY
+            )
 
             connection.execute(
                 'UPDATE task_intervals SET next_run = 12345 WHERE task_name = ?;',
@@ -96,12 +113,96 @@ class BackupTest(unittest.TestCase):
             )
             connection.commit()
             backups.ensure_backup_interval()
-            second = connection.execute(
-                'SELECT interval, next_run FROM task_intervals WHERE task_name = ?;',
-                (backups.DatabaseBackup.action,),
-            ).fetchone()
 
-        self.assertEqual(second, (backups.AUTO_BACKUP_INTERVAL_SECONDS, 12345))
+        self.assertEqual(
+            self._read_interval(connection),
+            (7 * backups.SECONDS_PER_DAY, 12345),
+        )
+
+    def test_changing_the_frequency_reschedules_the_pending_run(self):
+        """Otherwise the pending run keeps the schedule the old interval set.
+
+        Going from monthly to daily would still mean waiting out the rest of
+        the month before the new frequency took effect.
+        """
+        connection = self._interval_db()
+        cursor = connection.cursor()
+
+        with patch.object(backups, 'get_db', return_value=cursor), patch.object(
+            backups, 'commit', side_effect=connection.commit,
+        ):
+            with self._schedule(interval_days=30):
+                backups.ensure_backup_interval()
+            connection.execute(
+                'UPDATE task_intervals SET next_run = ? WHERE task_name = ?;',
+                (2_000_000_000, backups.DatabaseBackup.action),
+            )
+            connection.commit()
+
+            with self._schedule(interval_days=1):
+                backups.ensure_backup_interval()
+
+        interval, next_run = self._read_interval(connection)
+        self.assertEqual(interval, backups.SECONDS_PER_DAY)
+        self.assertLess(
+            next_run, 2_000_000_000,
+            'a shortened interval has to bring the pending run forward'
+        )
+
+    def _seed_backups(self, entries):
+        """Write archives into the backup folder, newest `created_at` last."""
+        DBConnection.file = os.path.join(self.temp.name, Constants.DB_NAME)
+        folder = backups.get_backup_folder()
+        database = os.path.join(self.temp.name, 'seed.db')
+        self.create_database(database)
+        for index, (kind, created_at) in enumerate(entries):
+            name = (
+                f'kapowarr-{kind}-2026-08-'
+                f'{(index % 28) + 1:02d}-{index:06d}.zip'
+            )
+            self.create_archive(
+                os.path.join(folder, name),
+                database,
+                manifest={'created_at': created_at, 'kind': kind},
+            )
+
+    def _remaining(self):
+        return sorted(b['created_at'] for b in backups.list_backups())
+
+    def test_pruning_keeps_the_configured_number_of_backups(self):
+        self._seed_backups([('backup', t) for t in (10, 20, 30, 40, 50)])
+
+        with self._schedule(keep_count=2):
+            backups.prune_backups()
+
+        self.assertEqual(
+            self._remaining(), [40, 50],
+            'the newest are the ones worth keeping'
+        )
+
+    def test_pruning_keeps_everything_when_under_the_limit(self):
+        self._seed_backups([('backup', t) for t in (10, 20)])
+
+        with self._schedule(keep_count=5):
+            backups.prune_backups()
+
+        self.assertEqual(self._remaining(), [10, 20])
+
+    def test_pre_restore_backups_are_outside_the_retention_count(self):
+        """They are the undo for a restore, so ordinary retention must not
+        be able to delete one -- and they must not consume the budget the
+        scheduled backups are counted against either."""
+        self._seed_backups([
+            ('pre-restore', 5),
+            ('backup', 10),
+            ('backup', 20),
+            ('backup', 30),
+        ])
+
+        with self._schedule(keep_count=2):
+            backups.prune_backups()
+
+        self.assertEqual(self._remaining(), [5, 20, 30])
 
     def test_backup_folder_follows_configured_database_folder(self):
         DBConnection.file = os.path.join(self.temp.name, Constants.DB_NAME)

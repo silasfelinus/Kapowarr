@@ -10,60 +10,59 @@
 {% block main %}
 <main>
 	<section class="logs-toolbar" aria-label="Log controls">
-		<div class="logs-controls">
-			<label>
-				<span>Capture</span>
-				<select id="log-capture-level">
-					<option value="20">Info</option>
-					<option value="10">Debug</option>
-				</select>
-			</label>
-			<label>
-				<span>Show</span>
-				<select id="log-view-level">
-					<option value="DEBUG">Debug +</option>
-					<option value="INFO" selected>Info +</option>
-					<option value="WARNING">Warnings +</option>
-					<option value="ERROR">Errors +</option>
-				</select>
-			</label>
-			<label class="log-search-label">
-				<span>Search</span>
-				<input id="log-search" type="search" placeholder="message, source, thread…" spellcheck="false">
-			</label>
-			<label class="auto-refresh-label">
-				<input id="log-auto-refresh" type="checkbox">
-				<span>Auto refresh</span>
-			</label>
-		</div>
 		<div class="logs-actions">
 			<button id="refresh-logs" type="button">Refresh</button>
-			<a id="download-logs" href="">Download</a>
+			<button id="clear-logs" type="button" class="secondary">Clear</button>
+			<a id="download-logs" class="secondary" href="">Download</a>
 		</div>
-	</section>
-
-	<section class="logs-help" aria-label="Logging help">
-		<p>
-			<strong>Capture</strong> controls what Kapowarr writes from now on.
-			<strong>Show</strong> only filters what is already recorded. Debug is useful for troubleshooting;
-			switch capture back to Info when you are done.
-		</p>
-		<p id="logs-status" aria-live="polite"></p>
+		<div class="logs-filters">
+			<label>
+				<span>Show</span>
+				<select id="log-page-size">
+					<option value="25">25 per page</option>
+					<option value="50" selected>50 per page</option>
+					<option value="100">100 per page</option>
+					<option value="250">250 per page</option>
+					<option value="500">500 per page</option>
+				</select>
+			</label>
+			<label>
+				<span>Level</span>
+				<select id="log-view-level">
+					<option value="ALL" selected>All levels</option>
+					<option value="CRITICAL">Critical</option>
+					<option value="ERROR">Error</option>
+					<option value="WARNING">Warning</option>
+					<option value="INFO">Info</option>
+					<option value="DEBUG">Debug</option>
+				</select>
+			</label>
+		</div>
 	</section>
 
 	<section class="logs-table-wrap" aria-label="Application logs">
 		<table class="logs-table">
 			<thead>
 				<tr>
-					<th>Time</th>
-					<th>Level</th>
-					<th>Source</th>
+					<th class="log-col-time">Time</th>
+					<th class="log-col-level">Type</th>
 					<th>Message</th>
 				</tr>
 			</thead>
 			<tbody id="log-rows"></tbody>
 		</table>
-		<p id="logs-empty" class="hidden">No log entries match these filters.</p>
+		<p id="logs-empty" class="hidden">No log entries match this filter.</p>
 	</section>
+
+	<nav class="logs-pagination" aria-label="Log pages">
+		<p id="logs-status" aria-live="polite"></p>
+		<div class="logs-page-buttons">
+			<button id="log-first" type="button" title="First page">&laquo;</button>
+			<button id="log-prev" type="button" title="Previous page">&lsaquo;</button>
+			<span id="log-page-label"></span>
+			<button id="log-next" type="button" title="Next page">&rsaquo;</button>
+			<button id="log-last" type="button" title="Last page">&raquo;</button>
+		</div>
+	</nav>
 </main>
 {% endblock main %}

@@ -8,6 +8,7 @@ import logging
 import logging.config
 from io import StringIO
 from logging.handlers import RotatingFileHandler
+from os import remove
 from os.path import exists, isdir, isfile, join
 from typing import Any, Union
 
@@ -199,6 +200,43 @@ def get_log_filepath() -> str:
         str: The filepath.
     """
     return LOGGING_CONFIG["handlers"]["file"]["filename"]
+
+
+def clear_log_files() -> None:
+    """Empty the log file and its rotation, keeping the handler writing.
+
+    The rotated `.1` file is removed outright, but the live file is truncated
+    rather than deleted: the handler holds an open descriptor to it, and on
+    POSIX unlinking the path leaves that descriptor writing to a file nothing
+    can read any more, so logging would appear to stop until a restart.
+    """
+    file = get_log_filepath()
+
+    rotated = file + '.1'
+    if exists(rotated):
+        try:
+            remove(rotated)
+        except OSError:
+            LOGGER.exception('Could not remove rotated log file: %s', rotated)
+
+    for handler in LOGGER.handlers:
+        stream = getattr(handler, 'stream', None)
+        if stream is not None and getattr(stream, 'name', None) == file:
+            handler.acquire()
+            try:
+                stream.seek(0)
+                stream.truncate()
+                stream.flush()
+            finally:
+                handler.release()
+            return
+
+    # No handler owns it in this process (a worker, or logging to console
+    # only), so there is no descriptor to keep consistent.
+    if exists(file):
+        with open(file, 'w'):
+            pass
+    return
 
 
 def get_log_file_contents() -> StringIO:

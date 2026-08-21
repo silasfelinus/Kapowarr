@@ -71,6 +71,12 @@ class PublicSettingsValues:
     auth_username: str = ''
     auth_password: str = ''
 
+    # How often the automatic database backup runs, and how many of its
+    # archives to keep. The defaults are the previous hardcoded behaviour:
+    # weekly, with the four archives that a 28-day window held.
+    backup_interval_days: int = 7
+    backup_keep_count: int = 4
+
     comicvine_api_key: str = ''
     metron_api_token: str = ''
     metron_username: str = ''
@@ -346,6 +352,18 @@ class Settings(metaclass=Singleton):
         ):
             set_log_level(formatted_data['log_level'])
 
+        if (
+            'backup_interval_days' in data
+            and formatted_data['backup_interval_days']
+            != old_settings.backup_interval_days
+        ):
+            # Imported here rather than at module scope: backups reads settings
+            # to decide its own schedule, so the two modules cannot import each
+            # other on the way up.
+            from backend.features.backups import ensure_backup_interval
+            self.clear_cache()
+            ensure_backup_interval()
+
         self.clear_cache()
 
         LOGGER.info(
@@ -496,6 +514,12 @@ class Settings(metaclass=Singleton):
                 )
 
         elif key in ('port', 'proxy_port') and not 0 < value <= 65_535:
+            raise InvalidKeyValue(key, value)
+
+        elif key == 'backup_interval_days' and not 1 <= value <= 365:
+            raise InvalidKeyValue(key, value)
+
+        elif key == 'backup_keep_count' and not 1 <= value <= 100:
             raise InvalidKeyValue(key, value)
 
         elif key == 'url_base':

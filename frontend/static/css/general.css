@@ -325,6 +325,26 @@ main > *:not(.tool-bar-container) {
 	flex: 1;
 }
 
+/*
+	The rule above suits a page whose <main> holds one scrolling region under a
+	tool bar, which is what the volume and library views are. Applied to a page
+	built from several sections it does something else entirely: every section
+	becomes an equal-height flex pane with its own scrollbar, so a short one is
+	padded out with blank space and a long one is trapped scrolling inside a
+	few hundred pixels while the page around it does not move. Pages that are a
+	document rather than a viewport opt out and scroll normally.
+*/
+main.page-flow {
+	height: auto;
+	min-height: calc(100dvh - var(--header-height));
+	display: block;
+}
+
+main.page-flow > *:not(.tool-bar-container) {
+	overflow-y: visible;
+	flex: none;
+}
+
 /*  */
 /* Tool bar */
 /*  */

@@ -4,6 +4,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const root = path.resolve(__dirname, '../..');
+const statusRoute = fs.readFileSync(
+	path.join(root, 'frontend/library_import_status.py'),
+	'utf8'
+);
 const libraryImport = fs.readFileSync(
 	path.join(root, 'frontend/static/js/library_import.js'),
 	'utf8'
@@ -19,21 +23,45 @@ function functionBody(source, name, nextName) {
 		.split(`function ${nextName}`)[0];
 }
 
-test('Stop Import sends the cooperative stop before refreshing review details', () => {
+test('Stop always reaches the backend, even with no task to delete', () => {
+	// Stopping used to DELETE a task-queue entry, so it did nothing at all when
+	// the queue had none -- which is exactly what an interrupted pass leaves
+	// behind. No request, no message, and the panel still claiming a pass was
+	// running.
 	const stop = functionBody(
 		libraryImport,
 		'stopContinuousImport',
 		'pollContinuousTask'
 	);
-	const deleteIndex = stop.indexOf("sendAPI('DELETE'");
-	const snapshotIndex = stop.indexOf('refreshContinuousReviewCache');
 
-	assert.ok(deleteIndex >= 0, 'Stop must send DELETE to the task endpoint');
-	assert.ok(snapshotIndex >= 0, 'Stop may refresh the review snapshot afterward');
-	assert.ok(
-		deleteIndex < snapshotIndex,
-		'Stop must not wait for the review snapshot before reaching the backend'
+	assert.doesNotMatch(
+		stop,
+		/if \(continuousTaskId === null\)\s*\n\s*return;/,
+		'Stop must not bail out silently when no task is queued'
 	);
+	assert.match(stop, /sendAPI\('POST', '\/libraryimport\/continuous\/stop'/);
+});
+
+test('stopping a stalled job repaints from durable state immediately', () => {
+	// Nothing is running, so there is no worker to wait for and no later poll
+	// that would clear a lingering "Stopping...".
+	const stop = functionBody(
+		libraryImport,
+		'stopContinuousImport',
+		'pollContinuousTask'
+	);
+
+	assert.match(stop, /stopped === 'stalled_job'/);
+	assert.match(stop, /paintContinuousStatus/);
+});
+
+test('the stop endpoint handles both a live task and a stalled job', () => {
+	assert.match(
+		statusRoute,
+		/@api\.route\('\/libraryimport\/continuous\/stop', methods=\['POST'\]\)/
+	);
+	assert.match(statusRoute, /TaskHandler\(\)\.remove\(int\(task\['id'\]\)\)/);
+	assert.match(statusRoute, /mark_job_paused\(int\(job\['id'\]\)\)/);
 });
 
 test('review snapshot failure after stop acknowledgement is best effort only', () => {

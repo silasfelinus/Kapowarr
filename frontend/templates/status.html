@@ -8,17 +8,24 @@
 {% endblock %}
 
 {% block main %}
-<main>
+<main class="page-flow">
 	<div>
 		<section aria-label="Health" id="health-section" class="hidden">
 			<h2>Health</h2>
 			<ul id="health-list"></ul>
 		</section>
-		<section aria-label="Events">
-			<h2>Events</h2>
-			<p>Review recent task, download, and system activity together, including live ComicVine metadata operation counts.</p>
-			<div class="link-list">
-				<a href="{{url_base}}/system/events">View Events</a>
+		<section aria-label="ComicVine Activity">
+			<h2>ComicVine Activity</h2>
+			<p>
+				Metadata operations this process has performed since it started. One
+				operation can batch more than one API request, so these are not raw
+				request counts.
+			</p>
+			<div class="container">
+				<table id="comicvine-table">
+					<tbody id="comicvine-rows"></tbody>
+				</table>
+				<p id="comicvine-empty">No ComicVine operations yet.</p>
 			</div>
 		</section>
 		<section aria-label="About">

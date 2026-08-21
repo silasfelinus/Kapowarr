@@ -6,21 +6,21 @@
 	`--text-color` in both themes.
 */
 
+/*
+	The table was capped at a fixed `calc(100vh - …)`, and every child of <main>
+	was separately made an equal-height scroll pane by general.css -- so the
+	toolbar, the table and the pager each claimed a third of the screen and the
+	log itself came out as a sliver of rows with blank space around it. The page
+	is a document now (see `.page-flow`): the table is as tall as the rows on
+	the page, and the page scrolls.
+*/
 main {
-	/*
-		The table used to be capped at a fixed `calc(100vh - …)` that assumed
-		the toolbar and a help panel above it. Once anything else was on the
-		page the cap was far shorter than the space actually left, so the log
-		showed a handful of rows in a sliver with the rest of the screen empty.
-		The page is a flex column instead: the table takes whatever is left
-		between the toolbar and the pager, whatever those turn out to be.
-	*/
-	display: flex;
-	flex-direction: column;
-	gap: .75rem;
-	height: calc(100vh - var(--header-height));
 	padding: 1rem;
 	color: var(--text-color);
+}
+
+main > * + * {
+	margin-top: .75rem;
 }
 
 .logs-toolbar {
@@ -82,9 +82,9 @@ main {
 }
 
 .logs-table-wrap {
-	flex: 1;
-	min-height: 0;
-	overflow: auto;
+	/* Only sideways. A long message must not be able to force the page wide,
+	   but the list of entries is the page and scrolls with it. */
+	overflow-x: auto;
 	border: 1px solid var(--border-color);
 	border-radius: 4px;
 	background: var(--foreground-color);
@@ -273,11 +273,6 @@ p.log-summary {
 }
 
 @media (max-width: 800px) {
-	main {
-		height: auto;
-		min-height: calc(100vh - var(--header-height));
-	}
-
 	.logs-toolbar {
 		align-items: stretch;
 		flex-direction: column;
@@ -286,10 +281,6 @@ p.log-summary {
 	.logs-actions > * {
 		flex: 1;
 		justify-content: center;
-	}
-
-	.logs-table-wrap {
-		min-height: 60vh;
 	}
 
 	.logs-pagination {

@@ -25,8 +25,8 @@ from backend.features.library_import_diagnostics import get_postmortem_path
 from backend.features.library_import_persistent import (
     PersistentContinuousLibraryImport, RecheckContinuousLibraryImport)
 from backend.features.library_import_state import (
-    count_outstanding_review_folders, get_active_job,
-    get_job_summary, get_outstanding_review_items)
+    JOB_RUNNING, count_outstanding_review_folders, get_active_job,
+    get_job_summary, get_outstanding_review_items, mark_job_paused)
 from backend.features.tasks import TaskHandler
 from frontend.api import api, auth, error_handler, return_api
 
@@ -70,6 +70,19 @@ def api_library_import_continuous():
 
     job = get_active_job()
     summary = get_job_summary(int(job['id'])) if job is not None else None
+    task = _running_task()
+
+    if summary is not None:
+        # A job row says what the last worker wrote, not whether one is alive
+        # now. A pass killed mid-folder leaves `running` behind with nothing
+        # running, and reporting that verbatim let the page claim a pass was in
+        # progress while the task queue was empty -- so the status line said
+        # running, the durable state said otherwise, and Stop had no task to
+        # act on. Say which of the two it is.
+        summary['is_live'] = bool(task)
+        summary['is_stalled'] = (
+            summary['status'] == JOB_RUNNING and not task
+        )
 
     return return_api({
         'job': summary,
@@ -79,5 +92,36 @@ def api_library_import_continuous():
         # Held folders are recorded with the evidence behind the decision. When
         # a pass imports nothing, this file is what says why.
         'review_postmortem_file': get_postmortem_path(),
-        'task': _running_task()
+        'task': task
     })
+
+
+@api.route('/libraryimport/continuous/stop', methods=['POST'])
+@error_handler
+@auth
+def api_library_import_continuous_stop():
+    """Stop the pass, whether or not a worker is still alive to ask.
+
+    Stopping used to be purely a task-queue operation, so it did nothing at all
+    when the queue had no entry to delete -- which is exactly the state a pass
+    interrupted mid-folder leaves behind. The button appeared to do nothing and
+    the job stayed marked running forever, because only a process restart ever
+    reconciled it.
+
+    A live task is stopped cooperatively, at the folder boundary it chooses. A
+    job with no worker is marked paused here instead: nothing is running, so
+    there is nothing to wait for, and pausing is what makes it resumable.
+    """
+    task = _running_task()
+    if task:
+        TaskHandler().remove(int(task['id']))
+        return return_api({'stopped': 'task', 'task_id': task['id']})
+
+    job = get_active_job()
+    if job is None or job['status'] != JOB_RUNNING:
+        # Already paused or finished. Not an error: the button's job is to
+        # leave the pass stopped, and it is.
+        return return_api({'stopped': 'nothing'})
+
+    mark_job_paused(int(job['id']))
+    return return_api({'stopped': 'stalled_job', 'job_id': job['id']})

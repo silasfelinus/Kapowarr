@@ -301,6 +301,21 @@ def api_health():
     return return_api(get_health_data())
 
 
+@api.route('/system/comicvine-activity', methods=['GET'])
+@error_handler
+@auth
+def api_comicvine_activity():
+    """Per-process ComicVine operation counters.
+
+    These were the one thing the Events page held that no other surface did.
+    Events otherwise re-presented task history, download history and log
+    warnings, each of which already has its own page, so the counters moved
+    here rather than keeping a whole page alive to carry them.
+    """
+    from backend.features.system_events import get_comicvine_operation_stats
+    return return_api(get_comicvine_operation_stats())
+
+
 @api.route('/system/logs', methods=['GET'])
 @error_handler
 @auth

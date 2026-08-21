@@ -4,7 +4,7 @@ const PUBLISHER_PROFILES = {
 	'image comics': 'Creator-owned comics publisher founded by comics artists in 1992. Its catalogue spans superheroes, science fiction, horror, fantasy, crime, and more.',
 	'dark horse comics': 'Independent U.S. publisher known for creator-owned comics, graphic novels, manga, and licensed properties.',
 	'idw publishing': 'U.S. publisher of original and licensed comics, with a catalogue that has included major film, television, game, and toy properties.',
-	'boom! studios': 'Independent U.S. publisher of original and licensed comics. Its family of imprints has included BOOM!, KaBOOM!, and Archaia.',
+	'boom studios': 'Independent U.S. publisher of original and licensed comics. Its family of imprints has included BOOM!, KaBOOM!, and Archaia.',
 	'dynamite entertainment': 'U.S. publisher known for licensed characters, pulp and adventure properties, adaptations, and creator-owned comics.',
 	'oni press': 'Independent U.S. publisher focused on creator-driven comics and graphic novels across many genres.',
 	'titan comics': 'UK-based publisher of original and licensed comics and graphic novels, including many television, film, and game properties.',
@@ -19,7 +19,7 @@ const PUBLISHER_PROFILES = {
 	'yen press': 'English-language publisher specializing in manga, light novels, and related Japanese and Korean works.',
 	'seven seas entertainment': 'North American publisher specializing in translated manga, light novels, webtoons, and related works.',
 	'fantagraphics': 'Independent publisher known for alternative comics, art comics, graphic novels, and archival editions of historically important work.',
-	'drawn & quarterly': 'Independent publisher known for literary comics, graphic novels, memoir, international work, and alternative cartooning.',
+	'drawn and quarterly': 'Independent publisher known for literary comics, graphic novels, memoir, international work, and alternative cartooning.',
 	'top cow productions': 'Image-associated comics studio and publisher known for properties including Witchblade and The Darkness.',
 	'zenescope entertainment': 'U.S. publisher known for its Grimm Fairy Tales line and connected fantasy, horror, and adventure titles.',
 	'antarctic press': 'Independent U.S. publisher with a long-running catalogue of creator-driven comics across many genres.',
@@ -44,13 +44,14 @@ function publisherDescription(name) {
 		'dc': 'dc comics',
 		'image': 'image comics',
 		'dark horse': 'dark horse comics',
-		'boom studios': 'boom! studios',
+		'boom': 'boom studios',
 		'titan': 'titan comics',
 		'valiant': 'valiant entertainment',
 		'mad cave': 'mad cave studios',
 		'seven seas': 'seven seas entertainment',
 		'top cow': 'top cow productions',
-		'zenescope': 'zenescope entertainment'
+		'zenescope': 'zenescope entertainment',
+		'drawn quarterly': 'drawn and quarterly'
 	};
 	const canonical = aliases[normalized];
 	if (canonical && PUBLISHER_PROFILES[canonical])

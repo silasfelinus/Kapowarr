@@ -48,6 +48,7 @@ test('pull-list page has an inline status surface for refresh progress', () => {
 		template,
 		/<p id="pull-list-check-status" class="hidden" role="status"><\/p>/
 	);
-	assert.match(script, /Check failed:/);
+	assert.match(script, /check\.status === 'failed'/);
+	assert.match(script, /Release calendar check failed\./);
 	assert.match(script, /Release calendar updated/);
 });

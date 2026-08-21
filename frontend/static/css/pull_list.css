@@ -6,7 +6,9 @@
 .week-navigation,
 .release-filters,
 .pagination,
-.publisher-rule {
+.publisher-rule,
+.publisher-bulk-controls,
+.publisher-info-heading {
 	display: flex;
 	align-items: center;
 	gap: .6rem;
@@ -48,6 +50,22 @@
 	margin-top: 0;
 }
 
+.publisher-bulk-controls {
+	flex-wrap: wrap;
+}
+
+.publisher-bulk-controls label {
+	display: flex;
+	align-items: center;
+	gap: .5rem;
+}
+
+.publisher-bulk-note {
+	margin: .55rem 0 0;
+	color: var(--text-color);
+	font-size: .85rem;
+}
+
 #publisher-rule-list {
 	display: grid;
 	grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr));
@@ -65,9 +83,71 @@
 	font-weight: 600;
 }
 
+.publisher-info-button {
+	width: 1.65rem;
+	height: 1.65rem;
+	padding: 0;
+	border-radius: 50%;
+	font-weight: 700;
+	line-height: 1;
+}
+
 .publisher-rule-count {
 	color: var(--text-color);
 	font-size: .85rem;
+}
+
+.publisher-info-dialog {
+	width: min(34rem, calc(100vw - 2rem));
+	max-height: calc(100vh - 2rem);
+	padding: 1.1rem;
+	border: 1px solid var(--border-color);
+	border-radius: .5rem;
+	background: var(--background-color);
+	color: var(--text-color);
+}
+
+.publisher-info-dialog::backdrop {
+	background: rgb(0 0 0 / 55%);
+}
+
+.publisher-info-heading {
+	justify-content: space-between;
+}
+
+.publisher-info-heading h2 {
+	margin: 0;
+}
+
+#publisher-info-close {
+	font-size: 1.4rem;
+	line-height: 1;
+}
+
+.publisher-info-grid {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: .75rem;
+	margin: 1rem 0;
+}
+
+.publisher-info-grid div {
+	padding: .65rem;
+	border: 1px solid var(--border-color);
+	border-radius: .35rem;
+}
+
+.publisher-info-grid dt {
+	font-size: .8rem;
+}
+
+.publisher-info-grid dd {
+	margin: .25rem 0 0;
+	font-weight: 600;
+}
+
+.publisher-info-more {
+	margin-bottom: 0;
 }
 
 #pull-list-empty-message {
@@ -114,8 +194,14 @@ th, td {
 }
 
 .source-explanation {
-	margin: -.35rem 0 1rem;
+	margin: -.35rem 0 .35rem;
 	color: var(--text-color);
+}
+
+.action-explanation {
+	margin: 0 0 1rem;
+	color: var(--text-color);
+	font-size: .9rem;
 }
 
 .action-column {
@@ -150,5 +236,9 @@ th, td {
 
 	.week-navigation {
 		flex-wrap: wrap;
+	}
+
+	.publisher-info-grid {
+		grid-template-columns: 1fr;
 	}
 }

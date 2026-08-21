@@ -8,6 +8,18 @@
 	<script src="{{ url_for('static', filename='js/pull_list.js') }}" defer></script>
 {% endblock %}
 
+{% block pre_build_els %}
+<div class="publisher-rule">
+	<span class="publisher-rule-name"></span>
+	<span class="publisher-rule-count"></span>
+	<select class="publisher-rule-mode" aria-label="Publisher automation mode">
+		<option value="off">Off</option>
+		<option value="add">Auto-add &amp; monitor</option>
+		<option value="grab">Auto-add &amp; grab</option>
+	</select>
+</div>
+{% endblock %}
+
 {% block pre_build_rows %}
 <tr class="pull-list-entry">
 	<td class="date-column"></td>
@@ -19,15 +31,6 @@
 	<td class="availability-column"></td>
 	<td class="action-column"></td>
 </tr>
-<div class="publisher-rule">
-	<span class="publisher-rule-name"></span>
-	<span class="publisher-rule-count"></span>
-	<select class="publisher-rule-mode" aria-label="Publisher automation mode">
-		<option value="off">Off</option>
-		<option value="add">Auto-add &amp; monitor</option>
-		<option value="grab">Auto-add &amp; grab</option>
-	</select>
-</div>
 {% endblock %}
 
 {% block main %}

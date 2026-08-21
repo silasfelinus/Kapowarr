@@ -34,6 +34,27 @@ const pullListState = {
 	page_size: 50
 };
 
+function pullListErrorMessage(error, fallback='request failed') {
+	if (error && error.message)
+		return error.message;
+	if (typeof error === 'string' && error)
+		return error;
+	return fallback;
+};
+
+function reportPullListClientError(api_key, context, error) {
+	const message = pullListErrorMessage(error, 'unknown client error');
+	const stack = error && error.stack ? String(error.stack) : '';
+	console.error(`Pull List ${context}:`, error);
+	return sendAPI('POST', '/pulllist/client-error', api_key, {}, {
+		context,
+		message,
+		stack
+	}).catch(report_error => {
+		console.error('Unable to report Pull List client error:', report_error);
+	});
+};
+
 function startOfWeek(value) {
 	const result = new Date(value);
 	result.setHours(12, 0, 0, 0);
@@ -104,6 +125,9 @@ function updateEmptyMessage(filtered_count) {
 };
 
 function renderList(api_key) {
+	if (!PullListEls.entry)
+		throw new Error('Pull List row template is missing from the DOM');
+
 	PullListEls.table.innerHTML = '';
 	const filtered = filteredEntries();
 	const page_count = Math.max(1, Math.ceil(filtered.length / pullListState.page_size));
@@ -193,6 +217,9 @@ function updatePublisherFilter() {
 };
 
 function renderPublisherRules(api_key) {
+	if (!PullListEls.rule)
+		throw new Error('Publisher rule template is missing from the DOM');
+
 	PullListEls.rule_list.innerHTML = '';
 	pullListState.publishers.forEach(obj => {
 		const rule = PullListEls.rule.cloneNode(true);
@@ -290,7 +317,8 @@ function actOnEntry(action, entry, button, api_key) {
 		root_folder_id
 	})
 	.then(() => loadList(api_key))
-	.catch(() => {
+	.catch(error => {
+		reportPullListClientError(api_key, 'release action', error);
 		button.disabled = false;
 		alert('The release action failed. Check System > Tasks or logs for details.');
 	});
@@ -328,15 +356,19 @@ function pollUntilCheckFinished(api_key, check_id) {
 			.then(() => setCheckStatus(
 				`Release calendar updated (${check.release_count} releases).`
 			))
-			.catch(error => setCheckStatus(
-				`Calendar refreshed but reload failed: ${error.message || 'request failed'}`,
-				true
-			))
+			.catch(error => {
+				reportPullListClientError(api_key, 'post-refresh reload', error);
+				setCheckStatus(
+					`Calendar refreshed but reload failed: ${pullListErrorMessage(error)}`,
+					true
+				);
+			})
 			.finally(stopCheckSpinner);
 	})
 	.catch(error => {
+		reportPullListClientError(api_key, 'check status poll', error);
 		setCheckStatus(
-			`Check status failed: ${error.message || 'unable to poll check'}`,
+			`Check status failed: ${pullListErrorMessage(error, 'unable to poll check')}`,
 			true
 		);
 		stopCheckSpinner();
@@ -351,8 +383,9 @@ function checkNow(api_key) {
 		.then(response => response.json())
 		.then(json => pollUntilCheckFinished(api_key, json.result.id))
 		.catch(error => {
+			reportPullListClientError(api_key, 'check start', error);
 			setCheckStatus(
-				`Check failed to start: ${error.message || 'request failed'}`,
+				`Check failed to start: ${pullListErrorMessage(error)}`,
 				true
 			);
 			stopCheckSpinner();
@@ -361,12 +394,23 @@ function checkNow(api_key) {
 
 function moveWeek(amount, api_key) {
 	pullListState.week.setDate(pullListState.week.getDate() + amount * 7);
-	loadList(api_key);
+	return loadList(api_key).catch(error => {
+		reportPullListClientError(api_key, 'week navigation', error);
+		setCheckStatus(`Calendar reload failed: ${pullListErrorMessage(error)}`, true);
+	});
 };
 
 usingApiKey().then(api_key => {
-	loadRootFolders(api_key).then(() => loadList(api_key, true));
-	PullListEls.buttons.refresh.onclick = () => loadList(api_key);
+	loadRootFolders(api_key)
+		.then(() => loadList(api_key, true))
+		.catch(error => {
+			reportPullListClientError(api_key, 'initial load', error);
+			setCheckStatus(`Calendar load failed: ${pullListErrorMessage(error)}`, true);
+		});
+	PullListEls.buttons.refresh.onclick = () => loadList(api_key).catch(error => {
+		reportPullListClientError(api_key, 'manual reload', error);
+		setCheckStatus(`Calendar reload failed: ${pullListErrorMessage(error)}`, true);
+	});
 	PullListEls.buttons.check.onclick = () => checkNow(api_key);
 	PullListEls.buttons.reading_lists.onclick = () => {
 		window.location.href = `${url_base}/activity/reading-lists`;
@@ -375,7 +419,10 @@ usingApiKey().then(api_key => {
 	PullListEls.buttons.next_week.onclick = () => moveWeek(1, api_key);
 	PullListEls.buttons.current_week.onclick = () => {
 		pullListState.week = startOfWeek(new Date());
-		loadList(api_key);
+		loadList(api_key).catch(error => {
+			reportPullListClientError(api_key, 'current-week reload', error);
+			setCheckStatus(`Calendar reload failed: ${pullListErrorMessage(error)}`, true);
+		});
 	};
 	PullListEls.buttons.rules.onclick = () => {
 		PullListEls.rules.classList.toggle('hidden');

@@ -494,7 +494,7 @@ def act_on_release(
 def process_publisher_subscriptions(
     entries: List[Dict[str, Any]]
 ) -> List[DownloadTuple]:
-    """Apply opt-in publisher rules and return downloads for the task queue."""
+    """Apply publisher rules to current and stored past releases."""
     subscriptions = {
         row['publisher'].lower(): row
         for row in get_db().execute(
@@ -505,7 +505,8 @@ def process_publisher_subscriptions(
     cursor = get_db()
     current_week = _monday(date.today()).isoformat()
     for entry in entries:
-        if entry.get('week_start') != current_week:
+        week_start = str(entry.get('week_start') or '')
+        if not week_start or week_start > current_week:
             continue
         publisher = str(entry.get('publisher') or '').lower()
         subscription = subscriptions.get(publisher)

@@ -2,7 +2,8 @@
 
 """Publisher-aware weekly release calendar and automation rules."""
 
-from asyncio import gather, run
+from asyncio import TimeoutError as AsyncTimeoutError
+from asyncio import gather, run, wait_for
 from datetime import date, datetime, timedelta
 from time import time
 from typing import Any, Dict, List, Tuple, Type, Union
@@ -20,6 +21,7 @@ from backend.implementations.weekly_releases import (
 from backend.internals.db import get_db
 
 DownloadTuple = Tuple[str, int, Union[int, None]]
+WEEKLY_RELEASE_FETCH_TIMEOUT = 45.0
 
 
 def _monday(value: date) -> date:
@@ -136,6 +138,25 @@ def _merge_release_sources(
     return releases
 
 
+async def _fetch_release_source(
+    source: WeeklyReleaseSource,
+    session: AsyncSession,
+    week: date
+) -> List[WeeklyReleaseData]:
+    """Bound one release-source request so one host cannot spin forever."""
+    try:
+        return await wait_for(
+            source.fetch(session, week),
+            timeout=WEEKLY_RELEASE_FETCH_TIMEOUT
+        )
+    except AsyncTimeoutError:
+        LOGGER.warning(
+            'Weekly release source %s timed out for week %s',
+            type(source).__name__, week.isoformat()
+        )
+        return []
+
+
 async def _fetch_all_weekly_releases() -> List[WeeklyReleaseData]:
     """Fetch nine navigable weeks, including four past and four future."""
     start = _monday(date.today())
@@ -144,7 +165,7 @@ async def _fetch_all_weekly_releases() -> List[WeeklyReleaseData]:
 
     async with AsyncSession() as session:
         responses = await gather(*(
-            source.fetch(session, week)
+            _fetch_release_source(source, session, week)
             for source in sources
             for week in weeks
         ))
@@ -232,9 +253,17 @@ def _find_issue_id(entry: Dict[str, Any]) -> Union[int, None]:
 def check_weekly_pull_list() -> List[Dict[str, Any]]:
     """Refresh the full catalogue while preserving it on source failure."""
     releases = run(_fetch_all_weekly_releases())
-    if not releases:
+    current_week = _monday(date.today()).isoformat()
+    current_catalogue = [
+        release
+        for release in releases
+        if release.get('week_start') == current_week
+        and release.get('publisher')
+    ]
+    if not current_catalogue:
         raise RuntimeError(
-            'No weekly releases were returned; the previous pull list was kept'
+            'No current-week publisher releases were returned; '
+            'the previous pull list was kept'
         )
 
     entries = match_releases_to_library(
@@ -305,8 +334,9 @@ def get_pull_list(week_start: Union[str, None] = None) -> List[Dict[str, Any]]:
 
 
 def get_publishers() -> List[Dict[str, Any]]:
-    """Return known publishers with their opt-in automation rule."""
-    return get_db().execute(
+    """Return known publishers with global and per-week release counts."""
+    cursor = get_db()
+    publishers = cursor.execute(
         """
         SELECT
             p.publisher,
@@ -321,6 +351,23 @@ def get_publishers() -> List[Dict[str, Any]]:
         ORDER BY p.publisher COLLATE NOCASE;
         """
     ).fetchalldict()
+    counts_by_publisher: Dict[str, Dict[str, int]] = {}
+    for row in cursor.execute(
+        """
+        SELECT publisher, week_start, COUNT(*) AS release_count
+        FROM pull_list_entries
+        WHERE publisher IS NOT NULL AND publisher != ''
+        GROUP BY publisher, week_start;
+        """
+    ).fetchalldict():
+        counts_by_publisher.setdefault(row['publisher'], {})[
+            row['week_start']
+        ] = row['release_count']
+    for publisher in publishers:
+        publisher['release_counts'] = counts_by_publisher.get(
+            publisher['publisher'], {}
+        )
+    return publishers
 
 
 def set_publisher_subscription(

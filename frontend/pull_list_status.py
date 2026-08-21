@@ -4,9 +4,12 @@
 
 from flask import request
 
+from backend.base.custom_exceptions import InvalidKeyValue
 from backend.base.logging import LOGGER
+from backend.features.publisher_automation import set_all_publisher_subscriptions
 from backend.features.pull_list_parallel import (get_pull_list_weeks,
                                                  pull_list_check_runner)
+from backend.implementations.root_folders import RootFolders
 from frontend.api import api, auth, error_handler, return_api
 
 
@@ -33,6 +36,22 @@ def api_pull_list_check_status(check_id: int):
     if check is None:
         return return_api({}, 'PullListCheckNotFound', 404)
     return return_api(check)
+
+
+@api.route('/pulllist/publishers/grab-all', methods=['POST'])
+@error_handler
+@auth
+def api_pull_list_publishers_grab_all():
+    """Enable auto-add + grab for every publisher currently in the catalogue."""
+    data = request.get_json(silent=True) or {}
+    root_folder_id = data.get('root_folder_id')
+    if not isinstance(root_folder_id, int):
+        raise InvalidKeyValue('root_folder_id', root_folder_id)
+    RootFolders().get_one(root_folder_id)
+    return return_api(
+        set_all_publisher_subscriptions(root_folder_id),
+        code=201
+    )
 
 
 @api.route('/pulllist/client-error', methods=['POST'])

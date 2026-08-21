@@ -1,6 +1,7 @@
 const PullListEls = {
 	table: document.querySelector('#pull-list'),
 	empty_message: document.querySelector('#pull-list-empty-message'),
+	check_status: document.querySelector('#pull-list-check-status'),
 	week_label: document.querySelector('#week-label'),
 	page_label: document.querySelector('#page-label'),
 	search: document.querySelector('#release-search'),
@@ -147,13 +148,21 @@ function renderList(api_key) {
 	});
 };
 
+function publisherWeekCount(publisher) {
+	const counts = publisher.release_counts || {};
+	return counts[isoDate(pullListState.week)] || 0;
+};
+
 function updatePublisherFilter() {
 	const selected = PullListEls.publisher_filter.value;
 	PullListEls.publisher_filter.innerHTML = '<option value="">All publishers</option>';
 	pullListState.publishers.forEach(obj => {
+		const release_count = publisherWeekCount(obj);
+		if (!release_count)
+			return;
 		const option = document.createElement('option');
 		option.value = obj.publisher;
-		option.innerText = `${obj.publisher} (${obj.release_count})`;
+		option.innerText = `${obj.publisher} (${release_count})`;
 		option.selected = obj.publisher === selected;
 		PullListEls.publisher_filter.appendChild(option);
 	});
@@ -240,26 +249,91 @@ function actOnEntry(action, entry, button, api_key) {
 	});
 };
 
-function pollUntilCheckFinished(api_key) {
-	fetchAPI('/system/tasks', api_key).then(json => {
-		const still_running = json.result.some(
-			task => task.action === 'weekly_pull_list_check'
+function setCheckStatus(message, failed=false) {
+	PullListEls.check_status.innerText = message || '';
+	PullListEls.check_status.classList.toggle('hidden', !message);
+	PullListEls.check_status.classList.toggle('error', failed);
+};
+
+function stopCheckSpinner() {
+	PullListEls.buttons.check.disabled = false;
+	PullListEls.buttons.check.querySelector('img').classList.remove('spinning');
+};
+
+function latestCheckFailure(history) {
+	const entry = history.find(item => item.task_name === 'weekly_pull_list_check');
+	if (!entry || !entry.display_title.includes('Failed:'))
+		return null;
+	return entry.display_title.split('Failed:', 2)[1].trim();
+};
+
+function finishCheck(api_key) {
+	return fetchAPI('/system/tasks/history', api_key)
+	.then(json => {
+		const failure = latestCheckFailure(json.result);
+		return loadList(api_key).then(() => {
+			if (failure)
+				setCheckStatus(`Check failed: ${failure}`, true);
+			else
+				setCheckStatus('Release calendar updated.');
+		});
+	})
+	.catch(error => {
+		setCheckStatus(
+			`Check failed: ${error.message || 'unable to read task status'}`,
+			true
 		);
-		if (still_running) {
-			setTimeout(() => pollUntilCheckFinished(api_key), 1500);
+	})
+	.finally(stopCheckSpinner);
+};
+
+function pollUntilCheckFinished(api_key, task_id) {
+	fetchAPI('/system/tasks', api_key)
+	.then(json => {
+		const task = json.result.find(
+			entry => entry.id === task_id
+				&& entry.action === 'weekly_pull_list_check'
+		);
+		if (!task) {
+			finishCheck(api_key);
 			return;
 		};
-		loadList(api_key);
-		PullListEls.buttons.check.disabled = false;
-		PullListEls.buttons.check.querySelector('img').classList.remove('spinning');
+
+		if (task.status === 'queued') {
+			const running = json.result.find(entry => entry.status === 'running');
+			setCheckStatus(
+				running && running.id !== task_id
+					? `Queued behind ${running.display_title}.`
+					: 'Release calendar check is queued.'
+			);
+		} else {
+			setCheckStatus(task.message || 'Refreshing the release calendar...');
+		};
+		setTimeout(() => pollUntilCheckFinished(api_key, task_id), 1500);
+	})
+	.catch(error => {
+		setCheckStatus(
+			`Check status failed: ${error.message || 'unable to poll tasks'}`,
+			true
+		);
+		stopCheckSpinner();
 	});
 };
 
 function checkNow(api_key) {
 	PullListEls.buttons.check.disabled = true;
 	PullListEls.buttons.check.querySelector('img').classList.add('spinning');
+	setCheckStatus('Starting release calendar check...');
 	sendAPI('POST', '/system/tasks', api_key, {}, {cmd: 'weekly_pull_list_check'})
-		.then(() => pollUntilCheckFinished(api_key));
+		.then(response => response.json())
+		.then(json => pollUntilCheckFinished(api_key, json.result.id))
+		.catch(error => {
+			setCheckStatus(
+				`Check failed to start: ${error.message || 'request failed'}`,
+				true
+			);
+			stopCheckSpinner();
+		});
 };
 
 function moveWeek(amount, api_key) {

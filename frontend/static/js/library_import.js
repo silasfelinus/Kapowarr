@@ -527,18 +527,49 @@ function paintContinuousStatus(snapshot) {
 
 	applyContinuousSnapshot(snapshot);
 
+	renderContinuousControl(job, live);
+
 	if (live) {
 		updateContinuousProgress(snapshot.task.message);
-		LIEls.buttons.continuous_stop.disabled = continuousStopRequested;
 		return;
 	};
 
 	LIEls.continuous.status.innerText = continuousStopRequested
 		? 'Continuous import stopped. Everything already imported is preserved, and the captured review holds are available below.'
 		: describeFinishedJob(job);
-	// A job still marked running with no worker is the one non-live state the
-	// user can act on: Stop is what marks it paused so Start can resume it.
-	LIEls.buttons.continuous_stop.disabled = !(job && job.is_stalled);
+};
+
+// One button, and what it should do depends on whether anything is running.
+// It was always labelled "Stop Import" and simply disabled when there was
+// nothing to stop, so a paused pass showed a dead button reading Stop -- no
+// explanation, and no way to pick the pass back up from the panel that was
+// telling you it had stopped.
+function renderContinuousControl(job, live) {
+	const button = LIEls.buttons.continuous_stop;
+	button.classList.remove('hidden');
+
+	// A stalled job -- marked running with no worker -- is stoppable too:
+	// stopping is what marks it paused so it can be resumed.
+	if (live || (job && job.is_stalled)) {
+		button.innerText = 'Stop Import';
+		button.dataset.action = 'stop';
+		button.disabled = live && continuousStopRequested;
+		return;
+	};
+
+	// Nothing is running. A pass with folders left is worth continuing, and
+	// starting is what continues it: a paused job is resumed rather than
+	// rebuilt, so the checkpoints and holds it already has are kept.
+	if (job && job.remaining_folders > 0) {
+		button.innerText = 'Resume Import';
+		button.dataset.action = 'resume';
+		button.disabled = false;
+		return;
+	};
+
+	// Finished, with nothing left to do. A disabled button here is furniture
+	// that only invites clicking.
+	button.classList.add('hidden');
 };
 
 // Panel visibility only. The status line and the Stop button belong to
@@ -696,7 +727,13 @@ function startContinuousImport(api_key) {
 		// so they are still outstanding until this pass re-checks those folders
 		// and overwrites them; the next snapshot poll reports the real count.
 		continuousLastSnapshotAt = 0;
+		// The poll repaints this within the second, but the click that got here
+		// may have been on "Resume Import" and leaving that label up while the
+		// pass starts reads as though nothing happened.
+		LIEls.buttons.continuous_stop.innerText = 'Stop Import';
+		LIEls.buttons.continuous_stop.dataset.action = 'stop';
 		LIEls.buttons.continuous_stop.disabled = false;
+		LIEls.buttons.continuous_stop.classList.remove('hidden');
 		hide([LIEls.views.start], [LIEls.views.continuous]);
 		updateContinuousProgress('Starting the longbox conveyor...');
 		return sendAPI(
@@ -747,7 +784,12 @@ usingApiKey()
 		hide([LIEls.views.continuous], [LIEls.views.start]);
 	};
 	LIEls.buttons.continuous_review.onclick = e => openContinuousReview(api_key);
-	LIEls.buttons.continuous_stop.onclick = e => stopContinuousImport(api_key);
+	LIEls.buttons.continuous_stop.onclick = e => {
+		if (LIEls.buttons.continuous_stop.dataset.action === 'resume')
+			startContinuousImport(api_key);
+		else
+			stopContinuousImport(api_key);
+	};
 	LIEls.buttons.import.onclick = e => importLibrary(api_key, false);
 	LIEls.buttons.import_rename.onclick = e => importLibrary(api_key, true);
 	pollContinuousTask(api_key);

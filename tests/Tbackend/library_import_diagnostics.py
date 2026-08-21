@@ -74,9 +74,15 @@ class library_import_review_diagnostics(unittest.TestCase):
             AUTO_IMPORT_MIN_MATCH_SCORE
         )
         self.assertEqual(diagnostics['thresholds']['minimum_margin'], 1)
-        self.assertEqual(diagnostics['decision']['best_score'], 4)
-        self.assertEqual(diagnostics['decision']['runner_up_score'], 4)
+        # The decision fields are the policy scores the matcher compared, not
+        # the base ranking scores: continuous import adds an exact-year bonus
+        # and an issue-capacity bonus/penalty on top, and re-sorts on the
+        # result. Recording base scores beside `thresholds.minimum_score` meant
+        # a record could not explain its own verdict.
+        self.assertEqual(diagnostics['decision']['best_score'], 7)
+        self.assertEqual(diagnostics['decision']['runner_up_score'], 7)
         self.assertEqual(diagnostics['decision']['score_margin'], 0)
+        self.assertEqual(diagnostics['decision']['best_base_score'], 4)
         self.assertEqual(diagnostics['decision']['raw_result_count'], 3)
         self.assertEqual(diagnostics['decision']['viable_candidate_count'], 2)
 
@@ -113,7 +119,8 @@ class library_import_review_diagnostics(unittest.TestCase):
             review_reason='weak-score'
         )
 
-        self.assertEqual(diagnostics['decision']['best_score'], -1)
+        self.assertEqual(diagnostics['decision']['best_score'], -3)
+        self.assertEqual(diagnostics['decision']['best_base_score'], -1)
         self.assertIsNone(diagnostics['decision']['runner_up_score'])
         self.assertIsNone(diagnostics['decision']['score_margin'])
         self.assertEqual(diagnostics['decision']['viable_candidate_count'], 1)
@@ -129,6 +136,7 @@ class library_import_review_diagnostics(unittest.TestCase):
         )
 
         self.assertIsNone(diagnostics['decision']['best_score'])
+        self.assertIsNone(diagnostics['decision']['best_base_score'])
         self.assertEqual(diagnostics['decision']['viable_candidate_count'], 0)
         self.assertEqual(diagnostics['decision']['raw_result_count'], 1)
         self.assertEqual(diagnostics['viable_candidates'], [])
@@ -176,3 +184,51 @@ class library_import_review_diagnostics(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class postmortem_explains_its_own_verdict(library_import_review_diagnostics):
+    """A held record has to be readable against the threshold it was held by.
+
+    `decision.best_score` used to be the base ranking score while the matcher
+    decided on the policy score, and both sat next to `thresholds.minimum_score`
+    in the same record. A hold could therefore show a best score comfortably
+    above the minimum it was supposedly held for, which makes the file useless
+    for the one thing it exists to do: work out why nothing imported.
+    """
+
+    def test_the_recorded_score_is_the_one_compared_to_the_threshold(self):
+        from backend.features import library_import_policy as policy
+
+        group = self._group(year=2020, volume_number=3)
+        results = [self._candidate(1, 'Batman', 2020, issue_count=12)]
+
+        diagnostics = build_review_diagnostics(
+            group, results, only_english=True, review_reason='weak-score'
+        )
+        _, reason = policy.select_auto_import_volume_result(
+            group, results, only_english=True
+        )
+
+        best = diagnostics['decision']['best_score']
+        minimum = diagnostics['thresholds']['minimum_score']
+        self.assertIsNotNone(best)
+        # Same scale, so the comparison the record invites is the real one.
+        self.assertEqual(
+            best >= minimum,
+            reason != policy.REVIEW_REASON_WEAK_SCORE,
+            'the recorded score must agree with the verdict it is filed under'
+        )
+
+    def test_the_base_score_is_kept_alongside_it(self):
+        """Losing it would hide which half of the policy moved a decision."""
+        diagnostics = build_review_diagnostics(
+            self._group(),
+            [self._candidate(1)],
+            only_english=True,
+            review_reason='weak-score'
+        )
+
+        self.assertIn('best_base_score', diagnostics['decision'])
+        self.assertIsNotNone(
+            diagnostics['raw_search_results'][0]['policy_score']
+        )

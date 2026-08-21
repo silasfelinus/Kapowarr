@@ -87,3 +87,48 @@ test('backend acknowledges stop and slices long metadata waits', () => {
 		/remaining_delay and not self\._interruptible_wait\(remaining_delay\)/
 	);
 });
+
+test('the control offers Resume when the pass is stopped, not a dead Stop', () => {
+	// One button whose label never changed, disabled whenever there was
+	// nothing to stop -- so a paused pass showed a button reading "Stop
+	// Import" that could not be clicked, with no explanation and no way to
+	// pick the pass back up from the panel saying it had stopped.
+	const render = functionBody(
+		libraryImport,
+		'renderContinuousControl',
+		'showContinuousTask'
+	);
+
+	assert.match(render, /'Resume Import'/);
+	assert.match(render, /dataset\.action = 'resume'/);
+	assert.match(
+		render,
+		/job\.remaining_folders > 0/,
+		'a pass is resumable when it still has folders left'
+	);
+});
+
+test('a finished pass hides the control instead of disabling it', () => {
+	const render = functionBody(
+		libraryImport,
+		'renderContinuousControl',
+		'showContinuousTask'
+	);
+	assert.match(render, /button\.classList\.add\('hidden'\)/);
+});
+
+test('a stalled job is still stoppable, since stopping is what pauses it', () => {
+	const render = functionBody(
+		libraryImport,
+		'renderContinuousControl',
+		'showContinuousTask'
+	);
+	assert.match(render, /live \|\| \(job && job\.is_stalled\)/);
+});
+
+test('the click dispatches on what the button currently offers', () => {
+	assert.match(
+		libraryImport,
+		/dataset\.action === 'resume'\)\s*\n\s*startContinuousImport\(api_key\)/
+	);
+});

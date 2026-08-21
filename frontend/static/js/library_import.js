@@ -507,12 +507,42 @@ function describeFinishedJob(job) {
 	if (job.status === 'paused')
 		return `Continuous import paused after ${job.checked_folders}/${job.total_folders} folders. Everything already imported is preserved; start it again to continue where it left off.${describeReviewReasons(job)}`;
 
+	// `running` with no worker. The job row records what the last worker wrote,
+	// so a pass killed mid-folder leaves this behind and it is not a pass in
+	// progress -- saying "running" here is what made the panel contradict
+	// itself, claiming running and paused at the same time.
 	if (job.status === 'running')
-		return `Continuous import was interrupted after ${job.checked_folders}/${job.total_folders} folders. It resumes automatically the next time Kapowarr starts.${describeReviewReasons(job)}`;
+		return `Continuous import stopped unexpectedly after ${job.checked_folders}/${job.total_folders} folders, and is not running now. Nothing was lost. Start it again to continue where it left off.${describeReviewReasons(job)}`;
 
 	return `Continuous import finished: ${job.checked_folders}/${job.total_folders} folders checked, ${job.imported_volumes} volumes imported.${describeReviewReasons(job)} Anything held is waiting under Review Holds.`;
 };
 
+// The one place the status line is written from a snapshot. There used to be
+// two independent writers -- the durable job at page load and the task message
+// on every poll -- so the panel could report a paused job and a running task in
+// the same breath, depending on which had spoken last.
+function paintContinuousStatus(snapshot) {
+	const job = snapshot.job;
+	const live = snapshot.task && snapshot.task.id !== undefined;
+
+	applyContinuousSnapshot(snapshot);
+
+	if (live) {
+		updateContinuousProgress(snapshot.task.message);
+		LIEls.buttons.continuous_stop.disabled = continuousStopRequested;
+		return;
+	};
+
+	LIEls.continuous.status.innerText = continuousStopRequested
+		? 'Continuous import stopped. Everything already imported is preserved, and the captured review holds are available below.'
+		: describeFinishedJob(job);
+	// A job still marked running with no worker is the one non-live state the
+	// user can act on: Stop is what marks it paused so Start can resume it.
+	LIEls.buttons.continuous_stop.disabled = !(job && job.is_stalled);
+};
+
+// Panel visibility only. The status line and the Stop button belong to
+// paintContinuousStatus, which sees the durable job as well as the task.
 function showContinuousTask(task) {
 	continuousTaskId = task.id;
 	continuousWasRunning = true;
@@ -529,8 +559,6 @@ function showContinuousTask(task) {
 			[LIEls.views.continuous]
 		);
 	};
-	updateContinuousProgress(task.message);
-	LIEls.buttons.continuous_stop.disabled = continuousStopRequested;
 };
 
 function refreshContinuousReviewCache(api_key) {
@@ -563,24 +591,31 @@ function openContinuousReview(api_key) {
 	});
 };
 
+// Stopping goes through the durable job, not the task queue. A pass
+// interrupted mid-folder leaves a job marked running with no queue entry to
+// delete, and a stop that could only delete a queue entry did nothing at all
+// in exactly that state -- no request, no message, no change -- while the page
+// went on showing a pass in progress.
 function stopContinuousImport(api_key) {
-	if (continuousTaskId === null)
-		return;
-
-	const task_id = continuousTaskId;
 	continuousStopRequested = true;
 	LIEls.buttons.continuous_stop.disabled = true;
-	LIEls.continuous.status.innerText =
-		'Stop requested. Pausing as soon as the current operation can exit safely...';
+	LIEls.continuous.status.innerText = continuousTaskId === null
+		? 'Stopping...'
+		: 'Stop requested. Pausing as soon as the current operation can exit safely...';
 
-	// Stop is the primary action. Do not make it wait behind a potentially slow
-	// details snapshot. Once the backend has acknowledged the cooperative stop,
-	// refreshing held-review details is best-effort only; the durable job state
-	// remains the source of truth.
-	sendAPI('DELETE', `/system/tasks/${task_id}`, api_key)
-	.then(() => {
-		refreshContinuousReviewCache(api_key)
-		.catch(() => continuousReviewCache);
+	sendAPI('POST', '/libraryimport/continuous/stop', api_key)
+	.then(response => response.json())
+	.then(json => {
+		if (json.result.stopped === 'stalled_job') {
+			// Nothing was running, so there is no worker to wait for and the
+			// job is already paused. Repaint from the durable state now rather
+			// than leaving "Stopping..." on screen until the next poll.
+			continuousTaskId = null;
+			continuousWasRunning = false;
+			return fetchContinuousSnapshot(api_key).then(paintContinuousStatus);
+		};
+		return refreshContinuousReviewCache(api_key)
+			.catch(() => continuousReviewCache);
 	})
 	.catch(e => {
 		continuousStopRequested = false;
@@ -593,40 +628,29 @@ function pollContinuousTask(api_key) {
 	if (continuousPoll !== null)
 		clearInterval(continuousPoll);
 
-	const refresh = () => fetchAPI('/system/tasks', api_key)
-	.then(json => {
-		const task = json.result.find(
-			t => t.action === 'continuous_library_import'
-		);
-		if (task) {
+	// One request per tick, to the endpoint that reports the durable job and
+	// the live task together. Polling the task queue separately was what let
+	// the two disagree on screen: whichever reply landed last won the status
+	// line, so a stalled job and a stale task message took turns.
+	const refresh = () => fetchContinuousSnapshot(api_key)
+	.then(snapshot => {
+		const task = snapshot.task;
+		if (task && task.id !== undefined) {
 			showContinuousTask(task);
-			if (Date.now() - continuousLastSnapshotAt >= 15000)
-				fetchContinuousSnapshot(api_key).catch(() => null);
+			paintContinuousStatus(snapshot);
 			return;
 		};
 
-		if (!continuousWasRunning)
+		if (!continuousWasRunning && !(snapshot.job && snapshot.job.is_stalled))
 			return;
 
 		// The pass has left the queue. Everything it did is still on disk, so
-		// read the final state from the durable job instead of reporting
-		// whatever this page happened to have in memory.
+		// the durable job is what says how it ended.
 		continuousTaskId = null;
 		continuousWasRunning = false;
-		LIEls.buttons.continuous_stop.disabled = true;
-		fetchContinuousSnapshot(api_key)
-		.then(snapshot => {
-			applyContinuousSnapshot(snapshot);
-			LIEls.continuous.status.innerText = continuousStopRequested
-				? 'Continuous import stopped. Everything already imported is preserved, and the captured review holds are available below.'
-				: describeFinishedJob(snapshot.job);
-		})
-		.catch(() => {
-			LIEls.continuous.status.innerText = continuousStopRequested
-				? 'Continuous import stopped. Everything already imported is preserved, and the captured review holds are available below.'
-				: describeFinishedJob(null);
-		});
-	});
+		paintContinuousStatus(snapshot);
+	})
+	.catch(() => null);
 
 	refresh();
 	continuousPoll = setInterval(refresh, 1000);
@@ -649,8 +673,7 @@ function showSavedContinuousState(api_key) {
 		)
 			return;
 
-		LIEls.continuous.status.innerText = describeFinishedJob(snapshot.job);
-		LIEls.buttons.continuous_stop.disabled = true;
+		paintContinuousStatus(snapshot);
 		hide([LIEls.views.start], [LIEls.views.continuous]);
 	})
 	.catch(() => null);
@@ -660,13 +683,12 @@ function startContinuousImport(api_key) {
 	continuousPanelDismissed = false;
 	continuousReviewOpen = false;
 	continuousStopRequested = false;
-	fetchAPI('/system/tasks', api_key)
-	.then(json => {
-		const existing = json.result.find(
-			t => t.action === 'continuous_library_import'
-		);
-		if (existing) {
+	fetchContinuousSnapshot(api_key)
+	.then(snapshot => {
+		const existing = snapshot.task;
+		if (existing && existing.id !== undefined) {
 			showContinuousTask(existing);
+			paintContinuousStatus(snapshot);
 			return null;
 		};
 

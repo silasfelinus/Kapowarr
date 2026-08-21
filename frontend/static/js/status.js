@@ -1,6 +1,8 @@
 const StatEls = {
 	health_section: document.querySelector('#health-section'),
 	health_list: document.querySelector('#health-list'),
+	comicvine_rows: document.querySelector('#comicvine-rows'),
+	comicvine_empty: document.querySelector('#comicvine-empty'),
 	version: document.querySelector('#version'),
 	python_version: document.querySelector('#python-version'),
 	database_version: document.querySelector('#database-version'),
@@ -33,6 +35,7 @@ const about_table = `
 usingApiKey()
 .then(api_key => {
 	fillHealth(api_key);
+	fillComicVineActivity(api_key);
 
 	fetchAPI('/system/about', api_key)
 	.then(json => {
@@ -72,6 +75,49 @@ usingApiKey()
 		};
 });
 
+
+function comicvineOutcomeSummary(entry) {
+	const parts = [];
+	if (entry.success)
+		parts.push(`${entry.success} ok`);
+	if (entry.rate_limit)
+		parts.push(`${entry.rate_limit} rate limited`);
+	if (entry.not_found)
+		parts.push(`${entry.not_found} not found`);
+	if (entry.invalid_key)
+		parts.push(`${entry.invalid_key} invalid key`);
+	if (entry.other_error)
+		parts.push(`${entry.other_error} failed`);
+	return parts.join(' · ') || 'no outcome recorded yet';
+};
+
+function fillComicVineActivity(api_key) {
+	fetchAPI('/system/comicvine-activity', api_key)
+	.then(json => {
+		const operations = json.result.operations || [];
+		StatEls.comicvine_rows.innerHTML = '';
+		StatEls.comicvine_empty.classList.toggle('hidden', operations.length !== 0);
+
+		const fragment = document.createDocumentFragment();
+		operations.forEach(entry => {
+			const row = document.createElement('tr');
+
+			const name = document.createElement('th');
+			name.textContent = entry.operation;
+
+			const count = document.createElement('td');
+			count.textContent = `${entry.operations} · ${comicvineOutcomeSummary(entry)}`;
+
+			row.append(name, count);
+			fragment.appendChild(row);
+		});
+		StatEls.comicvine_rows.appendChild(fragment);
+	})
+	.catch(e => {
+		console.error(e);
+		StatEls.comicvine_empty.classList.remove('hidden');
+	});
+};
 
 function fillHealth(api_key) {
 	fetchAPI('/system/health', api_key)

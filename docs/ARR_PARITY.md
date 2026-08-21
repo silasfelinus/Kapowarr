@@ -13,7 +13,7 @@ Recent merged milestones have materially changed the roadmap:
 | #69 | System Logs | Supported: in-app severity/search/filter, capture level, refresh/auto-refresh, raw download. |
 | #70 | Backup / restore | Supported: manual + weekly SQLite-safe backups, retention and staged restore. |
 | #71 | Continuous Library Import calibration | Supported / tuning: 30-second ComicVine operation pacing, local-sidecar fast path paced too, unique non-contradictory matches accepted, ties/contradictions held for review. |
-| #72 | System Events | Supported: task/download/log timeline plus ComicVine provider-operation telemetry. |
+| #72 | System Events | Covered by the surfaces the timeline drew from: System > Tasks, Activity > History and System > Logs. ComicVine provider-operation telemetry lives on System > Status. |
 | #73 | Import Lists | Supported / expanding: Remote ComicRack CBL provider with safe exact-ID automatic add and persistent sync. |
 | #74 | File provenance | Supported: successful acquisitions persist source context on durable file IDs without secret-bearing acquisition URLs. |
 | #75 | Explainable file quality | Supported foundation: evidence-backed format/source/GetComics traits, no fake aggregate score or automatic replacement. |
@@ -40,7 +40,7 @@ Silence is not a decision. Missing expected features should become visible roadm
 | Tasks | Supported | Recurring work is visible; Backup and Import Lists use persistent task scheduling. |
 | Logs | Supported | Capture granularity is separate from severity/search filtering and raw download remains available. |
 | Backup / restore | Supported | Manual + weekly SQLite-safe backups, 28-day retention, authenticated management and staged restore with a pre-restore snapshot. |
-| Events | Supported | Unified read-only timeline reuses task history, download history and recent warning/error logs. ComicVine provider-operation telemetry is explicitly not presented as raw HTTP packet accounting. |
+| Events | Covered elsewhere | A unified timeline duplicated task history, download history and warning/error logs, each of which has its own page; the log-derived half also competed with the log viewer while being harder to search. ComicVine provider-operation telemetry moved to System > Status and is still explicitly not raw HTTP packet accounting. |
 | Updates | Partial / needs decision | Running version is visible, but there is no familiar current/latest/channel surface. Container-first installs should not gain a blind in-app self-updater. |
 
 ## Shared Settings parity
@@ -67,7 +67,7 @@ Silence is not a decision. Missing expected features should become visible roadm
 | Calendar / release awareness | Supported / comic-shaped: weekly publisher-aware release catalogue and subscriptions are the current equivalent; a conventional date calendar is optional rather than assumed. |
 | Search + acquisition | Supported / expanding: GetComics, Newznab, Torznab and client routing are first-class. Watched-folder import now covers files acquired outside Kapowarr; additional lawful sources remain roadmap work. |
 | Completed-download handling | Supported: torrent/Usenet lifecycle, seed-safe import, failure handling and durable file provenance are substantial, and a watched folder now ingests externally acquired files through the same move/match/rename/convert path. It matches only volumes already in the library and never creates one, so it does not compete with Continuous Library Import. |
-| History + blocklist | Supported: acquisition history/blocklist stay focused while System Events provides the operational cross-stream timeline. |
+| History + blocklist | Supported: acquisition history and blocklist stay focused; System > Tasks and System > Logs carry the rest of the operational record. |
 | Portable metadata | Supported foundation / expanding: exact ComicInfo identity is consumed from sidecars and common ZIP/RAR comic containers; `series.json` can be previewed, downloaded or safely materialized with existing files preserved by default. Embedded archive metadata write-back is not yet enabled. |
 | Reader | Intentionally secondary | Reader parity is not an `*arr` convention and should not displace aggregation priorities. |
 
@@ -80,7 +80,7 @@ Prioritize work that reduces metadata dependency, support friction or data-loss 
 3. **ComicVine failure taxonomy and telemetry follow-up** — if real-world import tests still hit suspicious cooldowns, distinguish confirmed ComicVine rate-limit status from transport/JSON failures and expose endpoint/provider-operation evidence clearly.
 4. **Profiles + Quality policy** — only after evidence is durable, decide whether known traits should be combined at all, define strictly-better comparisons and rollback/keep-old semantics, then consider per-series profiles.
 5. **Updates UX** — expose understandable current/latest/channel state without unsafe self-update behavior for container installs.
-6. **System / Settings navigation** — make Logs, Events, Backup and Import Lists familiar sibling destinations when the sidebar can be refactored without bloating the minimalist UI.
+6. **System / Settings navigation** — Logs and Backup are now sibling System destinations alongside Status and Tasks. Import Lists remains under Settings.
 7. **Import List providers** — add additional curated/publisher/list ecosystems only when they expose stable identities or can be resolved without metadata-search storms.
 
 ## Quality / replacement safety gate

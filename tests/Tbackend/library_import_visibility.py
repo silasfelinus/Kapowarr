@@ -229,3 +229,118 @@ class continuous_status_endpoint(_StateHarness):
         # The live pass has held nothing yet, but the backlog is still there.
         self.assertEqual(result['job']['review_folders'], 0)
         self.assertEqual(result['review_folders_outstanding'], 1)
+
+
+class holds_for_files_that_moved(_StateHarness):
+    """A hold records a path, and importing or renaming can invalidate it.
+
+    Reconciling only against the ``files`` table cannot see this: the file is
+    in ``files`` under its new path, and the recorded one is in neither
+    ``files`` nor the filesystem. Such a row survived every read, could not be
+    imported -- the move raises ``FileNotFoundError`` -- and could not be
+    cleared, so the queue filled with rows whose only outcome was an error.
+    """
+
+    def test_a_hold_whose_file_moved_is_dropped(self):
+        job_id = self._finished_pass(['/library/A'], held={'/library/A'})
+        self.assertEqual(len(state.get_review_items(job_id)), 1)
+
+        self.moved_paths.add('/library/A/issue 1.cbz')
+
+        self.assertEqual(state.get_review_items(job_id), [])
+        self.assertEqual(state.get_outstanding_review_items(), [])
+
+    def test_a_folder_left_with_no_live_holds_counts_as_checked(self):
+        job_id = self._finished_pass(['/library/A'], held={'/library/A'})
+        self.moved_paths.add('/library/A/issue 1.cbz')
+
+        details = state.get_job_details(job_id)
+
+        self.assertEqual(details['review_items'], [])
+        self.assertEqual(details['review_folders'], 0)
+        self.assertEqual(
+            details['checked_folders'], 1,
+            'a folder with nothing left to review is finished, not pending'
+        )
+
+    def test_a_hold_whose_file_is_still_there_survives(self):
+        job_id = self._finished_pass(['/library/A'], held={'/library/A'})
+        self.moved_paths.add('/library/B/issue 1.cbz')
+
+        self.assertEqual(len(state.get_review_items(job_id)), 1)
+
+
+class stopping_a_pass(continuous_status_endpoint):
+    """Stop has to work when there is no worker left to ask.
+
+    A pass killed mid-folder leaves its job marked running with nothing in the
+    task queue. Stopping was purely a queue operation, so in exactly that state
+    it deleted nothing, changed nothing and said nothing -- while the page went
+    on reporting a pass in progress, and only a process restart reconciled it.
+    """
+
+    def _stop(self):
+        response = self.client.post(
+            '/api/libraryimport/continuous/stop?api_key=key'
+        )
+        self.assertEqual(response.status_code, 200)
+        return json.loads(response.data)['result']
+
+    def test_a_job_marked_running_with_no_worker_is_reported_as_stalled(self):
+        state.create_job(['/library/A'])
+
+        result = self._get()
+
+        self.assertEqual(result['job']['status'], state.JOB_RUNNING)
+        self.assertFalse(result['job']['is_live'])
+        self.assertTrue(result['job']['is_stalled'])
+
+    def test_a_live_pass_is_not_reported_as_stalled(self):
+        state.create_job(['/library/A'])
+        status_module.TaskHandler.return_value.get_all.return_value = [{
+            'id': 7,
+            'action': 'continuous_library_import',
+            'status': 'running',
+            'message': 'Continuous import: 0/1 folders checked'
+        }]
+
+        result = self._get()
+
+        self.assertTrue(result['job']['is_live'])
+        self.assertFalse(result['job']['is_stalled'])
+
+    def test_stopping_a_stalled_job_pauses_it_so_it_can_be_resumed(self):
+        job_id = state.create_job(['/library/A'])
+
+        self.assertEqual(self._stop()['stopped'], 'stalled_job')
+
+        self.assertIsNone(state.get_running_job())
+        paused = state.get_paused_job()
+        self.assertIsNotNone(paused)
+        self.assertEqual(paused['id'], job_id)
+
+    def test_a_live_pass_is_stopped_through_the_task_queue(self):
+        """A running worker owns its folder boundary, so ask it to stop rather
+        than editing the job row out from under it."""
+        state.create_job(['/library/A'])
+        handler = status_module.TaskHandler.return_value
+        handler.get_all.return_value = [{
+            'id': 7,
+            'action': 'continuous_library_import',
+            'status': 'running',
+            'message': 'Continuous import: 0/1 folders checked'
+        }]
+
+        result = self._stop()
+
+        self.assertEqual(result['stopped'], 'task')
+        handler.remove.assert_called_once_with(7)
+        self.assertIsNotNone(
+            state.get_running_job(),
+            'the worker marks the job paused when it reaches a safe boundary'
+        )
+
+    def test_stopping_an_already_finished_pass_is_not_an_error(self):
+        self._finished_pass(['/library/A'], held=set())
+
+        self.assertEqual(self._stop()['stopped'], 'nothing')

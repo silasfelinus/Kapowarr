@@ -24,6 +24,10 @@ const css = fs.readFileSync(
 	path.join(root, 'frontend/static/css/logs.css'),
 	'utf8'
 );
+const general = fs.readFileSync(
+	path.join(root, 'frontend/static/css/general.css'),
+	'utf8'
+);
 
 test('the toolbar is actions on the left and filters on the right', () => {
 	const actions = template.indexOf('class="logs-actions"');
@@ -76,11 +80,24 @@ test('clearing the log asks first and goes through its own endpoint', () => {
 	assert.match(script, /sendAPI\('POST', '\/system\/logs\/clear'/);
 });
 
-test('the log table is given the space left on the page', () => {
-	// A fixed `calc(100vh - …)` cap assumed a particular toolbar height, so
-	// the table showed a sliver of rows with the rest of the screen empty.
-	assert.match(css, /\.logs-table-wrap \{[^}]*flex: 1/);
+test('the log page is a document, not a stack of scroll panes', () => {
+	// general.css makes every child of <main> an equal-height pane with its own
+	// scrollbar, which suits a page holding one viewport under a tool bar. Here
+	// it gave the toolbar, the table and the pager a third of the screen each,
+	// so the log came out as a sliver of rows surrounded by blank space.
+	assert.match(template, /<main class="page-flow">/);
 	assert.doesNotMatch(css, /max-height: calc\(100vh/);
+	assert.doesNotMatch(
+		css,
+		/\.logs-table-wrap \{[^}]*overflow: auto/,
+		'the entry list is the page and scrolls with it'
+	);
+});
+
+test('page-flow opts a page out of the shared pane layout', () => {
+	assert.match(general, /main\.page-flow \{[^}]*display: block/);
+	assert.match(general, /main\.page-flow > \*:not\(\.tool-bar-container\)/);
+	assert.match(general, /flex: none/);
 });
 
 test('controls do not paint text on a background of the same colour', () => {

@@ -68,13 +68,29 @@ test('the poll asks for counters only, never the whole backlog', () => {
 		'pollContinuousTask',
 		'showSavedContinuousState'
 	);
-	const periodic = poll.split('continuousLastSnapshotAt >= 15000')[1].split('return;')[0];
 
-	assert.match(periodic, /fetchContinuousSnapshot\(api_key\)/);
+	assert.match(poll, /fetchContinuousSnapshot\(api_key\)/);
 	assert.ok(
-		!periodic.includes('true'),
-		'A 15s poll must not ship every held row each time'
+		!/fetchContinuousSnapshot\(api_key, true\)/.test(poll),
+		'A per-second poll must not ship every held row each time'
 	);
+});
+
+test('the poll reads job and task in one reply so they cannot disagree', () => {
+	// Two independent reads -- the durable job at load, the task queue on every
+	// tick -- meant whichever landed last owned the status line, so a stalled
+	// job and a stale task message took turns claiming the panel.
+	const poll = functionBody(
+		libraryImport,
+		'pollContinuousTask',
+		'showSavedContinuousState'
+	);
+
+	assert.ok(
+		!poll.includes("fetchAPI('/system/tasks'"),
+		'the poll must not read the task queue separately from the job'
+	);
+	assert.match(poll, /snapshot\.task/);
 });
 
 test('a saved pass is shown when the page opens with nothing running', () => {
@@ -105,7 +121,21 @@ test('the end of a pass reports the durable job, not in-page memory', () => {
 	);
 
 	assert.match(poll, /fetchContinuousSnapshot\(api_key\)/);
-	assert.match(poll, /describeFinishedJob\(snapshot\.job\)/);
+	assert.match(poll, /paintContinuousStatus\(snapshot\)/);
+});
+
+test('a job left marked running with no worker is reported as stopped', () => {
+	// The job row records what the last worker wrote. A pass killed mid-folder
+	// leaves `running` behind with nothing running, and repeating that verbatim
+	// is what had the panel claiming a pass was in progress while the queue was
+	// empty and Stop had nothing to act on.
+	assert.match(statusRoute, /'is_stalled'/);
+	assert.match(importState, /def get_active_job/);
+	assert.match(
+		libraryImport,
+		/is not running now/,
+		'the status line has to say it is not running'
+	);
 });
 
 test('the review count is never parsed out of the task message', () => {
@@ -142,7 +172,8 @@ test('the endpoint answers from durable state and reports any live task', () => 
 	assert.match(statusRoute, /get_outstanding_review_items\(\)/);
 	assert.match(statusRoute, /get_active_job\(\)/);
 	assert.match(statusRoute, /'review_folders_outstanding'/);
-	assert.match(statusRoute, /'task': _running_task\(\)/);
+	assert.match(statusRoute, /'task': task/);
+	assert.match(statusRoute, /_running_task\(\)/);
 
 	// Review reconciliation can retire folders, so counters are read after it.
 	const reviewIndex = statusRoute.indexOf('review_items = get_outstanding_review_items()');

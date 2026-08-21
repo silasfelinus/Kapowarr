@@ -504,6 +504,12 @@ function describeFinishedJob(job) {
 	if (job === null)
 		return 'Continuous import finished. Any folders Kapowarr could not match were left untouched for review.';
 
+	// A snapshot staged by Reset & Re-evaluate is paused before it ever runs,
+	// so "paused after 0 folders" describes an interruption that never
+	// happened and hides the fact that this one is simply waiting to start.
+	if (job.status === 'paused' && job.checked_folders === 0)
+		return `Continuous import is ready to check ${job.total_folders} folders. Nothing has been scanned yet.${describeReviewReasons(job)}`;
+
 	if (job.status === 'paused')
 		return `Continuous import paused after ${job.checked_folders}/${job.total_folders} folders. Everything already imported is preserved; start it again to continue where it left off.${describeReviewReasons(job)}`;
 

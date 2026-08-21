@@ -258,7 +258,6 @@ def check_weekly_pull_list() -> List[Dict[str, Any]]:
         release
         for release in releases
         if release.get('week_start') == current_week
-        and not release.get('availability_source')
         and release.get('publisher')
     ]
     if not current_catalogue:

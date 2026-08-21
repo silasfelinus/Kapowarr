@@ -9,6 +9,7 @@
 	<script src="{{ url_for('static', filename='js/window.js') }}" defer></script>
 	<script src="{{ url_for('static', filename='js/library_import.js') }}" defer></script>
 	<script src="{{ url_for('static', filename='js/library_import_review_ui.js') }}" defer></script>
+	<script src="{{ url_for('static', filename='js/library_import_progress_ui.js') }}" defer></script>
 {% endblock %}
 
 {% block pre_build_rows %}
@@ -155,7 +156,7 @@
 		<table class="fold-table continuous-stats">
 			<tbody>
 				<tr>
-					<td>Folders checked</td>
+					<td>Folders completed</td>
 					<td id="continuous-checked">0 / ?</td>
 				</tr>
 				<tr>

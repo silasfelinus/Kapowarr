@@ -13,7 +13,9 @@ from backend.base.definitions import (MonitorScheme, WeeklyReleaseData,
 from backend.base.file_extraction import extract_issue_number
 from backend.base.helpers import AsyncSession, force_range
 from backend.base.logging import LOGGER
-from backend.features.metadata import search_metadata_with_fallback
+from backend.features.metadata import (MetadataCapability,
+                                       configured_metadata_provider_ids,
+                                       get_metadata_provider)
 from backend.features.search import auto_search
 from backend.implementations.matching import match_title
 from backend.implementations.volumes import Library, Volume
@@ -480,28 +482,17 @@ def _metadata_resolution_key(entry: Dict[str, Any]) -> Tuple[str, Any, str]:
     )
 
 
-def _resolve_release_metadata(
-    entry: Dict[str, Any],
-    cache: Union[Dict[Tuple[str, Any, str], Dict[str, Any]], None] = None
-) -> Dict[str, Any]:
-    """Resolve a release without a ComicVine ID through configured metadata."""
-    cache_key = _metadata_resolution_key(entry)
-    if cache is not None and cache_key in cache:
-        return cache[cache_key]
-
+def _narrow_metadata_candidates(
+    results: List[Dict[str, Any]],
+    entry: Dict[str, Any]
+) -> List[Dict[str, Any]]:
     title = str(entry.get('release_title') or '').strip()
-    if not title:
-        raise RuntimeError('Release has no title to resolve through metadata')
-
     candidates = [
-        result
-        for result in run(search_metadata_with_fallback(title))
+        result for result in results
         if match_title(result.get('title', ''), title)
     ]
     if not candidates:
-        raise RuntimeError(
-            f'No metadata match found for "{title}"; will retry later'
-        )
+        return []
 
     release_year = entry.get('year')
     if release_year is not None:
@@ -521,54 +512,97 @@ def _resolve_release_metadata(
         if publisher_matches:
             candidates = publisher_matches
 
-    logical_groups: Dict[Tuple[Any, ...], List[Dict[str, Any]]] = {}
+    unique: Dict[str, Dict[str, Any]] = {}
     for result in candidates:
-        comicvine_id = result.get('comicvine_id')
-        if comicvine_id is not None:
-            logical_key: Tuple[Any, ...] = ('comicvine', str(comicvine_id))
-        else:
-            logical_key = (
-                'metadata',
-                str(result.get('title') or '').strip().lower(),
-                result.get('year'),
-                _normalise_publisher(result.get('publisher'))
-            )
-        logical_groups.setdefault(logical_key, []).append(result)
+        external_id = result.get('external_id') or result.get('comicvine_id')
+        if external_id is None:
+            continue
+        unique[str(external_id)] = result
+    return list(unique.values())
 
-    if len(logical_groups) != 1:
-        raise RuntimeError(
-            f'Ambiguous metadata match for "{title}" '
-            f'({len(logical_groups)} plausible series); will retry later'
-        )
 
-    group = next(iter(logical_groups.values()))
-    provider_priority = {'metron': 0, 'gcd': 1, 'comicvine': 2}
-    match = min(
-        group,
-        key=lambda result: (
-            result.get('already_added') is None,
-            provider_priority.get(str(result.get('provider_id')), 10)
-        )
+def _resolve_release_metadata(
+    entry: Dict[str, Any],
+    cache: Union[Dict[Tuple[str, Any, str], Dict[str, Any]], None] = None
+) -> Dict[str, Any]:
+    """Resolve a release without a ComicVine ID through configured metadata."""
+    cache_key = _metadata_resolution_key(entry)
+    if cache is not None and cache_key in cache:
+        return cache[cache_key]
+
+    title = str(entry.get('release_title') or '').strip()
+    if not title:
+        raise RuntimeError('Release has no title to resolve through metadata')
+
+    provider_ids = configured_metadata_provider_ids(
+        MetadataCapability.SEARCH_VOLUMES
     )
-    provider_id = str(
-        match.get('provider_id')
-        or ('comicvine' if match.get('comicvine_id') is not None else '')
+    if not provider_ids:
+        provider_ids = ['comicvine']
+    provider_priority = {'metron': 0, 'comicvine': 1, 'gcd': 2}
+    provider_ids = sorted(
+        provider_ids,
+        key=lambda provider_id: provider_priority.get(provider_id, 10)
     )
-    external_id = match.get('external_id') or match.get('comicvine_id')
-    if not provider_id or external_id is None:
-        raise RuntimeError(
-            f'Metadata match for "{title}" had no usable provider identity'
-        )
 
-    resolution = {
-        'provider_id': provider_id,
-        'external_id': external_id,
-        'comicvine_id': match.get('comicvine_id'),
-        'volume_id': match.get('already_added')
-    }
-    if cache is not None:
-        cache[cache_key] = resolution
-    return resolution
+    ambiguous = []
+    unavailable = []
+    for provider_id in provider_ids:
+        provider = get_metadata_provider(provider_id)
+        try:
+            results = run(provider.search_volumes(title))
+        except Exception as error:
+            if provider.is_unavailable_error(error):
+                unavailable.append(provider_id)
+                LOGGER.warning(
+                    'Metadata provider %s unavailable while resolving %s: %s',
+                    provider_id, title, error
+                )
+            else:
+                unavailable.append(provider_id)
+                LOGGER.exception(
+                    'Metadata provider %s failed while resolving %s',
+                    provider_id, title
+                )
+            continue
+
+        candidates = _narrow_metadata_candidates(results, entry)
+        if not candidates:
+            continue
+        if len(candidates) > 1:
+            ambiguous.append(provider_id)
+            continue
+
+        match = candidates[0]
+        external_id = match.get('external_id') or match.get('comicvine_id')
+        if external_id is None:
+            continue
+        resolution = {
+            'provider_id': str(match.get('provider_id') or provider_id),
+            'external_id': external_id,
+            'comicvine_id': match.get('comicvine_id'),
+            'volume_id': match.get('already_added')
+        }
+        if cache is not None:
+            cache[cache_key] = resolution
+        LOGGER.info(
+            'Resolved Pull List series %s through %s ID %s',
+            title, resolution['provider_id'], resolution['external_id']
+        )
+        return resolution
+
+    if ambiguous:
+        raise RuntimeError(
+            f'Ambiguous metadata match for "{title}" from '
+            f'{", ".join(ambiguous)}; will retry later'
+        )
+    detail = (
+        f' (unavailable: {", ".join(unavailable)})'
+        if unavailable else ''
+    )
+    raise RuntimeError(
+        f'No metadata match found for "{title}"{detail}; will retry later'
+    )
 
 
 def _add_or_monitor_entry(

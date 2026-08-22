@@ -1,576 +1,317 @@
 # -*- coding: utf-8 -*-
 
-"""
-Usenet indexer support -- the Newznab-compatible counterpart to GetComics
-search (`backend.implementations.getcomics`). An indexer is a
-user-configured Newznab API endpoint (NZBgeek, DrunkenSlug, NZBFinder,
-a private/self-hosted NZBHydra2 instance, etc.) identified by a base URL
-and an API key. Any number of indexers can be configured; every enabled
-one is queried on every search, same as GetComics is always queried.
+"""Compatibility wrapper around the original Newznab implementation.
 
-Architecture note (kapowarr/t-008): this deliberately does NOT introduce a
-per-indexer "client type" the way `external_clients.py` does for download
-clients. Newznab is a single, long-stable shared API spec that the vast
-majority of Usenet indexer sites implement identically -- adding a second
-indexer is "add a row with a different base_url/api_key", not "write a new
-client class". If a genuinely non-Newznab indexer protocol is ever needed,
-the natural extension point is `SearchSource` (see `search_indexer()`'s
-caller in `backend.features.search`): add another `SearchSource` subclass
-for it, same as this module's `SearchIndexers` already does -- no rewrite
-of the search orchestration, matching, or download-queue handoff below.
-
-Two Newznab endpoints are used:
-- `t=caps` -- a lightweight capability probe, used by `Indexers.test()` for
-  the interactive "Test" button. Bounded the same way
-  `external_clients.py`'s `_test_client_bounded`/`notifications.py`'s
-  `_post_bounded` are, so a dead/slow host fails the button quickly instead
-  of hanging on `Session`'s full retry/backoff cycle.
-- `t=search` -- the actual query, used by `search_indexer()`. Run through
-  `AsyncSession` (async, used by every other search source) rather than the
-  synchronous `Session` used for `test()`, matching `search_getcomics()`.
-
-Not live-verified against a real indexer in this sandbox (none reachable
-here) -- same caveat prior private-server/Usenet tasks in this project
-have flagged (t-005, t-007). The Newznab JSON response shape below follows
-the long-stable public spec (https://newznab.readthedocs.io/), including
-the well-known quirk where `channel.item` is a bare object instead of a
-single-element list when a search returns exactly one result.
-
-`search_indexer()`'s response parsing is deliberately defensive about
-shape, not just content: `SearchIndexers.search()` (see
-`backend.features.search`) awaits every enabled indexer through a plain
-`asyncio.gather()` with no `return_exceptions=True`, so an *unhandled*
-exception here would fail the whole combined search (GetComics included),
-not just this one indexer's results -- same
-"empty rather than raising" contract the docstring below already
-promises, just also enforced against a misconfigured/misbehaving endpoint
-returning a shape that isn't a well-formed Newznab response, not only
-non-JSON or an explicit `error` key (kapowarr/t-024).
+The original implementation lives in ``indexers_core`` so this module can keep
+its public/patchable surface while adding production compatibility for RSS/XML
+Newznab feeds, Prowlarr download URLs, and request pacing.
 """
 
-from concurrent.futures import (Future, ThreadPoolExecutor,
-                                TimeoutError as FutureTimeoutError)
+from asyncio import Lock as AsyncLock, get_running_loop, sleep as async_sleep
 from json import loads as json_loads
-from os.path import splitext
-from re import search as re_search
-from typing import Any, Dict, List, Mapping, Union
+from threading import Lock
+from time import monotonic
 from urllib.parse import urlsplit
+from weakref import WeakKeyDictionary
+from xml.etree import ElementTree
 
-from aiohttp import ClientError
-from requests import RequestException
-
-from backend.base.custom_exceptions import (EnqueuingDownloadFailure,
-                                            IndexerNotFound, IssueNotFound,
-                                            KeyNotFound)
-from backend.base.definitions import (Download, DownloadSource,
+from backend.base.custom_exceptions import EnqueuingDownloadFailure, IssueNotFound
+from backend.base.definitions import (DownloadSource,
                                       EnqueuingDownloadFailureReason,
                                       SearchResultData)
-from backend.base.file_extraction import (extract_filename_data,
-                                          refine_special_version)
-from backend.base.helpers import (AsyncSession, Session,
-                                  extract_year_from_date, normalise_base_url)
+from backend.base.file_extraction import extract_filename_data, refine_special_version
+from backend.base.helpers import AsyncSession, extract_year_from_date
 from backend.base.logging import LOGGER
-from backend.implementations.download_clients import NZBDownload
+from backend.implementations import indexers_core as _core
+from backend.implementations.indexers_core import *
 from backend.implementations.matching import check_search_result_match
 from backend.implementations.volumes import Volume
-from backend.internals.db import get_db
+from backend.implementations.download_clients import NZBDownload
+from backend.internals.db import get_db as _real_get_db
 
-# Deliberately shorter than a full `Session` retry cycle, same reasoning as
-# `external_clients.py`'s `EXTERNAL_CLIENT_TEST_TIMEOUT` and
-# `notifications.py`'s `NOTIFICATION_REQUEST_TIMEOUT`: a user clicking
-# "Test" against an unreachable indexer should see a result in roughly ten
-# seconds, not wait out the full backoff cycle.
-INDEXER_TEST_TIMEOUT = 10.0 # seconds
-# `create_nzb_download`'s own one-off fetch (recovering a release's title
-# from its download link, see that function's docstring) needs no separate
-# bound -- it goes through `AsyncSession`, which already bounds every
-# request via `Constants.REQUEST_TIMEOUT`/its own retry cycle, same as
-# `getcomics.py`'s `__purify_link` doing the analogous per-link fetch.
+# Keep private helpers that existing callers/tests import from this module.
+_extract_item_link = _core._extract_item_link
+_parse_content_disposition_filename = _core._parse_content_disposition_filename
 
+# Core Indexer/Indexers methods resolve get_db in their defining module. Route
+# that lookup back through this wrapper so the long-standing test/plugin patch
+# point ``backend.implementations.indexers.get_db`` remains effective.
+get_db = _real_get_db
 
-def newznab_api_url(base_url: str) -> str:
-    """Return the actual Newznab endpoint for a configured URL.
+def _forward_get_db(*args, **kwargs):
+    return globals()['get_db'](*args, **kwargs)
 
-    Native indexers are commonly configured with a host URL and expose their
-    API at ``/api``. Prowlarr and similar aggregators instead give users a
-    complete per-indexer feed URL, such as ``/1/api`` or
-    ``/api/v1/indexer/1/newznab``. Appending another ``/api`` to those URLs
-    makes every test and search request miss the real endpoint.
-    """
-    path = urlsplit(base_url).path.rstrip('/').lower()
-    if path.endswith('/api') or path.endswith('/newznab'):
-        return base_url
-    return f'{base_url}/api'
+_core.get_db = _forward_get_db
+
+# One Newznab feed gets one in-flight request per asyncio loop. Query planning
+# can produce four variants at once; sending those as a burst is hostile to
+# Prowlarr/indexer rate limits and was producing repeated HTTP 429s.
+_REQUEST_LOCKS_GUARD = Lock()
+_REQUEST_LOCKS = WeakKeyDictionary()
+_REQUEST_STARTS = WeakKeyDictionary()
+NEWZNAB_REQUEST_MIN_INTERVAL = 0.6
 
 
-def _parse_content_disposition_filename(header_value: str) -> Union[str, None]:
-    """Extract a filename from a `Content-Disposition` header value, e.g.
-    `attachment; filename="Batman (2020) 001.nzb"` or the RFC 5987
-    `filename*=UTF-8''...` form. Newznab-compatible indexers set this
-    header on their `t=get` download endpoints to communicate the release's
-    real name, since the URL itself is usually an opaque id.
+def _request_key(indexer) -> str:
+    return newznab_api_url(indexer.base_url).lower()
 
-    Args:
-        header_value (str): The raw `Content-Disposition` header value.
 
-    Returns:
-        Union[str, None]: The filename, or `None` if not present/parseable.
-    """
-    if not header_value:
+def _request_state(indexer):
+    loop = get_running_loop()
+    key = _request_key(indexer)
+    with _REQUEST_LOCKS_GUARD:
+        locks = _REQUEST_LOCKS.setdefault(loop, {})
+        starts = _REQUEST_STARTS.setdefault(loop, {})
+        lock = locks.setdefault(key, AsyncLock())
+    return lock, starts, key
+
+
+def _strip_feed_suffix(path: str) -> str:
+    path = path.rstrip('/')
+    lowered = path.lower()
+    if lowered.endswith('/newznab'):
+        return path[:-len('/newznab')].rstrip('/')
+    if lowered.endswith('/api'):
+        return path[:-len('/api')].rstrip('/')
+    return path
+
+
+def _link_belongs_to_indexer(indexer, link: str) -> bool:
+    """Recognise native and Prowlarr Newznab result/download URLs."""
+    try:
+        base = urlsplit(indexer.base_url)
+        target = urlsplit(link)
+    except ValueError:
+        return False
+    if not target.scheme or not target.netloc:
+        return False
+    if (base.scheme.lower(), base.netloc.lower()) != (
+        target.scheme.lower(), target.netloc.lower()
+    ):
+        return False
+
+    prefix = _strip_feed_suffix(base.path)
+    target_path = target.path.rstrip('/')
+    if not prefix:
+        return True
+    return target_path == prefix or target_path.startswith(prefix + '/')
+
+
+def _deduped_get_enabled():
+    original = _core.Indexers.get_enabled.__func__ if isinstance(
+        _core.Indexers.__dict__.get('get_enabled'), staticmethod
+    ) else None
+    # This function is installed once below, so preserve the captured original
+    # instead of introspecting after replacement.
+    return [] if original is None else original()
+
+
+_ORIGINAL_GET_ENABLED = Indexers.get_enabled
+
+
+def _get_enabled_unique():
+    result = []
+    seen = set()
+    for indexer in _ORIGINAL_GET_ENABLED():
+        key = (newznab_api_url(indexer.base_url).lower(), indexer.api_key)
+        if key in seen:
+            LOGGER.debug('Skipping duplicate Newznab feed %s', indexer.title)
+            continue
+        seen.add(key)
+        result.append(indexer)
+    return result
+
+
+def _find_by_link_compatible(link: str):
+    enabled = Indexers.get_enabled()
+    # Prefer a path-specific match, which preserves the correct publisher name
+    # for legacy /39/api and modern /api/v1/indexer/39/newznab feeds.
+    for indexer in enabled:
+        if _link_belongs_to_indexer(indexer, link):
+            return indexer
+
+    # Some Prowlarr versions return a host-level /download/... URL rather than
+    # a sibling of the configured per-indexer feed. It is still an NZB result
+    # from this configured Newznab host. If several feeds share the host, the
+    # first is sufficient for protocol ownership; the URL itself remains the
+    # authoritative download target.
+    try:
+        target = urlsplit(link)
+    except ValueError:
         return None
-
-    match = re_search(r'filename\*=(?:UTF-8\x27\x27)?([^;]+)', header_value)
-    if match:
-        return match.group(1).strip('"\' ')
-
-    match = re_search(r'filename="?([^";]+)"?', header_value)
-    if match:
-        return match.group(1).strip()
-
+    for indexer in enabled:
+        base = urlsplit(indexer.base_url)
+        if (base.scheme.lower(), base.netloc.lower()) == (
+            target.scheme.lower(), target.netloc.lower()
+        ):
+            return indexer
     return None
 
 
-def _test_bounded(base_url: str, api_key: str) -> bool:
-    """Run the actual `t=caps` request bounded by INDEXER_TEST_TIMEOUT, no
-    matter how many retries/backoff sleeps `Session` attempts internally
-    (a plain `timeout=` kwarg only bounds a single attempt, not the sleeps
-    between `Session`'s own retries -- see `external_clients.py`'s
-    `_test_client_bounded` for the same fix applied to download clients).
+Indexers.get_enabled = staticmethod(_get_enabled_unique)
+Indexers.find_by_link = staticmethod(_find_by_link_compatible)
 
-    Returns:
-        bool: Whether the indexer responded successfully to a caps probe.
-    """
-    def _run() -> bool:
-        with Session() as session:
-            r = session.get(
-                newznab_api_url(base_url),
-                params={"t": "caps", "apikey": api_key, "o": "json"},
-                timeout=INDEXER_TEST_TIMEOUT
-            )
-        if not r.ok:
-            return False
-        try:
-            data = r.json()
-        except ValueError:
-            # Some indexers only speak XML for `t=caps`; a non-JSON 2xx
-            # response still means the host is a real Newznab endpoint.
-            return "<caps" in r.text.lower() or "<error" not in r.text.lower()
-        return "error" not in data
 
-    executor = ThreadPoolExecutor(max_workers=1)
-    future: Future = executor.submit(_run)
+def _local_name(tag: str) -> str:
+    return tag.rsplit('}', 1)[-1].lower()
+
+
+def _xml_child_text(element, name: str):
+    for child in element:
+        if _local_name(child.tag) == name:
+            return (child.text or '').strip() or None
+    return None
+
+
+def _parse_newznab_xml(body: str, indexer) -> list:
+    """Parse canonical Newznab RSS/XML into the normal search-result shape."""
     try:
-        return future.result(timeout=INDEXER_TEST_TIMEOUT)
-
-    except FutureTimeoutError:
+        root = ElementTree.fromstring(body)
+    except ElementTree.ParseError:
         LOGGER.warning(
-            "Indexer test request to %s didn't finish within %ss",
-            base_url, INDEXER_TEST_TIMEOUT
+            'Indexer %s returned neither valid JSON nor Newznab XML',
+            indexer.title
         )
-        return False
+        return []
 
-    except RequestException:
-        LOGGER.warning("Failed to reach indexer at %s", base_url)
-        return False
+    errors = [element for element in root.iter() if _local_name(element.tag) == 'error']
+    if errors:
+        error = errors[0]
+        detail = error.attrib.get('description') or error.attrib.get('code') or 'unknown error'
+        LOGGER.warning('Indexer %s returned an error: %s', indexer.title, detail)
+        return []
 
-    finally:
-        executor.shutdown(wait=False)
-
-
-class Indexer:
-    required_fields = ('title', 'base_url', 'api_key')
-
-    @property
-    def id(self) -> int:
-        return self._id
-
-    @property
-    def title(self) -> str:
-        return self._title
-
-    @property
-    def base_url(self) -> str:
-        return self._base_url
-
-    @property
-    def api_key(self) -> str:
-        return self._api_key
-
-    @property
-    def enabled(self) -> bool:
-        return self._enabled
-
-    def __init__(self, indexer_id: int) -> None:
-        data = get_db().execute(
-            """
-            SELECT id, title, base_url, api_key, enabled
-            FROM indexers
-            WHERE id = ?
-            LIMIT 1;
-            """,
-            (indexer_id,)
-        ).fetchonedict()
-
-        if data is None:
-            raise IndexerNotFound(indexer_id)
-
-        self._id = data['id']
-        self._title = data['title']
-        self._base_url = data['base_url']
-        self._api_key = data['api_key']
-        self._enabled = bool(data['enabled'])
-        return
-
-    def get_data(self) -> Dict[str, Any]:
-        return {
-            'id': self._id,
-            'title': self._title,
-            'base_url': self._base_url,
-            'api_key': self._api_key,
-            'enabled': self._enabled
-        }
-
-    def update(self, data: Mapping[str, Any]) -> None:
-        formatted_data = Indexers._format_data(data)
-
-        get_db().execute(
-            """
-            UPDATE indexers
-            SET
-                title = :title,
-                base_url = :base_url,
-                api_key = :api_key,
-                enabled = :enabled
-            WHERE id = :id;
-            """,
-            {**formatted_data, "id": self._id}
-        )
-        self._title = formatted_data['title']
-        self._base_url = formatted_data['base_url']
-        self._api_key = formatted_data['api_key']
-        self._enabled = formatted_data['enabled']
-        return
-
-    def delete(self) -> None:
-        get_db().execute(
-            "DELETE FROM indexers WHERE id = ?;",
-            (self._id,)
-        )
-        return
-
-    def __repr__(self) -> str:
-        return f'<Indexer(id={self._id}; title={self._title})>'
-
-
-class Indexers:
-    @staticmethod
-    def _format_data(data: Mapping[str, Any]) -> Dict[str, Any]:
-        """Validate and normalise the incoming title/base_url/api_key/enabled
-        fields shared by add() and update().
-
-        Raises:
-            KeyNotFound: A required key is missing.
-        """
-        for key in Indexer.required_fields:
-            if not data.get(key):
-                raise KeyNotFound(key)
-
-        return {
-            'title': data['title'],
-            'base_url': normalise_base_url(data['base_url']),
-            'api_key': data['api_key'],
-            'enabled': bool(data.get('enabled', True))
-        }
-
-    @staticmethod
-    def test(base_url: str, api_key: str) -> bool:
-        """Test whether an indexer is a reachable Newznab-compatible API.
-
-        Not required before add()/update() (same as
-        `notifications.py`'s test-is-separate-from-add convention) -- a
-        temporarily-unreachable indexer is still a valid configuration to
-        save; the UI exposes "Test" as its own explicit action.
-
-        Returns:
-            bool: Whether the caps probe succeeded.
-        """
-        return _test_bounded(normalise_base_url(base_url), api_key)
-
-    @staticmethod
-    def add(
-        title: str,
-        base_url: str,
-        api_key: str,
-        enabled: bool = True
-    ) -> Indexer:
-        """Add a new indexer.
-
-        Raises:
-            KeyNotFound: A required key is missing.
-        """
-        formatted_data = Indexers._format_data({
-            'title': title,
-            'base_url': base_url,
-            'api_key': api_key,
-            'enabled': enabled
+    results = []
+    for item in root.iter():
+        if _local_name(item.tag) != 'item':
+            continue
+        title = _xml_child_text(item, 'title')
+        if not title:
+            continue
+        link = None
+        for child in item:
+            name = _local_name(child.tag)
+            if name == 'enclosure' and child.attrib.get('url'):
+                link = child.attrib['url']
+                break
+            if name == 'link' and (child.text or '').strip():
+                link = child.text.strip()
+            elif name == 'guid' and not link:
+                permalink = str(child.attrib.get('isPermaLink', '')).lower()
+                if permalink == 'true' and (child.text or '').strip():
+                    link = child.text.strip()
+        if not link:
+            continue
+        results.append({
+            **extract_filename_data(title, assume_volume_number=False, fix_year=True),
+            'link': link,
+            'display_title': title,
+            'source': indexer.title
         })
-
-        indexer_id = get_db().execute(
-            """
-            INSERT INTO indexers(title, base_url, api_key, enabled)
-            VALUES (:title, :base_url, :api_key, :enabled);
-            """,
-            formatted_data
-        ).lastrowid
-
-        return Indexer(indexer_id)
-
-    @staticmethod
-    def get_all() -> List[Dict[str, Any]]:
-        "Get every configured indexer"
-        return get_db().execute(
-            """
-            SELECT id, title, base_url, api_key, enabled
-            FROM indexers
-            ORDER BY title, id;
-            """
-        ).fetchalldict()
-
-    @staticmethod
-    def get_one(indexer_id: int) -> Indexer:
-        return Indexer(indexer_id)
-
-    @staticmethod
-    def get_enabled() -> List[Indexer]:
-        "Get every indexer that is enabled, for use in a search"
-        return [
-            Indexer(row['id'])
-            for row in get_db().execute(
-                "SELECT id FROM indexers WHERE enabled = 1 ORDER BY title, id;"
-            ).fetchalldict()
-        ]
-
-    @staticmethod
-    def find_by_link(link: str) -> Union[Indexer, None]:
-        """Find the enabled indexer that a download link belongs to, if any.
-        Used by the download queue to recognise an indexer NZB link (see
-        `download_queue.py`'s `__determine_link_type`).
-
-        Args:
-            link (str): The link to check.
-
-        Returns:
-            Union[Indexer, None]: The matching indexer, or `None`.
-        """
-        for indexer in Indexers.get_enabled():
-            if link.startswith(indexer.base_url):
-                return indexer
-        return None
+    return results
 
 
-async def search_indexer(
-    session: AsyncSession,
-    indexer: Indexer,
-    query: str
-) -> List[SearchResultData]:
-    """Search a single indexer for the query, via its Newznab `t=search`
-    endpoint.
-
-    Args:
-        session (AsyncSession): The session to make the request with.
-        indexer (Indexer): The indexer to search.
-        query (str): The query to use.
-
-    Returns:
-        List[SearchResultData]: The search results. Empty (rather than
-            raising) on any request/parse failure, same as
-            `search_getcomics()`'s `quiet_fail=True` -- one broken indexer
-            shouldn't fail a search that combines results from several.
-    """
-    body = await session.get_text(
-        newznab_api_url(indexer.base_url),
-        params={
-            "t": "search",
-            "q": query,
-            "apikey": indexer.api_key,
-            "o": "json",
-            "extended": "1"
-        },
-        quiet_fail=True
-    )
-    if not body:
-        return []
-
-    try:
-        data = json_loads(body)
-    except ValueError:
-        LOGGER.warning("Indexer %s returned a non-JSON response", indexer.title)
-        return []
-
+def _parse_newznab_json(data, indexer) -> list:
     if not isinstance(data, dict):
-        # A well-formed Newznab response is always a JSON object; a
-        # misconfigured/misbehaving endpoint (wrong URL, unrelated JSON
-        # API behind the same base_url, etc.) could return anything else.
-        # `search_getcomics()`'s `quiet_fail=True` contract -- one broken
-        # source shouldn't fail a search combining several -- only holds
-        # if this function never raises, so treat any unexpected shape as
-        # "no results" rather than letting a `dict`-only call blow up.
         LOGGER.warning(
-            "Indexer %s returned an unexpected response shape (%s)",
+            'Indexer %s returned an unexpected response shape (%s)',
             indexer.title, type(data).__name__
         )
         return []
-
-    if "error" in data:
-        LOGGER.warning(
-            "Indexer %s returned an error: %s",
-            indexer.title, data.get("error")
-        )
+    if 'error' in data:
+        LOGGER.warning('Indexer %s returned an error: %s', indexer.title, data.get('error'))
         return []
 
-    channel = data.get("channel")
-    items = channel.get("item", []) if isinstance(channel, dict) else []
+    channel = data.get('channel')
+    items = channel.get('item', []) if isinstance(channel, dict) else []
     if isinstance(items, dict):
-        # Newznab's well-known single-result JSON quirk: `item` is a bare
-        # object instead of a one-element list.
         items = [items]
     elif not isinstance(items, list):
         items = []
 
-    results: List[SearchResultData] = []
+    results = []
     for item in items:
         if not isinstance(item, dict):
             continue
-
-        title = item.get("title")
-        if not title:
+        title = item.get('title')
+        link = _extract_item_link(item) if title else None
+        if not title or not link:
             continue
-
-        link = _extract_item_link(item)
-        if not link:
-            continue
-
         results.append({
             **extract_filename_data(title, assume_volume_number=False, fix_year=True),
-            "link": link,
-            "display_title": title,
-            "source": indexer.title
+            'link': link,
+            'display_title': title,
+            'source': indexer.title
         })
-
     return results
 
 
-def _extract_item_link(item: Mapping[str, Any]) -> Union[str, None]:
-    """Get the direct NZB download URL out of a parsed Newznab search-result
-    item. Different indexer implementations put this in slightly different
-    places, so check the well-known spots in order of reliability.
-    """
-    enclosure = item.get("enclosure")
-    if isinstance(enclosure, dict):
-        # `.get("@attributes", {})` alone doesn't defend against a
-        # present-but-`null` key -- the default only applies when the key
-        # is *absent*, and a bare-JSON-object Newznab response can
-        # legitimately have `"@attributes": null` on a malformed entry.
-        url = (enclosure.get("@attributes") or {}).get("url")
-        if url:
-            return url
+async def search_indexer(session: AsyncSession, indexer: Indexer, query: str) -> list:
+    """Search one Newznab feed, accepting JSON or canonical RSS/XML."""
+    lock, starts, key = _request_state(indexer)
+    async with lock:
+        elapsed = monotonic() - starts.get(key, 0.0)
+        if elapsed < NEWZNAB_REQUEST_MIN_INTERVAL:
+            await async_sleep(NEWZNAB_REQUEST_MIN_INTERVAL - elapsed)
+        starts[key] = monotonic()
+        body = await session.get_text(
+            newznab_api_url(indexer.base_url),
+            params={
+                't': 'search', 'q': query, 'apikey': indexer.api_key,
+                'o': 'json', 'extended': '1'
+            },
+            quiet_fail=True
+        )
 
-    link = item.get("link")
-    if isinstance(link, str) and link:
-        return link
-
-    guid = item.get("guid")
-    if isinstance(guid, dict):
-        text = guid.get("#text")
-        is_permalink = (guid.get("@attributes") or {}).get("isPermaLink") == "true"
-        if is_permalink and text:
-            return text
-
-    return None
+    if not body:
+        return []
+    try:
+        return _parse_newznab_json(json_loads(body), indexer)
+    except ValueError:
+        return _parse_newznab_xml(body, indexer)
 
 
 async def create_nzb_download(
     link: str,
     volume_id: int,
-    issue_id: Union[int, None],
+    issue_id,
     force_match: bool = False
-) -> Download:
-    """Turn an indexer NZB link into an `NZBDownload`, for the download
-    queue's 'nzb' link-type branch (see `download_queue.py`'s `add()`).
-    The counterpart to `getcomics.py`'s `GetComicsPage.create_downloads()`,
-    but simpler: unlike a GetComics page (which can bundle several separate
-    releases under one webpage link), one indexer search result is already
-    exactly one release, so there's no group/path selection to do here --
-    just recover its title and check whether it matches what's being
-    downloaded for.
-
-    The link itself carries no title -- only whichever opaque id the
-    indexer chose -- so the release's real name is recovered the same way
-    a browser downloading it would: `Content-Disposition` on the response
-    headers (see `_parse_content_disposition_filename`). This is
-    Newznab-standard behaviour, not indexer-specific. The response body
-    itself is never read; the actual `.nzb` fetch happens later, server-
-    side, inside the Usenet client (SABnzbd's `mode=addurl` -- see
-    `usenet_clients/SABnzbd.py`), not here.
-
-    Args:
-        link (str): The indexer's NZB download link.
-        volume_id (int): The volume the download is intended for.
-        issue_id (Union[int, None]): The issue the download is intended
-            for, if any.
-        force_match (bool, optional): Skip matching and accept the release
-            as-is. Defaults to False.
-
-    Raises:
-        EnqueuingDownloadFailure: The link couldn't be reached
-            (LINK_BROKEN), or it doesn't match what's being downloaded for
-            and force_match is False (NO_MATCHES).
-
-    Returns:
-        Download: The download, ready to be queued.
-    """
+):
+    """Turn an indexer result URL into a queue-ready NZB download."""
     indexer = Indexers.find_by_link(link)
-    source_name = indexer.title if indexer else "Usenet indexer"
+    source_name = indexer.title if indexer else 'Usenet indexer'
 
     try:
         async with AsyncSession() as session:
-            async with session.get(link) as r:
-                if not r.ok:
+            async with session.get(link) as response:
+                if not response.ok:
                     raise EnqueuingDownloadFailure(
                         EnqueuingDownloadFailureReason.LINK_BROKEN
                     )
                 title = _parse_content_disposition_filename(
-                    r.headers.get("Content-Disposition", "")
+                    response.headers.get('Content-Disposition', '')
                 )
-
     except ClientError:
         raise EnqueuingDownloadFailure(
             EnqueuingDownloadFailureReason.LINK_BROKEN
         )
 
     if not title:
-        title = link.rsplit("/", 1)[-1] or "unknown release"
+        title = link.rsplit('/', 1)[-1] or 'unknown release'
 
     volume = Volume(volume_id)
     volume_data = volume.get_data()
-    # `title` is the full recovered filename (e.g. "Batman (2020) 001.nzb")
-    # -- strip a recognised trailing extension before parsing, same as
-    # `NZBDownload.__init__`'s own `splitext(web_title or 'unknown')[0]`
-    # does for its `_filename_body`. ".nzb" isn't a comic-archive extension
-    # `extract_filename_data` knows to strip on its own, so left attached
-    # it corrupts issue-number extraction.
     info = extract_filename_data(
         splitext(title)[0], assume_volume_number=False, fix_year=True
     )
     info = refine_special_version(volume_data, info)
-
-    covered_issues = info["issue_number"]
+    covered_issues = info['issue_number']
 
     if not force_match:
         volume_issues = volume.get_issues()
         number_to_year = {
-            i.calculated_issue_number: extract_year_from_date(i.date)
-            for i in volume_issues
+            issue.calculated_issue_number: extract_year_from_date(issue.date)
+            for issue in volume_issues
         }
         calculated_issue_number = None
         if issue_id is not None:
@@ -580,18 +321,17 @@ async def create_nzb_download(
                 ).get_data().calculated_issue_number
             except IssueNotFound:
                 pass
-
         result: SearchResultData = {
             **info,
-            "link": link,
-            "display_title": title,
-            "source": source_name
+            'link': link,
+            'display_title': title,
+            'source': source_name
         }
         match = check_search_result_match(
             result, volume_data, volume_issues,
             number_to_year, calculated_issue_number
         )
-        if not match["match"]:
+        if not match['match']:
             raise EnqueuingDownloadFailure(
                 EnqueuingDownloadFailureReason.NO_MATCHES
             )

@@ -45,7 +45,7 @@
 	<section class="tool-bar-container" aria-label="Tool bar">
 		<div class="tool-bar">
 			{{ icon_button("refresh-button", "Refresh the displayed week", "refresh.svg", "Refresh") }}
-			{{ icon_button("check-button", "Refresh the release catalogue now", "search.svg", "Check Now") }}
+			{{ icon_button("check-button", "Fetch releases for the displayed week", "search.svg", "Check Now") }}
 			{{ icon_button("reading-lists-button", "Open story arcs and portable reading lists", "files.svg", "Reading Lists") }}
 		</div>
 	</section>
@@ -125,8 +125,10 @@
 		<p class="source-explanation">
 			Release metadata comes from the publisher-aware Mylar release provider.
 			Download availability is checked separately against enabled sources.
-			Nearby weeks are refreshed on each check; older stored weeks remain in
-			the archive with no age cutoff.
+			<strong>Check Now</strong> fetches the displayed week, so you can walk
+			backward and deliberately fill historical gaps. Scheduled checks keep the
+			nearby weeks fresh, and every stored week remains in the archive with no
+			age cutoff.
 		</p>
 		<p class="action-explanation">
 			<strong>Add + want</strong> adds a series to Kapowarr and monitors it.

@@ -3,6 +3,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from backend.implementations import indexers as nz
 from backend.implementations import torznab as tz
 
 
@@ -31,6 +32,16 @@ def _indexer(indexer_id=39, base_url='https://prowlarr.example/39/api'):
         category_filter_enabled=True,
         enabled=True
     )
+
+
+def _newznab_indexer(indexer_id=33, base_url='https://prowlarr.example/33/api'):
+    result = nz.Indexer.__new__(nz.Indexer)
+    result._id = indexer_id
+    result._title = 'NZB.SU'
+    result._base_url = base_url
+    result._api_key = 'secret'
+    result._enabled = True
+    return result
 
 
 class torznab_request_pacing(unittest.IsolatedAsyncioTestCase):
@@ -88,6 +99,24 @@ class torznab_feed_ownership(unittest.TestCase):
                 'https://prowlarr.example/33/api?t=get&id=nzb'
             )
         self.assertIsNone(found)
+
+
+class newznab_same_host_guard(unittest.TestCase):
+    def test_newznab_does_not_claim_sibling_torznab_feed(self):
+        indexer = _newznab_indexer()
+        with patch.object(nz.Indexers, 'get_enabled', return_value=[indexer]):
+            found = nz.Indexers.find_by_link(
+                'https://prowlarr.example/39/api?t=get&id=torrent'
+            )
+        self.assertIsNone(found)
+
+    def test_host_level_prowlarr_download_compatibility_remains(self):
+        indexer = _newznab_indexer()
+        with patch.object(nz.Indexers, 'get_enabled', return_value=[indexer]):
+            found = nz.Indexers.find_by_link(
+                'https://prowlarr.example/download/nzb-123'
+            )
+        self.assertIs(found, indexer)
 
 
 if __name__ == '__main__':

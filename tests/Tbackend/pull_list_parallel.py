@@ -46,6 +46,7 @@ class pull_list_parallel_runner(unittest.TestCase):
             'message': '',
             'error': None,
             'release_count': None,
+            'week_start': None,
             'started_at': 0,
             'finished_at': None,
         }
@@ -65,6 +66,25 @@ class pull_list_parallel_runner(unittest.TestCase):
         self.assertEqual(check['status'], 'completed')
         self.assertEqual(check['release_count'], 1)
         self.assertEqual(check['message'], 'Release calendar updated.')
+
+    def test_run_passes_selected_week_to_refresh(self):
+        runner = self._runner()
+        requested_week = date(2026, 5, 4)
+        releases = [{'release_title': 'Batman'}]
+        with patch.object(
+            parallel, 'check_weekly_pull_list', return_value=releases
+        ) as refresh, patch.object(
+            parallel, 'process_publisher_subscriptions', return_value=[]
+        ), patch.object(runner, '_record_history'):
+            runner._run(1, requested_week)
+
+        refresh.assert_called_once_with(requested_week)
+        check = runner.get(1)
+        self.assertEqual(check['status'], 'completed')
+        self.assertEqual(
+            check['message'],
+            'Release calendar updated for 2026-05-04.'
+        )
 
     def test_run_surfaces_refresh_failure(self):
         runner = self._runner()

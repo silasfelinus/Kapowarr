@@ -157,12 +157,17 @@ async def _fetch_release_source(
         return []
 
 
-async def _fetch_all_weekly_releases() -> List[WeeklyReleaseData]:
-    """Fetch nine navigable weeks, including four past and four future."""
-    start = _monday(date.today())
-    weeks = [start + timedelta(weeks=offset) for offset in range(-4, 5)]
-    sources = WeeklyReleaseSources.get_active()
+async def _fetch_all_weekly_releases(
+    requested_week: Union[date, None] = None
+) -> List[WeeklyReleaseData]:
+    """Fetch one selected week or the normal nearby nine-week window."""
+    if requested_week is None:
+        start = _monday(date.today())
+        weeks = [start + timedelta(weeks=offset) for offset in range(-4, 5)]
+    else:
+        weeks = [_monday(requested_week)]
 
+    sources = WeeklyReleaseSources.get_active()
     async with AsyncSession() as session:
         responses = await gather(*(
             _fetch_release_source(source, session, week)
@@ -250,21 +255,30 @@ def _find_issue_id(entry: Dict[str, Any]) -> Union[int, None]:
     ).exists()
 
 
-def check_weekly_pull_list() -> List[Dict[str, Any]]:
-    """Refresh nearby weeks while retaining the accumulated archive."""
-    releases = run(_fetch_all_weekly_releases())
-    current_week = _monday(date.today()).isoformat()
-    current_catalogue = [
+def check_weekly_pull_list(
+    requested_week: Union[date, None] = None
+) -> List[Dict[str, Any]]:
+    """Refresh selected/nearby weeks while retaining the accumulated archive."""
+    requested_week = _monday(requested_week) if requested_week else None
+    releases = run(_fetch_all_weekly_releases(requested_week))
+    validation_week = (
+        requested_week or _monday(date.today())
+    ).isoformat()
+    validation_catalogue = [
         release
         for release in releases
-        if release.get('week_start') == current_week
+        if release.get('week_start') == validation_week
         and release.get('publisher')
     ]
-    if not current_catalogue:
-        raise RuntimeError(
-            'No current-week publisher releases were returned; '
-            'the previous pull list was kept'
-        )
+    if not validation_catalogue:
+        if requested_week is None:
+            detail = 'No current-week publisher releases were returned'
+        else:
+            detail = (
+                'No publisher releases were returned for week '
+                f'{validation_week}'
+            )
+        raise RuntimeError(f'{detail}; the previous pull list was kept')
 
     entries = match_releases_to_library(
         releases, Library.get_public_volumes()

@@ -35,6 +35,25 @@ test('Check Now uses the pull-list parallel lane instead of TaskHandler', () => 
 	assert.match(script, /stopCheckSpinner\(\)/);
 });
 
+test('Check Now fetches and stays on the displayed week', () => {
+	assert.match(
+		script,
+		/const requested_week = isoDate\(pullListState\.week\);/
+	);
+	assert.match(
+		script,
+		/sendAPI\('POST', '\/pulllist\/check', api_key, \{\}, \{\s*week_start: requested_week\s*\}\)/
+	);
+	assert.match(script, /const check_week = check\.week_start \|\| requested_week;/);
+	assert.match(script, /pullListState\.week = check_week/);
+	assert.doesNotMatch(
+		script,
+		/pullListState\.week = startOfWeek\(new Date\(\)\);\s*loadList\(api_key, false\)/
+	);
+	assert.match(template, /Fetch releases for the displayed week/);
+	assert.match(template, /walk\s+backward and deliberately fill historical gaps/);
+});
+
 test('empty current week falls back to the newest actually stored week', () => {
 	assert.match(script, /fetchAPI\('\/pulllist\/weeks'/);
 	assert.match(script, /fallback_to_stored/);

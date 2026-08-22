@@ -15,6 +15,7 @@ its safety guarantees.
 
 from __future__ import annotations
 
+from datetime import date
 from threading import Lock, Thread
 from time import time
 from typing import Any, Dict, List, Optional
@@ -53,7 +54,7 @@ class PullListCheckRunner:
             if check['status'] in ('queued', 'running')
         ), None)
 
-    def start(self) -> Dict[str, Any]:
+    def start(self, requested_week: Optional[date] = None) -> Dict[str, Any]:
         """Start a refresh, or return the one already in progress."""
         with self._lock:
             active = self._active()
@@ -62,18 +63,20 @@ class PullListCheckRunner:
 
             check_id = self._next_id
             self._next_id += 1
+            week_start = requested_week.isoformat() if requested_week else None
             check: Dict[str, Any] = {
                 'id': check_id,
                 'status': 'queued',
                 'message': 'Starting release calendar check...',
                 'error': None,
                 'release_count': None,
+                'week_start': week_start,
                 'started_at': round(time()),
                 'finished_at': None,
             }
             thread = Thread(
                 target=self._run,
-                args=(check_id,),
+                args=(check_id, requested_week),
                 name=f'PullListCheck-{check_id}',
                 daemon=True
             )
@@ -103,8 +106,14 @@ class PullListCheckRunner:
         for check_id in completed[:-self._history_limit]:
             self._checks.pop(check_id, None)
 
-    def _record_history(self, failed_message: Optional[str] = None) -> None:
+    def _record_history(
+        self,
+        failed_message: Optional[str] = None,
+        week_start: Optional[str] = None
+    ) -> None:
         title = 'Weekly Pull List Check'
+        if week_start:
+            title += f' — {week_start}'
         if failed_message:
             title += f' — Failed: {failed_message}'
         try:
@@ -119,17 +128,25 @@ class PullListCheckRunner:
         except Exception:
             LOGGER.exception('Failed to record parallel pull-list task history')
 
-    def _run(self, check_id: int) -> None:
+    def _run(
+        self,
+        check_id: int,
+        requested_week: Optional[date] = None
+    ) -> None:
         context_app = Flask(f'pull-list-check-{check_id}')
         context_app.teardown_appcontext(close_db)
         with context_app.app_context():
+            week_start = requested_week.isoformat() if requested_week else None
             try:
+                message = 'Refreshing the publisher release calendar'
+                if week_start:
+                    message += f' for {week_start}'
                 self._set(
                     check_id,
                     status='running',
-                    message='Refreshing the publisher release calendar'
+                    message=message
                 )
-                entries = check_weekly_pull_list()
+                entries = check_weekly_pull_list(requested_week)
 
                 self._set(
                     check_id,
@@ -142,11 +159,16 @@ class PullListCheckRunner:
                         for link, volume_id, issue_id in downloads
                     )
 
-                self._record_history()
+                self._record_history(week_start=week_start)
+                completed_message = 'Release calendar updated.'
+                if week_start:
+                    completed_message = (
+                        f'Release calendar updated for {week_start}.'
+                    )
                 self._set(
                     check_id,
                     status='completed',
-                    message='Release calendar updated.',
+                    message=completed_message,
                     release_count=len(entries),
                     finished_at=round(time())
                 )
@@ -154,7 +176,7 @@ class PullListCheckRunner:
                 LOGGER.exception('Parallel weekly pull-list check failed')
                 detail = str(error).strip() or type(error).__name__
                 detail = ' '.join(detail.split())[:240]
-                self._record_history(detail)
+                self._record_history(detail, week_start)
                 self._set(
                     check_id,
                     status='failed',

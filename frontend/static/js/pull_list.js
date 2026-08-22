@@ -335,13 +335,17 @@ function stopCheckSpinner() {
 	PullListEls.buttons.check.querySelector('img').classList.remove('spinning');
 };
 
-function pollUntilCheckFinished(api_key, check_id) {
+function pollUntilCheckFinished(api_key, check_id, requested_week) {
 	fetchAPI(`/pulllist/check/${check_id}`, api_key)
 	.then(json => {
 		const check = json.result;
+		const check_week = check.week_start || requested_week;
 		if (check.status === 'queued' || check.status === 'running') {
 			setCheckStatus(check.message || 'Refreshing the release calendar...');
-			setTimeout(() => pollUntilCheckFinished(api_key, check_id), 1500);
+			setTimeout(
+				() => pollUntilCheckFinished(api_key, check_id, check_week),
+				1500
+			);
 			return;
 		};
 
@@ -351,10 +355,14 @@ function pollUntilCheckFinished(api_key, check_id) {
 			return;
 		};
 
-		pullListState.week = startOfWeek(new Date());
+		pullListState.week = check_week
+			? dateFromIso(check_week)
+			: startOfWeek(new Date());
 		loadList(api_key, false)
 			.then(() => setCheckStatus(
-				`Release calendar updated (${check.release_count} releases).`
+				check_week
+					? `Release calendar updated for ${check_week} (${check.release_count} releases).`
+					: `Release calendar updated (${check.release_count} releases).`
 			))
 			.catch(error => {
 				reportPullListClientError(api_key, 'post-refresh reload', error);
@@ -376,12 +384,19 @@ function pollUntilCheckFinished(api_key, check_id) {
 };
 
 function checkNow(api_key) {
+	const requested_week = isoDate(pullListState.week);
 	PullListEls.buttons.check.disabled = true;
 	PullListEls.buttons.check.querySelector('img').classList.add('spinning');
-	setCheckStatus('Starting release calendar check...');
-	sendAPI('POST', '/pulllist/check', api_key)
+	setCheckStatus(`Starting release calendar check for ${requested_week}...`);
+	sendAPI('POST', '/pulllist/check', api_key, {}, {
+		week_start: requested_week
+	})
 		.then(response => response.json())
-		.then(json => pollUntilCheckFinished(api_key, json.result.id))
+		.then(json => pollUntilCheckFinished(
+			api_key,
+			json.result.id,
+			json.result.week_start || requested_week
+		))
 		.catch(error => {
 			reportPullListClientError(api_key, 'check start', error);
 			setCheckStatus(

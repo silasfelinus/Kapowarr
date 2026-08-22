@@ -105,17 +105,18 @@ class pull_list_history_retention(unittest.TestCase):
         )
         self.connection.commit()
 
-    def _check(self, releases):
+    def _check(self, releases, requested_week=None):
         with patch.object(
             pull_list_module,
             '_fetch_all_weekly_releases',
             new=AsyncMock(return_value=releases)
-        ), patch.object(
+        ) as fetch, patch.object(
             pull_list_module.Library,
             'get_public_volumes',
             return_value=[]
         ):
-            return check_weekly_pull_list()
+            result = check_weekly_pull_list(requested_week)
+        return result, fetch
 
     def tearDown(self):
         self.get_db_patch.stop()
@@ -146,6 +147,44 @@ class pull_list_history_retention(unittest.TestCase):
             (_week(),)
         ).fetchall()
         self.assertEqual([row['release_title'] for row in rows], ['Fresh Batman'])
+
+    def test_manual_check_fetches_only_the_selected_historical_week(self):
+        selected = date.fromisoformat(_week(-20))
+        selected_iso = selected.isoformat()
+        self._insert_entry('Stale Archive', selected_iso)
+        self._insert_entry('Keep Current', _week())
+
+        _, fetch = self._check(
+            [_release('Fresh Archive', selected_iso)],
+            selected
+        )
+
+        fetch.assert_awaited_once_with(selected)
+        rows = self.connection.execute(
+            'SELECT release_title, week_start FROM pull_list_entries '
+            'ORDER BY week_start;'
+        ).fetchall()
+        self.assertEqual(
+            [(row['release_title'], row['week_start']) for row in rows],
+            [('Fresh Archive', selected_iso), ('Keep Current', _week())]
+        )
+
+    def test_manual_check_keeps_existing_week_when_provider_returns_nothing(self):
+        selected = date.fromisoformat(_week(-20))
+        selected_iso = selected.isoformat()
+        self._insert_entry('Keep Archive', selected_iso)
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            f'No publisher releases were returned for week {selected_iso}'
+        ):
+            self._check([], selected)
+
+        row = self.connection.execute(
+            'SELECT release_title FROM pull_list_entries WHERE week_start = ?;',
+            (selected_iso,)
+        ).fetchone()
+        self.assertEqual(row['release_title'], 'Keep Archive')
 
     def test_publisher_automation_reads_the_entire_retained_archive(self):
         self._insert_entry('Archived Batman', _week(-12))

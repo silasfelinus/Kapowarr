@@ -131,14 +131,18 @@ def _find_by_link_compatible(link: str):
             return indexer
 
     # Some Prowlarr versions return a host-level /download/... URL rather than
-    # a sibling of the configured per-indexer feed. It is still an NZB result
-    # from this configured Newznab host. If several feeds share the host, the
-    # first is sufficient for protocol ownership; the URL itself remains the
-    # authoritative download target.
+    # a sibling of the configured per-indexer feed. Accept that narrow shape,
+    # but never treat an arbitrary sibling path as Newznab merely because it is
+    # on the same Prowlarr hostname. A host can simultaneously expose /33/api
+    # as Newznab and /39/api as Torznab.
     try:
         target = urlsplit(link)
     except ValueError:
         return None
+    target_path = target.path.rstrip('/').lower()
+    if not (target_path == '/download' or target_path.startswith('/download/')):
+        return None
+
     for indexer in enabled:
         base = urlsplit(indexer.base_url)
         if (base.scheme.lower(), base.netloc.lower()) == (

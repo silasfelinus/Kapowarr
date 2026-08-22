@@ -542,8 +542,15 @@ def process_publisher_subscriptions(
 
     # Production checks pass only the freshly fetched nearby window. Prefer
     # the durable archive so retroactive publisher rules reach every retained
-    # past week. Tests and callers without stored rows still use their input.
-    try:
+    # past week. Direct callers without the archive table keep their input.
+    has_archive = cursor.execute(
+        """
+        SELECT 1 FROM sqlite_master
+        WHERE type = 'table' AND name = 'pull_list_entries'
+        LIMIT 1;
+        """
+    ).exists()
+    if has_archive:
         archived_entries = cursor.execute(
             """
             SELECT * FROM pull_list_entries
@@ -552,15 +559,8 @@ def process_publisher_subscriptions(
             """,
             (current_week,)
         ).fetchalldict()
-    except Exception as error:
-        # A few focused unit-test callers intentionally use a minimal in-memory
-        # schema without pull_list_entries. They should keep exercising the
-        # supplied-entry path rather than needing the whole production schema.
-        if 'no such table: pull_list_entries' not in str(error).lower():
-            raise
-        archived_entries = []
-    if archived_entries:
-        entries = archived_entries
+        if archived_entries:
+            entries = archived_entries
 
     for entry in entries:
         week_start = str(entry.get('week_start') or '')

@@ -22,7 +22,8 @@ from backend.features.acquisition_preferences import order_getcomics_groups
 from backend.implementations.blocklist import add_to_blocklist
 from backend.implementations.getcomics import GetComicsPage
 from backend.implementations.indexers import Indexers, create_nzb_download
-from backend.implementations.torznab import (create_torznab_download,
+from backend.implementations.torznab import (TorznabIndexers,
+                                            create_torznab_download,
                                             is_torznab_link)
 
 
@@ -149,10 +150,12 @@ class GetComicsDownloadPrepper(DownloadPrepper):
 class NewznabDownloadPrepper(DownloadPrepper):
     @classmethod
     def matches(cls, link: str) -> bool:
-        # Torznab search results carry an explicit local fragment tag. Reject
-        # those before consulting the Newznab table so clearly identified
-        # torrent links do not make an unnecessary app-context-bound DB lookup.
-        if is_torznab_link(link):
+        # Torznab search results normally carry an explicit local fragment tag.
+        # Also reject an untagged URL that is scoped to a configured Torznab
+        # feed. Prowlarr commonly hosts Newznab and Torznab feeds on the same
+        # hostname, so the Newznab compatibility fallback must not claim a
+        # sibling /39/api torrent URL merely because the host matches.
+        if is_torznab_link(link) or TorznabIndexers.find_by_link(link) is not None:
             return False
         return Indexers.find_by_link(link) is not None
 

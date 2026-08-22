@@ -13,6 +13,9 @@ from backend.base.definitions import (MonitorScheme, WeeklyReleaseData,
 from backend.base.file_extraction import extract_issue_number
 from backend.base.helpers import AsyncSession, force_range
 from backend.base.logging import LOGGER
+from backend.features.metadata import (MetadataCapability,
+                                       configured_metadata_provider_ids,
+                                       get_metadata_provider)
 from backend.features.search import auto_search
 from backend.implementations.matching import match_title
 from backend.implementations.volumes import Library, Volume
@@ -347,9 +350,12 @@ def get_pull_list(week_start: Union[str, None] = None) -> List[Dict[str, Any]]:
         SELECT
             p.*, v.title AS volume_title, v.monitored AS volume_monitored,
             h.success AS automation_success,
-            h.message AS automation_message
+            h.message AS automation_message,
+            h.action AS automation_action
         FROM pull_list_entries p
         LEFT JOIN volumes v ON p.volume_id = v.id
+        LEFT JOIN publisher_subscriptions s
+          ON p.publisher = s.publisher COLLATE NOCASE
         LEFT JOIN publisher_automation_history h
           ON h.release_key = CASE
             WHEN p.comicvine_issue_id IS NOT NULL
@@ -359,7 +365,11 @@ def get_pull_list(week_start: Union[str, None] = None) -> List[Dict[str, Any]]:
                  lower(COALESCE(p.issue_number, '')) || '|' ||
                  COALESCE(p.release_date, p.week_start)
           END
-          AND h.action = 'auto_search'
+          AND s.publisher IS NOT NULL
+          AND h.action = CASE
+            WHEN s.auto_search = 1 THEN 'auto_search'
+            ELSE 'auto_add'
+          END
         WHERE p.week_start = ?
         ORDER BY COALESCE(p.release_date, p.week_start),
                  COALESCE(p.publisher, ''), p.release_title, p.id;
@@ -444,24 +454,194 @@ def delete_publisher_subscription(publisher: str) -> None:
     )
 
 
+def _normalise_publisher(value: Any) -> str:
+    """Normalise publisher labels enough for metadata tie-breaking."""
+    return ''.join(
+        char for char in str(value or '').lower()
+        if char.isalnum()
+    )
+
+
+def _publisher_names_match(left: Any, right: Any) -> bool:
+    left_name = _normalise_publisher(left)
+    right_name = _normalise_publisher(right)
+    if not left_name or not right_name:
+        return False
+    return (
+        left_name == right_name
+        or left_name in right_name
+        or right_name in left_name
+    )
+
+
+def _metadata_resolution_key(entry: Dict[str, Any]) -> Tuple[str, Any, str]:
+    return (
+        str(entry.get('release_title') or '').strip().lower(),
+        entry.get('year'),
+        _normalise_publisher(entry.get('publisher'))
+    )
+
+
+def _narrow_metadata_candidates(
+    results: List[Dict[str, Any]],
+    entry: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    title = str(entry.get('release_title') or '').strip()
+    candidates = [
+        result for result in results
+        if match_title(result.get('title', ''), title)
+    ]
+    if not candidates:
+        return []
+
+    release_year = entry.get('year')
+    if release_year is not None:
+        year_matches = [
+            result for result in candidates
+            if result.get('year') == release_year
+        ]
+        if year_matches:
+            candidates = year_matches
+
+    publisher = entry.get('publisher')
+    if publisher:
+        publisher_matches = [
+            result for result in candidates
+            if _publisher_names_match(result.get('publisher'), publisher)
+        ]
+        if publisher_matches:
+            candidates = publisher_matches
+
+    unique: Dict[str, Dict[str, Any]] = {}
+    for result in candidates:
+        external_id = result.get('external_id') or result.get('comicvine_id')
+        if external_id is None:
+            continue
+        unique[str(external_id)] = result
+    return list(unique.values())
+
+
+def _resolve_release_metadata(
+    entry: Dict[str, Any],
+    cache: Union[Dict[Tuple[str, Any, str], Dict[str, Any]], None] = None
+) -> Dict[str, Any]:
+    """Resolve a release without a ComicVine ID through configured metadata."""
+    cache_key = _metadata_resolution_key(entry)
+    if cache is not None and cache_key in cache:
+        return cache[cache_key]
+
+    title = str(entry.get('release_title') or '').strip()
+    if not title:
+        raise RuntimeError('Release has no title to resolve through metadata')
+
+    provider_ids = configured_metadata_provider_ids(
+        MetadataCapability.SEARCH_VOLUMES
+    )
+    if not provider_ids:
+        provider_ids = ['comicvine']
+    provider_priority = {'metron': 0, 'comicvine': 1, 'gcd': 2}
+    provider_ids = sorted(
+        provider_ids,
+        key=lambda provider_id: provider_priority.get(provider_id, 10)
+    )
+
+    ambiguous = []
+    unavailable = []
+    for provider_id in provider_ids:
+        provider = get_metadata_provider(provider_id)
+        try:
+            results = run(provider.search_volumes(title))
+        except Exception as error:
+            if provider.is_unavailable_error(error):
+                unavailable.append(provider_id)
+                LOGGER.warning(
+                    'Metadata provider %s unavailable while resolving %s: %s',
+                    provider_id, title, error
+                )
+            else:
+                unavailable.append(provider_id)
+                LOGGER.exception(
+                    'Metadata provider %s failed while resolving %s',
+                    provider_id, title
+                )
+            continue
+
+        candidates = _narrow_metadata_candidates(results, entry)
+        if not candidates:
+            continue
+        if len(candidates) > 1:
+            ambiguous.append(provider_id)
+            continue
+
+        match = candidates[0]
+        external_id = match.get('external_id') or match.get('comicvine_id')
+        if external_id is None:
+            continue
+        resolution = {
+            'provider_id': str(match.get('provider_id') or provider_id),
+            'external_id': external_id,
+            'comicvine_id': match.get('comicvine_id'),
+            'volume_id': match.get('already_added')
+        }
+        if cache is not None:
+            cache[cache_key] = resolution
+        LOGGER.info(
+            'Resolved Pull List series %s through %s ID %s',
+            title, resolution['provider_id'], resolution['external_id']
+        )
+        return resolution
+
+    if ambiguous:
+        raise RuntimeError(
+            f'Ambiguous metadata match for "{title}" from '
+            f'{", ".join(ambiguous)}; will retry later'
+        )
+    detail = (
+        f' (unavailable: {", ".join(unavailable)})'
+        if unavailable else ''
+    )
+    raise RuntimeError(
+        f'No metadata match found for "{title}"{detail}; will retry later'
+    )
+
+
 def _add_or_monitor_entry(
     entry: Dict[str, Any],
-    root_folder_id: int
+    root_folder_id: int,
+    metadata_cache: Union[
+        Dict[Tuple[str, Any, str], Dict[str, Any]], None
+    ] = None
 ) -> Tuple[int, Union[int, None]]:
     volume_id = entry.get('volume_id')
     if volume_id is None:
         comicvine_id = entry.get('comicvine_volume_id')
-        if not comicvine_id:
-            raise RuntimeError('Release has no ComicVine volume ID')
-        volume_id = get_db().execute(
-            'SELECT id FROM volumes WHERE comicvine_id = ? LIMIT 1;',
-            (comicvine_id,)
-        ).exists()
-        if volume_id is None:
-            volume_id = Library.add(
-                comicvine_id, root_folder_id, True, MonitorScheme.ALL,
-                True, auto_search=False
-            )
+        if comicvine_id:
+            volume_id = get_db().execute(
+                'SELECT id FROM volumes WHERE comicvine_id = ? LIMIT 1;',
+                (comicvine_id,)
+            ).exists()
+            if volume_id is None:
+                volume_id = Library.add(
+                    comicvine_id, root_folder_id, True, MonitorScheme.ALL,
+                    True, auto_search=False
+                )
+        else:
+            resolution = _resolve_release_metadata(entry, metadata_cache)
+            volume_id = resolution.get('volume_id')
+            if volume_id is None:
+                volume_id = Library.add(
+                    resolution.get('comicvine_id'),
+                    root_folder_id,
+                    True,
+                    MonitorScheme.ALL,
+                    True,
+                    auto_search=False,
+                    metadata_provider_id=resolution['provider_id'],
+                    metadata_external_id=resolution['external_id']
+                )
+                resolution['volume_id'] = volume_id
+            if resolution.get('comicvine_id') is not None:
+                entry['comicvine_volume_id'] = resolution['comicvine_id']
         entry['volume_id'] = volume_id
     Volume(volume_id).update({'monitored': True})
 
@@ -473,30 +653,40 @@ def _add_or_monitor_entry(
         cursor.execute(
             """
             UPDATE pull_list_entries
-            SET volume_id = ?, issue_id = ?
+            SET volume_id = ?, issue_id = ?,
+                comicvine_volume_id = COALESCE(comicvine_volume_id, ?)
             WHERE id = ?;
             """,
-            (volume_id, issue_id, entry['id'])
+            (
+                volume_id, issue_id, entry.get('comicvine_volume_id'),
+                entry['id']
+            )
         )
     elif entry.get('comicvine_issue_id') is not None:
         cursor.execute(
             """
             UPDATE pull_list_entries
-            SET volume_id = ?, issue_id = ?
+            SET volume_id = ?, issue_id = ?,
+                comicvine_volume_id = COALESCE(comicvine_volume_id, ?)
             WHERE comicvine_issue_id = ?;
             """,
-            (volume_id, issue_id, entry['comicvine_issue_id'])
+            (
+                volume_id, issue_id, entry.get('comicvine_volume_id'),
+                entry['comicvine_issue_id']
+            )
         )
     else:
         cursor.execute(
             """
             UPDATE pull_list_entries
-            SET volume_id = ?, issue_id = ?
+            SET volume_id = ?, issue_id = ?,
+                comicvine_volume_id = COALESCE(comicvine_volume_id, ?)
             WHERE release_title = ? AND issue_number IS ? AND week_start = ?;
             """,
             (
-                volume_id, issue_id, entry['release_title'],
-                entry.get('issue_number'), entry['week_start']
+                volume_id, issue_id, entry.get('comicvine_volume_id'),
+                entry['release_title'], entry.get('issue_number'),
+                entry['week_start']
             )
         )
     return volume_id, issue_id
@@ -522,7 +712,7 @@ def act_on_release(
         entry, root_folder_id or 0
     )
     if action == 'grab' and issue_id is None:
-        raise RuntimeError('The released issue is not in ComicVine yet')
+        raise RuntimeError('The released issue is not in metadata yet')
     return volume_id, issue_id
 
 
@@ -562,6 +752,12 @@ def process_publisher_subscriptions(
         if archived_entries:
             entries = archived_entries
 
+    metadata_cache: Dict[Tuple[str, Any, str], Dict[str, Any]] = {}
+    attempted = 0
+    succeeded = 0
+    failed = 0
+    skipped = 0
+
     for entry in entries:
         week_start = str(entry.get('week_start') or '')
         if not week_start or week_start > current_week:
@@ -580,16 +776,18 @@ def process_publisher_subscriptions(
             (release_key, action)
         ).exists()
         if completed:
+            skipped += 1
             continue
 
+        attempted += 1
         try:
             volume_id, issue_id = _add_or_monitor_entry(
-                entry, subscription['root_folder_id']
+                entry, subscription['root_folder_id'], metadata_cache
             )
             if subscription['auto_search']:
                 if issue_id is None:
                     raise RuntimeError(
-                        'The released issue is not in ComicVine yet'
+                        'The released issue is not in metadata yet'
                     )
                 results = auto_search(volume_id, issue_id)
                 if not results:
@@ -598,11 +796,13 @@ def process_publisher_subscriptions(
                     result['link'], volume_id, issue_id
                 ) for result in results)
             success, message = True, None
+            succeeded += 1
         except Exception as error:
             LOGGER.exception(
                 'Publisher automation failed for %s', release_key
             )
             success, message = False, str(error)[:240]
+            failed += 1
 
         cursor.execute(
             """
@@ -616,4 +816,10 @@ def process_publisher_subscriptions(
             """,
             (release_key, action, success, message, round(time()))
         )
+
+    LOGGER.info(
+        'Publisher automation processed %d release(s): %d succeeded, '
+        '%d pending retry, %d already complete',
+        attempted, succeeded, failed, skipped
+    )
     return downloads

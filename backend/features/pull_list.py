@@ -157,12 +157,17 @@ async def _fetch_release_source(
         return []
 
 
-async def _fetch_all_weekly_releases() -> List[WeeklyReleaseData]:
-    """Fetch nine navigable weeks, including four past and four future."""
-    start = _monday(date.today())
-    weeks = [start + timedelta(weeks=offset) for offset in range(-4, 5)]
-    sources = WeeklyReleaseSources.get_active()
+async def _fetch_all_weekly_releases(
+    requested_week: Union[date, None] = None
+) -> List[WeeklyReleaseData]:
+    """Fetch one selected week or the normal nearby nine-week window."""
+    if requested_week is None:
+        start = _monday(date.today())
+        weeks = [start + timedelta(weeks=offset) for offset in range(-4, 5)]
+    else:
+        weeks = [_monday(requested_week)]
 
+    sources = WeeklyReleaseSources.get_active()
     async with AsyncSession() as session:
         responses = await gather(*(
             _fetch_release_source(source, session, week)
@@ -250,21 +255,30 @@ def _find_issue_id(entry: Dict[str, Any]) -> Union[int, None]:
     ).exists()
 
 
-def check_weekly_pull_list() -> List[Dict[str, Any]]:
-    """Refresh nearby weeks while retaining the accumulated archive."""
-    releases = run(_fetch_all_weekly_releases())
-    current_week = _monday(date.today()).isoformat()
-    current_catalogue = [
+def check_weekly_pull_list(
+    requested_week: Union[date, None] = None
+) -> List[Dict[str, Any]]:
+    """Refresh selected/nearby weeks while retaining the accumulated archive."""
+    requested_week = _monday(requested_week) if requested_week else None
+    releases = run(_fetch_all_weekly_releases(requested_week))
+    validation_week = (
+        requested_week or _monday(date.today())
+    ).isoformat()
+    validation_catalogue = [
         release
         for release in releases
-        if release.get('week_start') == current_week
+        if release.get('week_start') == validation_week
         and release.get('publisher')
     ]
-    if not current_catalogue:
-        raise RuntimeError(
-            'No current-week publisher releases were returned; '
-            'the previous pull list was kept'
-        )
+    if not validation_catalogue:
+        if requested_week is None:
+            detail = 'No current-week publisher releases were returned'
+        else:
+            detail = (
+                'No publisher releases were returned for week '
+                f'{validation_week}'
+            )
+        raise RuntimeError(f'{detail}; the previous pull list was kept')
 
     entries = match_releases_to_library(
         releases, Library.get_public_volumes()
@@ -528,15 +542,8 @@ def process_publisher_subscriptions(
 
     # Production checks pass only the freshly fetched nearby window. Prefer
     # the durable archive so retroactive publisher rules reach every retained
-    # past week. Direct callers without the archive table keep their input.
-    has_archive = cursor.execute(
-        """
-        SELECT 1 FROM sqlite_master
-        WHERE type = 'table' AND name = 'pull_list_entries'
-        LIMIT 1;
-        """
-    ).exists()
-    if has_archive:
+    # past week. Tests and callers without stored rows still use their input.
+    try:
         archived_entries = cursor.execute(
             """
             SELECT * FROM pull_list_entries
@@ -545,8 +552,15 @@ def process_publisher_subscriptions(
             """,
             (current_week,)
         ).fetchalldict()
-        if archived_entries:
-            entries = archived_entries
+    except Exception as error:
+        # A few focused unit-test callers intentionally use a minimal in-memory
+        # schema without pull_list_entries. They should keep exercising the
+        # supplied-entry path rather than needing the whole production schema.
+        if 'no such table: pull_list_entries' not in str(error).lower():
+            raise
+        archived_entries = []
+    if archived_entries:
+        entries = archived_entries
 
     for entry in entries:
         week_start = str(entry.get('week_start') or '')

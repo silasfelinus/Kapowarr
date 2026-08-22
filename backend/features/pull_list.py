@@ -528,17 +528,25 @@ def process_publisher_subscriptions(
 
     # Production checks pass only the freshly fetched nearby window. Prefer
     # the durable archive so retroactive publisher rules reach every retained
-    # past week. Tests and callers without stored rows still use their input.
-    archived_entries = cursor.execute(
+    # past week. Direct callers without the archive table keep their input.
+    has_archive = cursor.execute(
         """
-        SELECT * FROM pull_list_entries
-        WHERE week_start <= ?
-        ORDER BY week_start, id;
-        """,
-        (current_week,)
-    ).fetchalldict()
-    if archived_entries:
-        entries = archived_entries
+        SELECT 1 FROM sqlite_master
+        WHERE type = 'table' AND name = 'pull_list_entries'
+        LIMIT 1;
+        """
+    ).exists()
+    if has_archive:
+        archived_entries = cursor.execute(
+            """
+            SELECT * FROM pull_list_entries
+            WHERE week_start <= ?
+            ORDER BY week_start, id;
+            """,
+            (current_week,)
+        ).fetchalldict()
+        if archived_entries:
+            entries = archived_entries
 
     for entry in entries:
         week_start = str(entry.get('week_start') or '')

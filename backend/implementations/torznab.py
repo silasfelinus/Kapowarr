@@ -9,15 +9,18 @@ protocol rather than product-specific integrations.
 
 from __future__ import annotations
 
-from asyncio import TimeoutError as AsyncioTimeoutError, wait_for
+from asyncio import (Lock as AsyncLock, TimeoutError as AsyncioTimeoutError,
+                     get_running_loop, sleep as async_sleep, wait_for)
 from concurrent.futures import (Future, ThreadPoolExecutor,
                                 TimeoutError as FutureTimeoutError)
 from hashlib import sha1
 from os.path import basename, join, splitext
-from threading import Event
+from threading import Event, Lock as ThreadLock
+from time import monotonic
 from typing import Any, Dict, List, Mapping, Tuple, Union
 from urllib.parse import (parse_qs, quote_plus, unquote_plus, urlencode,
                           urlsplit, urlunsplit)
+from weakref import WeakKeyDictionary
 from xml.etree import ElementTree
 
 from aiohttp import ClientError
@@ -46,9 +49,30 @@ from backend.internals.settings import Settings
 
 TORZNAB_TEST_TIMEOUT = 10.0
 TORZNAB_DOWNLOAD_TIMEOUT = 30.0
+# Query builders intentionally produce several useful variants. The search
+# coordinator runs those variants concurrently, so without a per-feed gate one
+# Torznab endpoint receives a burst of near-simultaneous requests. Prowlarr can
+# then relay the burst into an indexer's own rate limit. One request per second
+# is cheap enough for interactive search while avoiding the observed 429 storm.
+TORZNAB_REQUEST_MIN_INTERVAL = 1.0
 DEFAULT_COMIC_CATEGORIES = '7030'
 TORZNAB_TAG_KEY = 'kapowarr-torznab'
 TORZNAB_TITLE_KEY = 'kapowarr-title'
+
+_REQUEST_LOCKS_GUARD = ThreadLock()
+_REQUEST_LOCKS = WeakKeyDictionary()
+_REQUEST_STARTS = WeakKeyDictionary()
+
+
+def _request_state(indexer):
+    """Return the asyncio-loop-local pacing state for one Torznab feed."""
+    loop = get_running_loop()
+    key = indexer.base_url.lower()
+    with _REQUEST_LOCKS_GUARD:
+        locks = _REQUEST_LOCKS.setdefault(loop, {})
+        starts = _REQUEST_STARTS.setdefault(loop, {})
+        lock = locks.setdefault(key, AsyncLock())
+    return lock, starts, key
 
 
 def _ensure_table() -> None:
@@ -429,6 +453,26 @@ class TorznabIndexers:
             """).fetchalldict()
         ]
 
+    @staticmethod
+    def find_by_link(link: str) -> Union[TorznabIndexer, None]:
+        """Resolve tagged or feed-scoped torrent URLs to their Torznab source.
+
+        Prowlarr frequently hosts Newznab and Torznab feeds on the same host.
+        Only a Torznab provenance tag or the configured Torznab feed path is
+        enough to claim an untagged URL. A shared hostname alone is not.
+        """
+        clean_link, tagged_id, _ = strip_torznab_tag(link)
+        if tagged_id is not None:
+            try:
+                return TorznabIndexers.get_one(tagged_id)
+            except IndexerNotFound:
+                return None
+
+        for indexer in TorznabIndexers.get_enabled():
+            if clean_link.startswith(indexer.base_url):
+                return indexer
+        return None
+
 
 async def search_torznab_indexer(
     session: AsyncSession,
@@ -444,18 +488,27 @@ async def search_torznab_indexer(
     if indexer.category_filter_enabled and indexer.categories:
         params['cat'] = indexer.categories
 
-    body = await session.get_text(
-        indexer.base_url,
-        params=params,
-        quiet_fail=True
-    )
+    lock, starts, key = _request_state(indexer)
+    async with lock:
+        elapsed = monotonic() - starts.get(key, 0.0)
+        if elapsed < TORZNAB_REQUEST_MIN_INTERVAL:
+            await async_sleep(TORZNAB_REQUEST_MIN_INTERVAL - elapsed)
+        starts[key] = monotonic()
+        body = await session.get_text(
+            indexer.base_url,
+            params=params,
+            quiet_fail=True
+        )
     if not body:
         return []
 
     try:
         root = ElementTree.fromstring(body)
     except ElementTree.ParseError:
-        LOGGER.warning('Torznab indexer %s returned malformed XML', indexer.title)
+        LOGGER.warning(
+            'Torznab indexer %s (%s) returned malformed XML',
+            indexer.title, indexer.base_url
+        )
         return []
 
     results: List[SearchResultData] = []

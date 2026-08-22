@@ -65,9 +65,10 @@
 			<p>
 				Rules are opt-in. Auto-add adds and monitors newly released series;
 				auto-add &amp; grab also searches enabled download sources for each
-				released issue. On the next scheduled or manual check, auto-grab also
-				backfills stored past pull-list releases for that publisher. Successful
-				past grabs are skipped; failed or unavailable matches can retry later.
+				released issue. Pull-list weeks are retained indefinitely, so the next
+				scheduled or manual check also backfills every stored past release for
+				an auto-grab publisher. Successful past grabs are skipped; failed or
+				unavailable matches can retry later.
 			</p>
 			<div class="publisher-bulk-controls">
 				<label>
@@ -124,6 +125,8 @@
 		<p class="source-explanation">
 			Release metadata comes from the publisher-aware Mylar release provider.
 			Download availability is checked separately against enabled sources.
+			Nearby weeks are refreshed on each check; older stored weeks remain in
+			the archive with no age cutoff.
 		</p>
 		<p class="action-explanation">
 			<strong>Add + want</strong> adds a series to Kapowarr and monitors it.

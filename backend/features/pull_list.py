@@ -251,7 +251,7 @@ def _find_issue_id(entry: Dict[str, Any]) -> Union[int, None]:
 
 
 def check_weekly_pull_list() -> List[Dict[str, Any]]:
-    """Refresh the full catalogue while preserving it on source failure."""
+    """Refresh nearby weeks while retaining the accumulated archive."""
     releases = run(_fetch_all_weekly_releases())
     current_week = _monday(date.today()).isoformat()
     current_catalogue = [
@@ -274,9 +274,20 @@ def check_weekly_pull_list() -> List[Dict[str, Any]]:
         entry['issue_id'] = _find_issue_id(entry)
         entry['checked_at'] = checked_at
 
+    refreshed_weeks = sorted({
+        str(entry['week_start'])
+        for entry in entries
+        if entry.get('week_start')
+    })
     cursor = get_db()
     with cursor:
-        cursor.execute('DELETE FROM pull_list_entries;')
+        if refreshed_weeks:
+            placeholders = ','.join('?' for _ in refreshed_weeks)
+            cursor.execute(
+                'DELETE FROM pull_list_entries '
+                f'WHERE week_start IN ({placeholders});',
+                tuple(refreshed_weeks)
+            )
         cursor.executemany(
             """
             INSERT INTO pull_list_entries(
@@ -295,7 +306,17 @@ def check_weekly_pull_list() -> List[Dict[str, Any]]:
             entries
         )
 
-    LOGGER.info('Weekly release calendar stored %d release(s)', len(entries))
+    archive_count = cursor.execute(
+        'SELECT COUNT(*) FROM pull_list_entries;'
+    ).fetchone()[0]
+    archive_weeks = cursor.execute(
+        'SELECT COUNT(DISTINCT week_start) FROM pull_list_entries;'
+    ).fetchone()[0]
+    LOGGER.info(
+        'Weekly release calendar refreshed %d release(s) across %d week(s); '
+        'archive retains %d release(s) across %d week(s)',
+        len(entries), len(refreshed_weeks), archive_count, archive_weeks
+    )
     return entries
 
 
@@ -494,7 +515,7 @@ def act_on_release(
 def process_publisher_subscriptions(
     entries: List[Dict[str, Any]]
 ) -> List[DownloadTuple]:
-    """Apply publisher rules to current and stored past releases."""
+    """Apply publisher rules to current and all retained past releases."""
     subscriptions = {
         row['publisher'].lower(): row
         for row in get_db().execute(
@@ -504,6 +525,29 @@ def process_publisher_subscriptions(
     downloads: List[DownloadTuple] = []
     cursor = get_db()
     current_week = _monday(date.today()).isoformat()
+
+    # Production checks pass only the freshly fetched nearby window. Prefer
+    # the durable archive so retroactive publisher rules reach every retained
+    # past week. Direct callers without the archive table keep their input.
+    has_archive = cursor.execute(
+        """
+        SELECT 1 FROM sqlite_master
+        WHERE type = 'table' AND name = 'pull_list_entries'
+        LIMIT 1;
+        """
+    ).exists()
+    if has_archive:
+        archived_entries = cursor.execute(
+            """
+            SELECT * FROM pull_list_entries
+            WHERE week_start <= ?
+            ORDER BY week_start, id;
+            """,
+            (current_week,)
+        ).fetchalldict()
+        if archived_entries:
+            entries = archived_entries
+
     for entry in entries:
         week_start = str(entry.get('week_start') or '')
         if not week_start or week_start > current_week:

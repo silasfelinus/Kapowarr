@@ -2,6 +2,8 @@
 
 """Release-calendar status and parallel manual-refresh routes."""
 
+from datetime import date
+
 from flask import request
 
 from backend.base.custom_exceptions import InvalidKeyValue
@@ -24,7 +26,20 @@ def api_pull_list_weeks():
 @error_handler
 @auth
 def api_pull_list_check_start():
-    check = pull_list_check_runner.start()
+    data = request.get_json(silent=True) or {}
+    week_start = data.get('week_start')
+    requested_week = None
+    if week_start is not None:
+        if not isinstance(week_start, str):
+            raise InvalidKeyValue('week_start', week_start)
+        try:
+            requested_week = date.fromisoformat(week_start)
+        except ValueError:
+            raise InvalidKeyValue('week_start', week_start)
+        if requested_week.weekday() != 0:
+            raise InvalidKeyValue('week_start', week_start)
+
+    check = pull_list_check_runner.start(requested_week)
     return return_api(check, code=201 if check['status'] == 'queued' else 200)
 
 

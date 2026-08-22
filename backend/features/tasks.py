@@ -39,9 +39,29 @@ def _task_lane(task) -> str:
     return getattr(task, 'queue_lane', 'default') or 'default'
 
 
-def _run_task_entry(self, entry) -> None:
-    task = entry['task']
-    LOGGER.debug('Running task %s in lane %s', task.display_title, entry['lane'])
+def _run_task_entry(self, entry_or_task) -> None:
+    """Run a queue entry, while retaining the old direct-task test seam."""
+    if isinstance(entry_or_task, dict):
+        entry = entry_or_task
+        task = entry['task']
+    else:
+        # Some internal tests and extensions call the private runner directly
+        # with a Task, matching TaskHandler's historical signature. Resolve its
+        # real queue entry when present so cleanup semantics stay identical.
+        task = entry_or_task
+        entry = next((
+            queued for queued in self.queue
+            if queued.get('task') is task
+        ), {
+            'task': task,
+            'id': 0,
+            'status': 'running',
+            'lane': _task_lane(task),
+            'thread': None,
+        })
+
+    lane = entry.get('lane', _task_lane(task))
+    LOGGER.debug('Running task %s in lane %s', task.display_title, lane)
     with self.context():
         socket = WebSocket()
         history_title = task.display_title

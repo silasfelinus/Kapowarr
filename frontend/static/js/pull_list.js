@@ -100,8 +100,7 @@ function actionButton(label, action, entry, api_key) {
 	button.innerText = label;
 	button.onclick = () => actOnEntry(action, entry, button, api_key);
 	if (entry.volume_id === null && entry.comicvine_volume_id === null) {
-		button.disabled = true;
-		button.title = 'This release has no ComicVine series ID';
+		button.title = 'Kapowarr will resolve this series through configured metadata providers';
 	};
 	return button;
 };
@@ -165,6 +164,16 @@ function renderList(api_key) {
 			library.appendChild(link);
 		} else {
 			library.innerText = 'Not added';
+			if (obj.automation_success === 0) {
+				const pending = document.createElement('small');
+				pending.classList.add('automation-warning');
+				pending.innerText = obj.automation_action === 'auto_search'
+					? 'Auto-grab retry pending'
+					: 'Auto-add retry pending';
+				pending.title = obj.automation_message || 'Automation will retry';
+				library.appendChild(document.createElement('br'));
+				library.appendChild(pending);
+			};
 		};
 
 		const availability = entry.querySelector('.availability-column');

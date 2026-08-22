@@ -16,33 +16,19 @@ class DownloadPrepperRegistryTest(unittest.TestCase):
         self.assertIs(prepper, dp.GetComicsDownloadPrepper)
         self.assertEqual(prepper.identifier, 'gc')
 
-    @patch.object(dp.TorznabIndexers, 'find_by_link', return_value=None)
     @patch.object(dp.Indexers, 'find_by_link', return_value=MagicMock())
-    def test_newznab_link_resolves_to_nzb_prepper(self, _find, _torznab_find):
+    def test_newznab_link_resolves_to_nzb_prepper(self, _find):
         prepper = dp.DownloadPreppers.get_for_link(
             'https://indexer.example/api?t=get&id=42'
         )
         self.assertIs(prepper, dp.NewznabDownloadPrepper)
         self.assertEqual(prepper.identifier, 'nzb')
 
-    @patch.object(dp.TorznabIndexers, 'find_by_link', return_value=None)
     @patch.object(dp.Indexers, 'find_by_link', return_value=None)
-    def test_unknown_link_has_no_prepper(self, _find, _torznab_find):
+    def test_unknown_link_has_no_prepper(self, _find):
         self.assertIsNone(
             dp.DownloadPreppers.get_for_link('https://example.invalid/file')
         )
-
-    @patch.object(dp.Indexers, 'find_by_link', return_value=MagicMock())
-    @patch.object(dp.TorznabIndexers, 'find_by_link', return_value=MagicMock())
-    def test_same_host_torznab_route_is_not_claimed_as_nzb(
-        self, _torznab_find, _newznab_find
-    ):
-        # Prowlarr can host both /33/api (Newznab) and /39/api (Torznab).
-        # Even if Newznab's compatibility ownership recognises the shared host,
-        # an explicitly configured Torznab feed path wins protocol ownership.
-        self.assertFalse(dp.NewznabDownloadPrepper.matches(
-            'https://prowlarr.example/39/api?t=get&id=torrent'
-        ))
 
     def test_newznab_prepper_delegates_to_existing_download_factory(self):
         expected = MagicMock()

@@ -92,8 +92,17 @@ class Constants:
     BACKOFF_FACTOR_RETRIES = 1
     "Backoff factor for waiting in-between retries"
 
-    STATUS_FORCELIST_RETRIES = (500, 502, 503, 504)
-    "The HTTP status codes for which a retry should be done"
+    STATUS_FORCELIST_RETRIES = (429, 500, 502, 503, 504)
+    """The HTTP status codes for which a retry should be done
+
+    429 is here because it is the one status that explicitly asks to be
+    retried. Without it a throttled request failed on the first answer, and
+    the caller cannot tell "slow down" from "gone" -- GetComics starts
+    answering 429 under load, and every link offered while it does was
+    recorded as broken. urllib3 honours a `Retry-After` header for it, and
+    the backoff is exponential either way, so retrying does not add to the
+    load that caused the throttling.
+    """
 
     PROXY_TEST_URL = "https://httpbin.org/ip"
 

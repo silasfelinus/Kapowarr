@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from threading import Event, Thread
 from typing import (TYPE_CHECKING, Any, Callable, Dict, List, Mapping,
-                    Sequence, Tuple, TypedDict, TypeVar, Union)
+                    NotRequired, Sequence, Tuple, TypedDict, TypeVar, Union)
 
 if TYPE_CHECKING:
     from backend.base.helpers import AsyncSession
@@ -856,6 +856,18 @@ class VolumeMetadata(MetadataIdentity):
 class CVFileMapping(TypedDict):
     id: int
     filepath: str
+    provider_id: NotRequired[str]
+    external_id: NotRequired[Union[str, int, None]]
+    """
+    Which metadata provider identified the volume, and its ID there.
+
+    `id` is a ComicVine ID and is `None` for a provider that has no
+    ComicVine cross-link -- GCD never has one, and Metron only sometimes
+    does. Carrying the provider's own identity alongside is what lets
+    such a match actually be imported instead of being dropped for
+    having no ComicVine ID. Absent means ComicVine, so every existing
+    caller and the API contract are unchanged.
+    """
 
 
 class WantedIssueData(TypedDict):

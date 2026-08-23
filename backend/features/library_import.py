@@ -269,6 +269,14 @@ async def _match_file_groups(
             else:
                 matches[group_number] = {
                     'id': result['comicvine_id'],
+                    # GCD never carries a ComicVine ID and Metron only
+                    # sometimes does, so `id` alone cannot identify a match
+                    # that came from either. Keep the provider's own identity
+                    # beside it or the match is unimportable.
+                    'provider_id': result.get('provider_id', 'comicvine'),
+                    'external_id': result.get(
+                        'external_id', result['comicvine_id']
+                    ),
                     'title': f"{result['title']} ({result['year']})",
                     'issue_count': result['issue_count'],
                     'link': result['site_url']
@@ -415,16 +423,27 @@ def import_library(
     """
     LOGGER.info('Starting library import')
 
-    cvid_to_filepath: Dict[int, List[str]] = {}
+    # Keyed by provider identity rather than by ComicVine ID. A GCD match
+    # has no ComicVine ID at all, so keying on `id` collapsed every GCD
+    # volume in a batch into one `None` bucket.
+    volume_to_filepath: Dict[Tuple[str, Any], List[str]] = {}
+    volume_identity: Dict[Tuple[str, Any], Tuple[Any, str, Any]] = {}
     for m in matches:
-        cvid_to_filepath.setdefault(m['id'], []).append(m['filepath'])
-    LOGGER.debug(f'id_to_filepath: {cvid_to_filepath}')
+        provider_id = m.get('provider_id') or 'comicvine'
+        external_id = m.get('external_id')
+        if external_id is None:
+            external_id = m['id']
+        key = (provider_id, external_id)
+        volume_to_filepath.setdefault(key, []).append(m['filepath'])
+        volume_identity[key] = (m['id'], provider_id, external_id)
+    LOGGER.debug(f'id_to_filepath: {volume_to_filepath}')
 
     result: Dict[str, List[Dict[str, Any]]] = {
         'imported': [], 'skipped': [], 'failed': []
     }
     root_folders = RootFolders().get_all()
-    for cv_id, requested_files in cvid_to_filepath.items():
+    for key, requested_files in volume_to_filepath.items():
+        cv_id, provider_id, external_id = volume_identity[key]
         try:
             # A mapping records where a file was when it was proposed, and
             # importing is not the only thing that moves files: importing any
@@ -481,7 +500,9 @@ def import_library(
                     monitored=True,
                     monitor_scheme=MonitorScheme.ALL,
                     monitor_new_issues=True,
-                    volume_folder=lcf if not rename_files else None
+                    volume_folder=lcf if not rename_files else None,
+                    metadata_provider_id=provider_id,
+                    metadata_external_id=external_id
                 )
                 commit()
             except VolumeAlreadyAdded as exc:
@@ -552,7 +573,7 @@ def import_library(
             )
             result['failed'].append({
                 'id': cv_id,
-                'filepaths': cvid_to_filepath[cv_id],
+                'filepaths': volume_to_filepath[key],
                 'reason': str(exc) or exc.__class__.__name__
             })
 
@@ -726,7 +747,11 @@ class ContinuousLibraryImport(Task):
                         matches.extend(
                             {
                                 'filepath': filepath,
-                                'id': cv_match['id']
+                                'id': cv_match['id'],
+                                'provider_id': cv_match.get(
+                                    'provider_id', 'comicvine'
+                                ),
+                                'external_id': cv_match.get('external_id')
                             }
                             for filepath in files
                         )

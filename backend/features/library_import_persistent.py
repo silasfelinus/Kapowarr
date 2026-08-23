@@ -545,7 +545,11 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
                             matches.extend(
                                 {
                                     'filepath': filepath,
-                                    'id': cv_match['id']
+                                    'id': cv_match['id'],
+                                    'provider_id': cv_match.get(
+                                        'provider_id', 'comicvine'
+                                    ),
+                                    'external_id': cv_match.get('external_id')
                                 }
                                 for filepath in files
                             )
@@ -553,10 +557,20 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
                         imported_volumes = 0
                         metadata_wait_stopped = False
                         if matches:
-                            matches_by_id: Dict[int, List[CVFileMapping]] = {}
+                            # By provider identity, not ComicVine ID: a GCD
+                            # match has none, so keying on `id` put every GCD
+                            # volume in the batch into one `None` bucket and
+                            # imported them as though they were one volume.
+                            matches_by_id: Dict[Any, List[CVFileMapping]] = {}
                             for match in matches:
                                 matches_by_id.setdefault(
-                                    match['id'], []
+                                    (
+                                        match.get('provider_id')
+                                        or 'comicvine',
+                                        match.get('external_id')
+                                        if match.get('external_id') is not None
+                                        else match['id']
+                                    ), []
                                 ).append(match)
 
                             total_import_volumes = len(matches_by_id)

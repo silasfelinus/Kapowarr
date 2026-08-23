@@ -6,7 +6,7 @@ and abstract classes.
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 from threading import Event, Thread
 from typing import (TYPE_CHECKING, Any, Callable, Dict, List, Mapping,
@@ -30,7 +30,7 @@ class Constants:
     "Seconds to wait after interrupt until subprocess is killed"
 
     HOSTING_THREADS = 10
-    "Amount of threads for the webserver"
+    "Amount of hosting threads"
 
     HOSTING_REVERT_TIME = 60.0 # seconds
     """
@@ -96,7 +96,7 @@ class Constants:
     """The HTTP status codes for which a retry should be done
 
     429 is here because it is the one status that explicitly asks to be
-    retried. Without it a throttled request failed on the first answer, and
+    retried. Without it a throttled request failed on its first answer, and
     the caller cannot tell "slow down" from "gone" -- GetComics starts
     answering 429 under load, and every link offered while it does was
     recorded as broken. urllib3 honours a `Retry-After` header for it, and
@@ -766,8 +766,8 @@ class DiscoverMatchData(DiscoverItemData):
 
 class WeeklyReleaseData(TypedDict):
     """One "release" line parsed out of a weekly-release source (see
-    `backend.implementations.weekly_releases`), before any cross-
-    referencing against the library has happened.
+    `backend.implementations.weekly_releases`), before any
+    cross-referencing against the library has happened.
     """
     series: str
     issue_number: Union[str, None]
@@ -974,6 +974,14 @@ class BaseNamingKeys:
 @dataclass
 class VolumeNamingKeys(BaseNamingKeys):
     special_version: Union[str, None]
+    series_name_no_article: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.series_name_no_article = self.series_name
+        for prefix in ('The ', 'A '):
+            if self.series_name.startswith(prefix):
+                self.series_name_no_article = self.series_name[len(prefix):]
+                break
 
 
 @dataclass

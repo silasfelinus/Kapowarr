@@ -21,7 +21,8 @@ from threading import current_thread
 from typing import (TYPE_CHECKING, Any, Callable, Collection, Dict, Iterable,
                     Iterator, List, Mapping, Sequence, Tuple, Union)
 from unicodedata import normalize
-from urllib.parse import quote_plus, unquote
+from urllib.parse import (parse_qsl, quote_plus, unquote, urlencode,
+                          urlsplit, urlunsplit)
 
 from aiohttp import ClientError, ClientSession, ClientTimeout
 from bencoding import bdecode
@@ -43,6 +44,81 @@ if TYPE_CHECKING:
     from subprocess import CompletedProcess
 
     from flask.ctx import AppContext
+
+
+# Indexer and download-client URLs carry credentials in the query string --
+# Prowlarr's is `?apikey=...`, and torrent trackers use `passkey`/`torrent_pass`.
+# Those URLs are logged on every enqueue and on every request retry, so the log
+# file people attach to a bug report, or hand to someone helping them, had
+# their working API key in it in plain text.
+SENSITIVE_QUERY_KEYS = frozenset((
+    'apikey', 'api_key', 'apitoken', 'api_token',
+    'token', 'passkey', 'torrent_pass', 'password', 'secret', 'auth',
+))
+
+
+# A credential is not always a query parameter. A Discord webhook puts its
+# token in the path -- anyone holding it can post to the channel -- and a proxy
+# URL carries `user:password@` in the netloc.
+WEBHOOK_PATH_MARKERS = ('/api/webhooks/', '/services/')
+
+
+def _redact_netloc(netloc: str) -> str:
+    """Mask the password in a `user:password@host` authority."""
+    if '@' not in netloc:
+        return netloc
+
+    userinfo, _, host = netloc.rpartition('@')
+    if ':' not in userinfo:
+        return netloc
+    user, _, _password = userinfo.partition(':')
+    return f'{user}:***@{host}'
+
+
+def _redact_path(path: str) -> str:
+    """Mask a webhook token, which identifies the caller by itself."""
+    lowered = path.lower()
+    for marker in WEBHOOK_PATH_MARKERS:
+        if marker in lowered and path.rstrip('/').count('/') > 2:
+            head, _, _token = path.rstrip('/').rpartition('/')
+            return f'{head}/***'
+    return path
+
+
+def redact_url(url: str) -> str:
+    """Return `url` with anything that authenticates the caller masked.
+
+    Kept deliberately narrow. Everything that is not a known credential stays
+    readable, because a redacted URL nobody can act on is no more useful in a
+    bug report than no URL at all -- `link=` and `file=` are exactly what make
+    a broken indexer link diagnosable.
+    """
+    if not url:
+        return url
+
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+
+    pairs = parse_qsl(parts.query, keep_blank_values=True)
+    redacted = [
+        (key, '***' if key.lower() in SENSITIVE_QUERY_KEYS and value else value)
+        for key, value in pairs
+    ]
+
+    netloc = _redact_netloc(parts.netloc)
+    path = _redact_path(parts.path)
+    if redacted == pairs and netloc == parts.netloc and path == parts.path:
+        return url
+
+    return urlunsplit((
+        parts.scheme, netloc, path,
+        urlencode(redacted, safe='*') if pairs else parts.query,
+        parts.fragment
+    ))
+
+
 
 
 # region System
@@ -1074,26 +1150,46 @@ class AsyncSession(ClientSession):
         self.cookie_jar.update_cookies(cf_cookies)
 
         for round in range(1, Constants.TOTAL_RETRIES + 1):
+            # A retry that only says "request failed" cannot be diagnosed: a
+            # 503 from the indexer, a refused connection and an expired
+            # certificate all read the same, and the caller reports every one
+            # of them as "Download link broken". Carry why.
+            reason = ''
             try:
                 response = await super()._request(*args, **kwargs)
                 LOGGER.debug(
                     'Made async request: %s "%s" %d %d',
-                    method, response.url,
+                    method, redact_url(str(response.url)),
                     response.status,
                     int(response.headers.get('Content-Length', -1))
                 )
 
                 if response.status in Constants.STATUS_FORCELIST_RETRIES:
-                    raise ClientError
+                    reason = f'HTTP {response.status}'
+                    raise ClientError(reason)
 
-            except ClientError:
+            except ClientError as error:
+                if not reason:
+                    detail = str(error).strip()
+                    reason = (
+                        f'{type(error).__name__}: {detail}'
+                        if detail else
+                        type(error).__name__
+                    )
+
                 if round == Constants.TOTAL_RETRIES:
                     # Exhausted retries
+                    LOGGER.warning(
+                        "%s request to %s failed after %d attempts (%s)",
+                        method, redact_url(url), Constants.TOTAL_RETRIES,
+                        reason
+                    )
                     raise
 
                 LOGGER.warning(
-                    "%s request failed for url %s. Retrying for round %d...",
-                    method, url, round + 1
+                    "%s request failed for url %s (%s). "
+                    "Retrying for round %d...",
+                    method, redact_url(url), reason, round + 1
                 )
 
                 await sleep(sleep_time)

@@ -22,7 +22,8 @@ from backend.base.definitions import (BlocklistReason, Constants, Download,
                                       EnqueuingDownloadFailureReason,
                                       ExternalDownload, SeedingHandling)
 from backend.base.files import create_folder, delete_file_folder
-from backend.base.helpers import CommaList, Singleton, get_subclasses
+from backend.base.helpers import (CommaList, Singleton, get_subclasses,
+                                  redact_url)
 from backend.base.logging import LOGGER
 from backend.features.post_processing import (PostProcessor,
                                               PostProcessorTorrentsComplete,
@@ -534,10 +535,12 @@ class DownloadHandler(metaclass=Singleton):
             Queue entries that were added from the link and reason for failing
             if no entries were added.
         """
+        # An indexer link carries its API key in the query string, and this
+        # line put it in the log in plain text on every enqueue.
         LOGGER.info(
             'Adding download for ' +
             f'volume {volume_id}{f" issue {issue_id}" if issue_id else ""}: ' +
-            f'{link}'
+            f'{redact_url(link)}'
         )
 
         if self.link_in_queue(link):
@@ -546,7 +549,9 @@ class DownloadHandler(metaclass=Singleton):
 
         link_type = self.__determine_link_type(link)
         if link_type is None:
-            LOGGER.warning('No download prepper recognised link: %s', link)
+            LOGGER.warning(
+                'No download prepper recognised link: %s', redact_url(link)
+            )
             return [], None
 
         try:

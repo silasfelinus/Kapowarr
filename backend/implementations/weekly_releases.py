@@ -24,6 +24,7 @@ from bs4 import BeautifulSoup, Tag
 
 from backend.base.definitions import Constants, WeeklyReleaseData
 from backend.base.helpers import AsyncSession
+from backend.base.helpers import redact_url
 from backend.base.logging import LOGGER
 
 # Matches release lines like "Batman #123", "Batman Vol. 3 #123 (2024)" or
@@ -280,7 +281,9 @@ async def fetch_getcomics_weekly_releases(
 
     article_html = await session.get_text(link, quiet_fail=True)
     if not article_html:
-        LOGGER.warning("Could not fetch GetComics Weekly Pack post %s", link)
+        LOGGER.warning(
+            "Could not fetch GetComics Weekly Pack post %s", redact_url(link)
+        )
         return []
 
     article_soup = BeautifulSoup(article_html, "html.parser")

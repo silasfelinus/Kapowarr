@@ -6,6 +6,7 @@ Setting up, using and altering the logger
 
 import logging
 import logging.config
+import re
 from io import StringIO
 from logging.handlers import RotatingFileHandler
 from os import remove
@@ -13,6 +14,55 @@ from os.path import exists, isdir, isfile, join
 from typing import Any, Union
 
 from backend.base.definitions import Constants
+
+
+# Call sites that log a URL redact it themselves, which keeps their messages
+# readable. This is the backstop underneath that, and it exists because call
+# sites are not the only way a credential reaches the file: an exception
+# carrying a URL in its message is formatted by the logging framework, so a
+# traceback prints it whatever the call site did, and third-party libraries log
+# whatever they like. Redacting the finished string is the only place that sees
+# all of it.
+#
+# Kept to shapes that are unambiguously credentials, so ordinary diagnostics --
+# which indexer, which issue, which path -- survive intact.
+_CREDENTIAL_PATTERNS = (
+    # apikey=..., token=..., passkey=... in a query string or bare text.
+    (
+        re.compile(
+            r'((?:api[_-]?key|api[_-]?token|token|passkey|torrent_pass'
+            r'|password|secret|auth)=)[^\s&\'"<>\]]+',
+            re.IGNORECASE
+        ),
+        r'\1***'
+    ),
+    # A password in a `scheme://user:password@host` authority.
+    (re.compile(r'(://[^\s/:@]+:)[^\s/@]+(@)'), r'\1***\2'),
+    # A webhook token, which authenticates by itself.
+    (
+        re.compile(
+            r'((?:/api/webhooks|/services)/[^\s/]+/)[^\s/?\'"]+',
+            re.IGNORECASE
+        ),
+        r'\1***'
+    ),
+)
+
+
+def redact_credentials(text: str) -> str:
+    """Mask credential-shaped substrings in an already-formatted log line."""
+    if not text:
+        return text
+    for pattern, replacement in _CREDENTIAL_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
+class RedactingFormatter(logging.Formatter):
+    """Scrub credentials from the finished line, traceback included."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return redact_credentials(super().format(record))
 
 
 class UpToInfoFilter(logging.Filter):
@@ -61,6 +111,13 @@ class ErrorColorFormatter(logging.Formatter):
         return f"\033[1;31:40m{result}\033[0m"
 
 
+class RedactingErrorColorFormatter(ErrorColorFormatter):
+    """The console-error formatter, with the same credential scrub applied."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return redact_credentials(super().format(record))
+
+
 class MPRotatingFileHandler(RotatingFileHandler):
     def __init__(self,
         filename,
@@ -88,15 +145,17 @@ LOGGING_CONFIG = {
     "disable_existing_loggers": False,
     "formatters": {
         "simple": {
+            "()": RedactingFormatter,
             "format": "[%(asctime)s][%(levelname)s] %(message)s",
             "datefmt": "%H:%M:%S"
         },
         "simple_red": {
-            "()": ErrorColorFormatter,
+            "()": RedactingErrorColorFormatter,
             "format": "[%(asctime)s][%(levelname)s] %(message)s",
             "datefmt": "%H:%M:%S"
         },
         "detailed": {
+            "()": RedactingFormatter,
             "format": "%(asctime)s | %(processName)s | %(threadName)s | %(filename)sL%(lineno)s | %(levelname)s | %(message)s",
             "datefmt": "%Y-%m-%dT%H:%M:%S%z",
         }

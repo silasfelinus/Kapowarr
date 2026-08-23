@@ -34,16 +34,47 @@ const pullListState = {
 	page_size: 50
 };
 
+// `fetchAPI` rejects with the Response itself on a non-OK status, and a
+// Response has no `.message` -- so every HTTP failure used to collapse to the
+// same fallback string. A 404, a 500 and a dead connection all read
+// identically on screen and in the log entry this reports, which left nothing
+// to tell them apart with.
 function pullListErrorMessage(error, fallback='request failed') {
 	if (error && error.message)
 		return error.message;
 	if (typeof error === 'string' && error)
 		return error;
+	if (error && typeof error.status === 'number')
+		return `HTTP ${error.status}${error.statusText ? ` ${error.statusText}` : ''}`;
 	return fallback;
 };
 
-function reportPullListClientError(api_key, context, error) {
+function isNotFound(error) {
+	return Boolean(error) && error.status === 404;
+};
+
+// A rejected `fetchAPI` hands back the Response, whose body carries Kapowarr's
+// own error name and detail. Reporting only `pullListErrorMessage` sent the
+// server a line with no status and no cause, so the log entry this produced
+// said no more than the screen did. Read the body when there is one.
+async function describePullListError(error) {
 	const message = pullListErrorMessage(error, 'unknown client error');
+	if (!error || typeof error.json !== 'function')
+		return message;
+
+	try {
+		const body = await error.clone().json();
+		const detail = body && (body.error || body.result);
+		if (detail)
+			return `${message}: ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`;
+	} catch (_) {
+		// A non-JSON body tells us nothing the status has not already.
+	};
+	return message;
+};
+
+async function reportPullListClientError(api_key, context, error) {
+	const message = await describePullListError(error);
 	const stack = error && error.stack ? String(error.stack) : '';
 	console.error(`Pull List ${context}:`, error);
 	return sendAPI('POST', '/pulllist/client-error', api_key, {}, {
@@ -383,6 +414,21 @@ function pollUntilCheckFinished(api_key, check_id, requested_week) {
 			.finally(stopCheckSpinner);
 	})
 	.catch(error => {
+		// Checks live in the server process, so a restart loses the one this
+		// page was following and every later poll 404s. That is not a fault to
+		// report as a client error -- it is a restart, and the useful thing to
+		// say is that the check is gone and can simply be run again.
+		if (isNotFound(error)) {
+			setCheckStatus(
+				'That release calendar check is no longer running -- Kapowarr '
+				+ 'restarted while it was in progress. Press Check Now to run '
+				+ 'it again.',
+				true
+			);
+			stopCheckSpinner();
+			return;
+		};
+
 		reportPullListClientError(api_key, 'check status poll', error);
 		setCheckStatus(
 			`Check status failed: ${pullListErrorMessage(error, 'unable to poll check')}`,

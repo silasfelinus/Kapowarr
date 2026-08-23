@@ -26,6 +26,11 @@ class the_clients_storage_path_is_translated(unittest.TestCase):
         download._external_id = 'nzo_1'
         download._state = DownloadState.DOWNLOADING_STATE
         download._files = []
+        # Nothing exists under here, so the download-folder fallback in
+        # `_locate_completed_download` finds nothing and these tests stay
+        # about the mapping itself.
+        download._download_folder = '/nonexistent-download-folder'
+        download._title = 'Batman 001'
         client = MagicMock()
         client.id = 7
         download._external_client = client

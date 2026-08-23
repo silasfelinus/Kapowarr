@@ -7,7 +7,7 @@ All download implementations.
 from __future__ import annotations
 
 from base64 import b64decode, b64encode
-from os.path import basename, join, sep, splitext
+from os.path import basename, exists, join, sep, splitext
 from re import IGNORECASE, compile
 from threading import Event, Thread
 from time import perf_counter
@@ -1122,13 +1122,41 @@ class NZBDownload(ExternalDownload, BaseDirectDownload):
             # success, and then vanished -- post-processing raised
             # FileNotFoundError on a path that only exists on the client's
             # side, and the issue stayed unfiled.
-            self._files = [
-                RemoteMappings.remote_to_local(
-                    self._external_client.id, storage
-                )
-            ]
+            self._files = [self._locate_completed_download(storage)]
 
         return
+
+    def _locate_completed_download(self, storage: str) -> str:
+        """Where the client's finished download is, seen from here.
+
+        `storage` is the client's own path. A remote path mapping is the
+        configured way to translate it, but the two sides very often mount
+        the same storage and simply disagree about where it hangs, with no
+        mapping written down. Kapowarr already knows the folder it asked
+        for the download in, so when the mapped path is not there, look for
+        the same job name under that folder before giving up.
+
+        Falls back to the mapped path when neither is present, so the
+        failure names a path the user can write a mapping against.
+        """
+        mapped = RemoteMappings.remote_to_local(
+            self._external_client.id, storage
+        )
+        if exists(mapped):
+            return mapped
+
+        job_name = basename(storage.rstrip('/\\'))
+        if job_name:
+            local_guess = join(self._download_folder, job_name)
+            if exists(local_guess):
+                LOGGER.info(
+                    'The client reported %r at %s, which is not there; '
+                    'found it at %s instead',
+                    self.title, storage, local_guess
+                )
+                return local_guess
+
+        return mapped
 
     def remove_from_client(self, delete_files: bool) -> None:
         if not self.external_id:

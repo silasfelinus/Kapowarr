@@ -162,6 +162,10 @@ def add_corrupt_dl_to_blocklist(download: Download) -> None:
 def move_to_dest(download: Download) -> None:
     "Move file/fold from download folder to final destination"
     if not exists(download.files[0]):
+        LOGGER.error(
+            'Not importing %r: nothing exists at %s',
+            download.title, download.files[0]
+        )
         return
 
     folder = Volume(download.volume_id).vd.folder
@@ -236,6 +240,10 @@ def move_torrent_to_dest(download: TorrentDownload) -> None:
     single-file and directory torrents before scanning/renaming.
     """
     if not exists(download.files[0]):
+        LOGGER.error(
+            'Not importing %r: nothing exists at %s',
+            download.title, download.files[0]
+        )
         return
 
     move_to_dest(download)
@@ -357,6 +365,36 @@ def set_file_properties(download: Download) -> None:
 
 
 # region Integrity
+def unreachable_import_path(download: Download) -> Union[str, None]:
+    """The download's payload path, when nothing is there to import.
+
+    A download client reports where *it* put the file, in its own
+    filesystem. When the client runs in another container or on another
+    host, that path means nothing here unless a remote path mapping
+    translates it -- and an unmapped path simply does not exist as far as
+    Kapowarr is concerned.
+
+    Nothing used to notice. `verify_archive` opens the path, gets
+    FileNotFoundError, and reports `UNSUPPORTED`, which counts as ok
+    ("no opinion", not "bad"), so the integrity gate let it through. The
+    move steps then hit their `if not exists(...): return` guard and
+    returned silently, and every later action ran against a path that was
+    not there. `add_to_history` had already filed the download as a
+    success by then, because it runs before the move. Three titles sat in
+    the client's finished folder, each showing Success in the History and
+    none of them imported.
+
+    Returns:
+        Union[str, None]: The first path that is not there, or `None` when
+        the payload is present.
+    """
+    for file in download.files or []:
+        if not exists(file):
+            return file
+
+    return None
+
+
 def failed_integrity_check(download: Download) -> Union[IntegrityResult, None]:
     """Check a completed download's files before anything imports them.
 
@@ -423,6 +461,20 @@ class PostProcessor:
         delete_file
     ]
 
+    actions_import_failed = [
+        remove_from_queue,
+        add_to_history
+    ]
+    """
+    The download itself was fine; the file just could not be reached.
+    Deliberately does not blocklist the release or delete anything. The
+    release is not at fault -- the path is -- so once a remote path
+    mapping is corrected the very same release should be grabbable
+    again, and blocklisting it would stand in the way of exactly the
+    retry the user needs. Deleting is pointless besides: the whole
+    problem is that the path is not reachable from here.
+    """
+
     actions_integrity_failed = [
         remove_from_queue,
         add_to_history,
@@ -458,6 +510,34 @@ class PostProcessor:
 
     @classmethod
     def success(cls, download) -> None:
+        unreachable = (
+            unreachable_import_path(download)
+            if cls.verify_integrity_on_success
+            else None
+        )
+        if unreachable is not None:
+            LOGGER.error(
+                "Cannot import %r: the download client reported it at %s, "
+                "but there is nothing at that path as far as Kapowarr is "
+                "concerned. A client running in another container or on "
+                "another host describes files in its own filesystem; add a "
+                "Remote Path Mapping for it under Settings -> Download "
+                "Clients so that path resolves here.",
+                download.title, unreachable
+            )
+            # Same reasoning as the integrity gate below: `add_to_history`
+            # derives its `success` column from the download's state, so
+            # this has to be set before the actions run or a download that
+            # never reached the library is filed as a successful import.
+            download.state = DownloadState.FAILED_STATE
+            cls._run_actions(cls.actions_import_failed, download)
+            send_notification(
+                NotificationEvent.IMPORT_FAILED,
+                'Import failed',
+                f'{download.title} (nothing found at {unreachable})'
+            )
+            return
+
         failure = (
             failed_integrity_check(download)
             if cls.verify_integrity_on_success

@@ -52,7 +52,7 @@ def _main(
             Defaults to None.
 
         url_base (Union[str, None], optional): The URL base to use for the
-        server.
+            server.
             Defaults to None.
 
     Raises:
@@ -76,6 +76,8 @@ def _main(
     )
     from backend.features.tasks import TaskHandler
     from backend.internals.db import DBConnection, set_db_location, setup_db
+    from backend.internals.db_integrity import (DatabaseIntegrityError,
+                                                verify_database_integrity)
     from backend.internals.server import Server, StartTypeHandlers
     from backend.internals.settings import Settings
 
@@ -99,6 +101,15 @@ def _main(
             remove(DBConnection.file + PENDING_RESTORE_SUFFIX)
         except FileNotFoundError:
             pass
+
+    # Do not let setup_db(), migrations, task scheduling, or queue restoration
+    # write into an already-damaged SQLite file. The check is read-only and a
+    # missing/empty path is left for setup_db() to initialize normally.
+    try:
+        verify_database_integrity(DBConnection.file)
+    except DatabaseIntegrityError as error:
+        LOGGER.critical(str(error))
+        exit(2)
 
     SERVER = Server()
     with SERVER.app.app_context():

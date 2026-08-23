@@ -36,7 +36,14 @@ class PullListCheckRunner:
 
     def __init__(self) -> None:
         self._lock = Lock()
-        self._next_id = 1
+        # Checks live in this process only, so a restart loses every one of
+        # them -- and ids restarting from 1 meant the next check after a
+        # restart could take the id a browser was still polling for the check
+        # it lost. That poller would then silently attach to an unrelated
+        # refresh and report its result as its own. Seeding from the clock
+        # keeps ids from being handed out twice across restarts, so a lost
+        # check stays lost and says so.
+        self._next_id = round(time()) * 1000
         self._checks: Dict[int, Dict[str, Any]] = {}
 
     @staticmethod

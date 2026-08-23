@@ -20,6 +20,41 @@ class UpToInfoFilter(logging.Filter):
         return record.levelno <= logging.INFO
 
 
+# Routine web-server chatter that arrives at WARNING/ERROR for conditions that
+# are normal in a self-hosted Kapowarr -- and that borrows Kapowarr's own
+# vocabulary, so it reads as a fault in Kapowarr's log.
+#
+# - waitress logs "Task queue depth is N" whenever more HTTP requests arrive at
+#   once than it has idle threads. "Task queue" is a Kapowarr surface (System >
+#   Tasks), and this is neither that queue nor a problem: one tablet opening a
+#   page full of covers outruns ten threads for a moment.
+# - engineio logs "Invalid session <sid>" at ERROR when a browser reconnects a
+#   websocket whose session predates a restart, which is what every restart
+#   with a tab left open looks like.
+#
+# Demoted rather than dropped: under real sustained load the queue depth is
+# worth seeing, it just is not an error, and hiding it outright would remove
+# the evidence for a slow-server report.
+DEMOTED_LOGGER_PREFIXES = (
+    'waitress.queue',
+    'engineio.server',
+    'socketio.server',
+)
+
+
+class ThirdPartyNoiseFilter(logging.Filter):
+    """Log library chatter at INFO so it stops reading as a Kapowarr fault."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if (
+            record.levelno > logging.INFO
+            and record.name.startswith(DEMOTED_LOGGER_PREFIXES)
+        ):
+            record.levelno = logging.INFO
+            record.levelname = 'INFO'
+        return True
+
+
 class ErrorColorFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> Any:
         result = super().format(record)
@@ -69,6 +104,9 @@ LOGGING_CONFIG = {
     "filters": {
         "up_to_info": {
             "()": UpToInfoFilter
+        },
+        "third_party_noise": {
+            "()": ThirdPartyNoiseFilter
         }
     },
     "handlers": {
@@ -76,19 +114,21 @@ LOGGING_CONFIG = {
             "class": "logging.StreamHandler",
             "level": "WARNING",
             "formatter": "simple_red",
+            "filters": ["third_party_noise"],
             "stream": "ext://sys.stderr"
         },
         "console": {
             "class": "logging.StreamHandler",
             "level": "DEBUG",
             "formatter": "simple",
-            "filters": ["up_to_info"],
+            "filters": ["third_party_noise", "up_to_info"],
             "stream": "ext://sys.stdout"
         },
         "file": {
             "()": MPRotatingFileHandler,
             "level": "DEBUG",
             "formatter": "detailed",
+            "filters": ["third_party_noise"],
             "filename": "",
             "maxBytes": 1_000_000,
             "backupCount": 1,

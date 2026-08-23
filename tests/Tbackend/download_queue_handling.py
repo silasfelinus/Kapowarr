@@ -609,3 +609,124 @@ class load_downloads_restart(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+@patch('backend.features.download_queue.WebSocket')
+class removing_from_the_client_is_best_effort(unittest.TestCase):
+    """A completed download must survive a failure to tidy it up afterwards.
+
+    Removal is the last step before post-processing, and the client has
+    already delivered the files by then. SABnzbd answers the delete call with
+    an error for a job it no longer has -- its normal response to being asked
+    twice -- and that exception escaped into the download thread, between a
+    download completing and being imported. The files were downloaded and then
+    never imported, because clearing them from the client failed.
+    """
+
+    def test_a_completed_download_is_still_imported(self, _mock_ws):
+        handler = _make_handler(delete_completed_downloads=True)
+        dl = _make_external_download([DownloadState.IMPORTING_STATE])
+        dl.remove_from_client.side_effect = ClientNotWorking(
+            BrokenClientReason.FAILED_PROCESSING_RESPONSE
+        )
+        handler.queue = [dl]
+        post_processer = MagicMock()
+
+        handler._DownloadHandler__run_external_download(dl, post_processer)
+
+        dl.remove_from_client.assert_called_once_with(delete_files=False)
+        post_processer.success.assert_called_once_with(dl)
+        self.assertNotIn(
+            dl, handler.queue,
+            'a download that finished must leave the queue even if the '
+            'client could not be told to forget it'
+        )
+
+    def test_a_failed_download_is_still_recorded(self, _mock_ws):
+        handler = _make_handler()
+        dl = _make_external_download([DownloadState.FAILED_STATE])
+        dl.remove_from_client.side_effect = ClientNotWorking(
+            BrokenClientReason.FAILED_PROCESSING_RESPONSE
+        )
+        handler.queue = [dl]
+        post_processer = MagicMock()
+
+        handler._DownloadHandler__run_external_download(dl, post_processer)
+
+        post_processer.perm_failed.assert_called_once_with(dl)
+        self.assertNotIn(dl, handler.queue)
+
+    def test_a_canceled_download_is_still_cleaned_up(self, _mock_ws):
+        handler = _make_handler()
+        dl = _make_external_download([DownloadState.CANCELED_STATE])
+        dl.remove_from_client.side_effect = ClientNotWorking(
+            BrokenClientReason.FAILED_PROCESSING_RESPONSE
+        )
+        handler.queue = [dl]
+        post_processer = MagicMock()
+
+        handler._DownloadHandler__run_external_download(dl, post_processer)
+
+        post_processer.canceled.assert_called_once_with(dl)
+        self.assertNotIn(dl, handler.queue)
+
+    def test_an_unexpected_client_error_is_survived_too(self, _mock_ws):
+        """Nothing this call raises is worth losing a completed download."""
+        handler = _make_handler(delete_completed_downloads=True)
+        dl = _make_external_download([DownloadState.IMPORTING_STATE])
+        dl.remove_from_client.side_effect = RuntimeError('client exploded')
+        handler.queue = [dl]
+        post_processer = MagicMock()
+
+        handler._DownloadHandler__run_external_download(dl, post_processer)
+
+        post_processer.success.assert_called_once_with(dl)
+
+
+class serializing_a_download_with_no_files_yet(unittest.TestCase):
+    """Loading the queue at startup must not depend on files existing.
+
+    `as_dict()` is called the moment a download is added to the queue, via
+    AddedToQueueEvent -- and a usenet job has no files until its client
+    reports where it stored the result, while a download restored from the
+    database has none either. Indexing `_files[0]` unconditionally therefore
+    raised IndexError inside the DownloadImportThread on startup, which took
+    the whole queue load down with it: nothing in the queue was restored.
+    """
+
+    @staticmethod
+    def _download_with_files(files):
+        # A concrete subclass: `identifier` is defined per client type, and
+        # as_dict() reports it.
+        from backend.implementations.download_clients import DirectDownload
+
+        download = DirectDownload.__new__(DirectDownload)
+        download._id = 1
+        download._volume_id = 2
+        download._issue_id = None
+        download._web_link = None
+        download._web_title = None
+        download._web_sub_title = None
+        download._download_link = 'https://example.test/a.cbz'
+        download._pure_link = 'https://example.test/a.cbz'
+        download._source_type = DownloadSource.GETCOMICS
+        download._source_name = 'GetComics'
+        download._files = files
+        download._title = 'Batman 001'
+        download._download_folder = '/downloads'
+        download._size = 0
+        download._state = DownloadState.QUEUED_STATE
+        download._progress = 0.0
+        download._speed = 0.0
+        return download
+
+    def test_no_files_serializes_rather_than_raising(self):
+        result = self._download_with_files([]).as_dict()
+
+        self.assertIsNone(result['file'])
+        self.assertEqual(result['title'], 'Batman 001')
+
+    def test_the_first_file_is_still_reported_when_there_is_one(self):
+        result = self._download_with_files(['/downloads/Batman 001.cbz']).as_dict()
+
+        self.assertEqual(result['file'], '/downloads/Batman 001.cbz')

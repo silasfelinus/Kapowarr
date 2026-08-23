@@ -11,6 +11,7 @@ from backend.features.pull_list import (GetComicsWeeklyReleases,
                                         WeeklyReleaseSources,
                                         _merge_release_sources,
                                         check_weekly_pull_list,
+                                        delete_publisher_subscription,
                                         get_publishers, get_pull_list,
                                         match_releases_to_library,
                                         set_publisher_subscription)
@@ -299,6 +300,41 @@ class weekly_pull_list_persistence(unittest.TestCase):
             publishers[0]['release_counts'][_current_week()], 2
         )
         self.assertEqual(publishers[0]['auto_search'], 1)
+
+    def test_saving_rule_schedules_existing_release_backfill(self):
+        self._check([_release('Batman')])
+        with patch.object(
+            pull_list_module, '_schedule_publisher_subscription_apply'
+        ) as schedule:
+            set_publisher_subscription(' DC Comics ', 1, True)
+
+        schedule.assert_called_once_with('DC Comics')
+
+    def test_disabling_rule_does_not_unmonitor_existing_library_entries(self):
+        with patch.object(
+            pull_list_module, '_schedule_publisher_subscription_apply'
+        ):
+            set_publisher_subscription('DC Comics', 1, True)
+        delete_publisher_subscription('DC Comics')
+
+        self.assertEqual(
+            self.connection.execute(
+                'SELECT COUNT(*) FROM publisher_subscriptions;'
+            ).fetchone()[0],
+            0
+        )
+        self.assertEqual(
+            self.connection.execute(
+                'SELECT monitored FROM volumes WHERE id = 1;'
+            ).fetchone()[0],
+            1
+        )
+        self.assertEqual(
+            self.connection.execute(
+                'SELECT monitored FROM issues WHERE id = 10;'
+            ).fetchone()[0],
+            1
+        )
 
     def test_publisher_counts_are_broken_out_by_week(self):
         current = _release('Batman')

@@ -54,10 +54,10 @@ class publisher_retroactive_automation(unittest.TestCase):
         cursor.row_factory = sqlite3.Row
         return cursor
 
-    def _entry(self, week_start, issue_id):
+    def _entry(self, week_start, issue_id, publisher='DC Comics'):
         return {
             'id': issue_id,
-            'publisher': 'DC Comics',
+            'publisher': publisher,
             'week_start': week_start.isoformat(),
             'release_date': week_start.isoformat(),
             'release_title': f'Backfill Series {issue_id}',
@@ -132,6 +132,42 @@ class publisher_retroactive_automation(unittest.TestCase):
         self.assertEqual(second, [])
         self.assertEqual(add_entry.call_count, 1)
         self.assertEqual(search.call_count, 1)
+
+    def test_rule_save_backfill_only_processes_selected_publisher(self):
+        current = _monday(date.today())
+        self.connection.execute(
+            """
+            INSERT INTO publisher_subscriptions(
+                publisher, root_folder_id, auto_search
+            ) VALUES ('Marvel Comics', 8, 1);
+            """
+        )
+        self.connection.commit()
+        entries = [
+            self._entry(current, 15, 'DC Comics'),
+            self._entry(current, 16, 'Marvel Comics')
+        ]
+
+        with patch.object(
+            pull_list, '_add_or_monitor_entry', return_value=(4, 104)
+        ) as add_entry, patch.object(
+            pull_list, 'auto_search',
+            return_value=[{'link': 'https://example.test/dc'}]
+        ) as search:
+            downloads = pull_list.process_publisher_subscriptions(
+                entries, publisher_filter='DC Comics'
+            )
+
+        self.assertEqual(downloads, [
+            ('https://example.test/dc', 4, 104)
+        ])
+        self.assertEqual(add_entry.call_count, 1)
+        self.assertEqual(search.call_count, 1)
+        history = self.connection.execute(
+            'SELECT release_key FROM publisher_automation_history;'
+        ).fetchall()
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0]['release_key'], 'comicvine:15')
 
 
 if __name__ == '__main__':

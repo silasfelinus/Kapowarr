@@ -5,8 +5,11 @@
 from asyncio import TimeoutError as AsyncTimeoutError
 from asyncio import gather, run, wait_for
 from datetime import date, datetime, timedelta
+from threading import Lock, Thread
 from time import time
 from typing import Any, Dict, List, Tuple, Type, Union
+
+from flask import current_app, has_app_context
 
 from backend.base.definitions import (MonitorScheme, WeeklyReleaseData,
                                       WeeklyReleaseSource)
@@ -25,6 +28,7 @@ from backend.internals.db import get_db
 
 DownloadTuple = Tuple[str, int, Union[int, None]]
 WEEKLY_RELEASE_FETCH_TIMEOUT = 45.0
+_PUBLISHER_AUTOMATION_LOCK = Lock()
 
 
 def _monday(value: date) -> date:
@@ -420,13 +424,47 @@ def get_publishers() -> List[Dict[str, Any]]:
     return publishers
 
 
+def _schedule_publisher_subscription_apply(publisher: str) -> None:
+    """Apply a saved rule to stored releases without blocking the API request."""
+    if not has_app_context():
+        return
+
+    app = current_app._get_current_object()
+
+    def apply_saved_rule() -> None:
+        with app.app_context():
+            try:
+                downloads = process_publisher_subscriptions(
+                    [], publisher_filter=publisher
+                )
+                if downloads:
+                    from backend.features.download_queue import DownloadHandler
+                    DownloadHandler().add_multiple(
+                        (link, volume_id, issue_id, False)
+                        for link, volume_id, issue_id in downloads
+                    )
+            except Exception:
+                LOGGER.exception(
+                    'Failed to apply saved Pull List rule for publisher %s',
+                    publisher
+                )
+
+    Thread(
+        target=apply_saved_rule,
+        name=f'PublisherRule-{publisher[:40]}',
+        daemon=True
+    ).start()
+
+
 def set_publisher_subscription(
     publisher: str,
     root_folder_id: int,
     auto_search_enabled: bool
 ) -> Dict[str, Any]:
     """Create or replace an auto-add/auto-grab publisher rule."""
-    get_db().execute(
+    publisher = publisher.strip()
+    cursor = get_db()
+    cursor.execute(
         """
         INSERT INTO publisher_subscriptions(
             publisher, root_folder_id, auto_search
@@ -435,16 +473,22 @@ def set_publisher_subscription(
             root_folder_id = excluded.root_folder_id,
             auto_search = excluded.auto_search;
         """,
-        (publisher.strip(), root_folder_id, auto_search_enabled)
+        (publisher, root_folder_id, auto_search_enabled)
     )
+    # The backfill worker uses another DB connection, so make the saved rule
+    # visible before starting it instead of depending on request teardown.
+    cursor.connection.commit()
+    _schedule_publisher_subscription_apply(publisher)
     return {
-        'publisher': publisher.strip(),
+        'publisher': publisher,
         'root_folder_id': root_folder_id,
         'auto_search': auto_search_enabled
     }
 
 
 def delete_publisher_subscription(publisher: str) -> None:
+    # Removing a rule is deliberately prospective. Existing series/issues stay
+    # monitored; only future Pull List automation for this publisher stops.
     get_db().execute(
         """
         DELETE FROM publisher_subscriptions
@@ -716,10 +760,14 @@ def act_on_release(
     return volume_id, issue_id
 
 
-def process_publisher_subscriptions(
-    entries: List[Dict[str, Any]]
+def _process_publisher_subscriptions_unlocked(
+    entries: List[Dict[str, Any]],
+    publisher_filter: Union[str, None] = None
 ) -> List[DownloadTuple]:
     """Apply publisher rules to current and all retained past releases."""
+    publisher_filter = (
+        publisher_filter.strip().lower() if publisher_filter else None
+    )
     subscriptions = {
         row['publisher'].lower(): row
         for row in get_db().execute(
@@ -763,6 +811,8 @@ def process_publisher_subscriptions(
         if not week_start or week_start > current_week:
             continue
         publisher = str(entry.get('publisher') or '').lower()
+        if publisher_filter is not None and publisher != publisher_filter:
+            continue
         subscription = subscriptions.get(publisher)
         if not subscription:
             continue
@@ -823,3 +873,14 @@ def process_publisher_subscriptions(
         attempted, succeeded, failed, skipped
     )
     return downloads
+
+
+def process_publisher_subscriptions(
+    entries: List[Dict[str, Any]],
+    publisher_filter: Union[str, None] = None
+) -> List[DownloadTuple]:
+    """Serialize publisher automation and optionally limit it to one rule."""
+    with _PUBLISHER_AUTOMATION_LOCK:
+        return _process_publisher_subscriptions_unlocked(
+            entries, publisher_filter
+        )

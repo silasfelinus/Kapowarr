@@ -187,13 +187,13 @@ class DownloadHandler(metaclass=Singleton):
             ws.emit(status_event)
 
             if download.state == DownloadState.CANCELED_STATE:
-                download.remove_from_client(delete_files=True)
+                self._remove_from_client(download, delete_files=True)
                 post_processer.canceled(download)
                 self.queue.remove(download)
                 break
 
             elif download.state == DownloadState.FAILED_STATE:
-                download.remove_from_client(delete_files=True)
+                self._remove_from_client(download, delete_files=True)
                 post_processer.perm_failed(download)
                 self.queue.remove(download)
                 break
@@ -210,7 +210,7 @@ class DownloadHandler(metaclass=Singleton):
 
             elif download.state == DownloadState.IMPORTING_STATE:
                 if self.settings.sv.delete_completed_downloads:
-                    download.remove_from_client(delete_files=False)
+                    self._remove_from_client(download, delete_files=False)
                 post_processer.success(download)
                 self.queue.remove(download)
                 break
@@ -225,6 +225,35 @@ class DownloadHandler(metaclass=Singleton):
                 )
 
         ws.emit(RemovedFromQueueEvent(download))
+        return
+
+    @staticmethod
+    def _remove_from_client(download: Download, delete_files: bool) -> None:
+        """Remove a finished download from its external client, best effort.
+
+        Removal is tidying up. The client has already delivered the files or
+        failed to, and what happens next -- importing a completed download,
+        recording a failed one -- does not depend on it succeeding. So a client
+        that answers the delete call with an error must not take the download
+        down with it.
+
+        SABnzbd answers exactly that way for a job it no longer has, which is
+        its normal response to being asked to delete something twice. The
+        exception escaped into the download thread between a download
+        completing and its post-processing: the files were downloaded, and then
+        never imported, because clearing them from the client afterwards
+        failed.
+        """
+        try:
+            download.remove_from_client(delete_files=delete_files)
+        except Exception:
+            # Deliberately broad. Nothing this call can raise is worth losing
+            # a completed download over, and the traceback is preserved.
+            LOGGER.exception(
+                'Could not remove %r from its download client; continuing '
+                'with post-processing anyway',
+                download.title
+            )
         return
 
     def __run_torrent_download(self, download: TorrentDownload) -> None:

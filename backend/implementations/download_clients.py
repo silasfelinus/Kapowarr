@@ -407,7 +407,14 @@ class BaseDirectDownload(Download):
             'source_name': self._source_name,
             'type': self.identifier,
 
-            'file': self._files[0],
+            # A usenet job has no files until its client reports where it
+            # stored the result, and a download restored from the database has
+            # none yet either -- but this is serialized the moment a download
+            # is added to the queue, which is well before both. An empty list
+            # is therefore a normal state to be serialized in, not one to
+            # raise on: the IndexError escaped into the download thread and
+            # took the whole queue load down with it at startup.
+            'file': self._files[0] if self._files else None,
             'title': self._title,
             'download_folder': self._download_folder,
 

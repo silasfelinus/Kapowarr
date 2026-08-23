@@ -156,3 +156,89 @@ class a_failed_request_says_why(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class the_formatter_is_the_backstop(unittest.TestCase):
+    """Call-site redaction cannot cover everything that reaches the file.
+
+    An exception carrying a URL in its message is formatted by the logging
+    framework, so its traceback prints the credential whatever the call site
+    did, and a third-party library logs whatever it likes. Redacting the
+    finished line is the only place that sees all of it.
+    """
+
+    def _log(self, emit):
+        import tempfile
+
+        from backend.base.logging import (LOGGER, get_log_file_contents,
+                                          setup_logging)
+
+        setup_logging(tempfile.mkdtemp(), 'redaction-test.log', 20)
+        emit(LOGGER)
+        return get_log_file_contents().getvalue()
+
+    def test_a_key_inside_a_traceback_is_scrubbed(self):
+        def emit(logger):
+            try:
+                raise RuntimeError(
+                    'failed fetching https://prowlarr.example.com/9/download'
+                    '?apikey=SUPERSECRET123&link=abc'
+                )
+            except RuntimeError:
+                logger.exception('Download failed')
+
+        output = self._log(emit)
+
+        self.assertNotIn('SUPERSECRET123', output)
+        self.assertIn('apikey=***', output)
+        self.assertIn(
+            'link=abc', output,
+            'the rest of the link is what makes the failure diagnosable'
+        )
+
+    def test_a_library_message_is_scrubbed_too(self):
+        import logging as stdlib_logging
+
+        output = self._log(
+            lambda _: stdlib_logging.getLogger('waitress').error(
+                'boom for http://user:hunter2@proxy:8080'
+            )
+        )
+
+        self.assertNotIn('hunter2', output)
+        self.assertIn('user:***@proxy:8080', output)
+
+    def test_a_webhook_token_in_a_message_is_scrubbed(self):
+        output = self._log(
+            lambda logger: logger.info(
+                'hook https://discord.com/api/webhooks/999/TOKENabc'
+            )
+        )
+
+        self.assertNotIn('TOKENabc', output)
+        self.assertIn('/webhooks/999/***', output)
+
+    def test_ordinary_diagnostics_survive_untouched(self):
+        output = self._log(
+            lambda logger: logger.info(
+                'Adding download for volume 2409 issue 40901: '
+                'https://getcomics.org/dc/100-bullets-the-us-of-anger-2-2026/'
+            )
+        )
+
+        self.assertIn('volume 2409 issue 40901', output)
+        self.assertIn('100-bullets-the-us-of-anger-2-2026', output)
+        self.assertNotIn('***', output)
+
+    def test_the_exact_line_that_leaked(self):
+        """The shape from the report, verbatim apart from the key itself."""
+        output = self._log(
+            lambda logger: logger.info(
+                'Adding download for volume 2409 issue 40901: '
+                'https://prowlarr.example.com/9/download'
+                '?apikey=0123456789abcdef0123456789abcdef'
+            )
+        )
+
+        self.assertNotIn('0123456789abcdef', output)
+        self.assertIn('apikey=***', output)

@@ -96,7 +96,7 @@ class Constants:
     """The HTTP status codes for which a retry should be done
 
     429 is here because it is the one status that explicitly asks to be
-    retried. Without it a throttled request failed on its first answer, and
+    retried. Without it a throttled request failed on the first answer, and
     the caller cannot tell "slow down" from "gone" -- GetComics starts
     answering 429 under load, and every link offered while it does was
     recorded as broken. urllib3 honours a `Retry-After` header for it, and

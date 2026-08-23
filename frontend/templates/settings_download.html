@@ -81,7 +81,7 @@
 			</table>
 
 			<h2>Acquisition Preferences</h2>
-			<p>These preferences break ties between valid releases. They never make a non-matching release outrank a correct one.</p>
+			<p>These preferences choose between valid releases. Grab size limits can reject a result when its indexer reports a size; sources without size metadata remain eligible.</p>
 			<table class="fold-table">
 				<tbody>
 					<tr>
@@ -95,6 +95,20 @@
 								</tbody>
 							</table>
 							<p>Preferred acquisition protocol when otherwise-equivalent matches are available: Direct (including GetComics), Torrent, or Usenet.</p>
+						</td>
+					</tr>
+					<tr>
+						<th><label for="minimum-grab-size-input">Minimum Grab Size</label></th>
+						<td>
+							<input type="number" id="minimum-grab-size-input" min="0" step="1">
+							<p>Minimum completed release size in MiB. The default is 1 MiB. Set to 0 to disable the minimum.</p>
+						</td>
+					</tr>
+					<tr>
+						<th><label for="maximum-grab-size-input">Maximum Grab Size</label></th>
+						<td>
+							<input type="number" id="maximum-grab-size-input" min="0" step="1">
+							<p>Maximum completed release size in MiB. The default is 300 MiB. Set to 0 for no maximum.</p>
 						</td>
 					</tr>
 					<tr>

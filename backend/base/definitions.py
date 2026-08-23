@@ -30,7 +30,7 @@ class Constants:
     "Seconds to wait after interrupt until subprocess is killed"
 
     HOSTING_THREADS = 10
-    "Amount of hosting threads"
+    "Amount of threads for the webserver"
 
     HOSTING_REVERT_TIME = 60.0 # seconds
     """
@@ -766,8 +766,8 @@ class DiscoverMatchData(DiscoverItemData):
 
 class WeeklyReleaseData(TypedDict):
     """One "release" line parsed out of a weekly-release source (see
-    `backend.implementations.weekly_releases`), before any
-    cross-referencing against the library has happened.
+    `backend.implementations.weekly_releases`), before any cross-
+    referencing against the library has happened.
     """
     series: str
     issue_number: Union[str, None]
@@ -1112,7 +1112,7 @@ class StartTypeHandler(ABC):
 class WebSocketEvent(ABC):
     @abstractmethod
     def get_type(self) -> WebSocketEventType:
-        """Get the type of event.
+        """Get the type of websocket event.
 
         Returns:
             WebSocketEventType: The event type.
@@ -1754,8 +1754,8 @@ class ExternalDownload(Download):
 
             LinkBroken: The link doesn't work.
 
-            DownloadLimitReached: Can't download because the limit of the service
-                is reached.
+            DownloadLimitReached: At the source that is downloaded from,
+                we've reached a rate limit.
         """
         ...
 

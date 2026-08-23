@@ -404,6 +404,15 @@ class DateType(BaseEnum):
 class GeneralFileType(BaseEnum):
     METADATA = "metadata"
     COVER = "cover"
+    COLLECTED = "collected"
+    """
+    A collected edition of the volume -- an omnibus, a trade paperback.
+    It belongs to the volume, but it is deliberately not bound to any
+    issue: a collection that only covers part of a run would otherwise
+    mark the whole run as had, and the issues it does not contain would
+    never be fetched. Kept as a volume file so it lives in the folder and
+    is visible, while the individual issues stay wanted.
+    """
 
 
 class SpecialVersion(BaseEnum):

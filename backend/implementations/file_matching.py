@@ -29,28 +29,34 @@ from backend.internals.settings import Settings
 
 
 # region Automatic Match
-def collected_edition_covers_volume(
+def collected_edition_of_volume(
     file_data: FilenameData,
     volume_data: VolumeData
 ) -> bool:
-    """Whether one file stands in for every issue of a normal volume.
+    """Whether the file is a collected edition belonging to a normal volume.
 
-    An omnibus in the series' own folder is the whole run, not one issue of
-    it. Binding it to issue one and calling the rest missing would send
-    Kapowarr off to download issues that are already on disk inside this very
-    file, so it covers every issue instead and the volume reads complete.
+    An omnibus in the series' own folder is not one issue of that series, so
+    it must not be bound to issue one -- the rest would read as missing and
+    Kapowarr would go download comics that are already on disk inside this
+    very file.
 
-    The volume number has to agree for that to be safe. The parser defaults to
-    1 when a name carries no volume at all, so "Black Hammer Omnibus" lands on
-    the volume's own number and qualifies, while "Batman Volume 3" names one
-    part of a longer run, cannot be said to cover it, and is left alone
-    exactly as before.
+    It is not bound to every issue either, tempting as that is. Plenty of
+    collections cover only part of a run, and nothing in a folder name
+    reliably says which: "Black Science Omnibus - The Beginner's Guide to
+    Entropy" collects roughly a third of Black Science and announces none of
+    that. Marking the whole run as had on that evidence would quietly strand
+    every issue the book does not contain.
+
+    So it is filed as a volume file instead. It sits in the folder and is
+    visible in the Files window, while the individual issues stay wanted and
+    are fetched normally. That means a large collected file alongside the
+    issues it duplicates, which is the deliberate trade: redundant bytes over
+    a silently incomplete series.
     """
     return (
         volume_data.special_version == SpecialVersion.NORMAL
         and file_data['special_version'] in COLLECTED_EDITION_MATCH
         and file_data['issue_number'] is None
-        and file_data['volume_number'] == volume_data.volume_number
     )
 
 
@@ -204,17 +210,15 @@ def scan_files(
                 (current_issue_files[file], volume_issues[0].id)
             )
 
-        elif (
-            volume_issues
-            and collected_edition_covers_volume(file_data, volume_data)
-        ):
+        elif collected_edition_of_volume(file_data, volume_data):
+            # Belongs to the volume, bound to none of its issues. See
+            # `collected_edition_of_volume` for why coverage is not claimed.
             if file not in current_issue_files:
                 current_issue_files[file] = FilesDB.add_file(file)
 
-            for issue in volume_issues:
-                new_issue_bindings.add(
-                    (current_issue_files[file], issue.id)
-                )
+            new_general_bindings[current_issue_files[file]] = (
+                GeneralFileType.COLLECTED.value
+            )
 
         elif file_data["issue_number"] is not None:
             # Normal issue

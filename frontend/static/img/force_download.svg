@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="256" height="256" x="0" y="0" viewBox="0 0 512 512" style="enable-background:new 0 0 512 512" xml:space="preserve">
+	<!--
+		Force Download: the download arrow with an override mark, so it reads as
+		a variant of Download rather than as a different action. It previously
+		borrowed manual_search.svg, which meant a "search" icon sat inside a
+		list of search results and looked like it would search again.
+	-->
+	<g>
+		<g>
+			<path d="M188.821,377.6c37.49,37.491,98.274,37.491,135.765,0.001c0,0,0.001-0.001,0.001-0.001l68.523-68.523   c12.712-12.278,13.064-32.536,0.786-45.248c-12.278-12.712-32.536-13.064-45.248-0.786c-0.267,0.257-0.529,0.52-0.786,0.786   l-59.371,59.349L288,32c0-17.673-14.327-32-32-32l0,0c-17.673,0-32,14.327-32,32l0.448,290.709l-58.901-58.901   c-12.712-12.278-32.97-11.926-45.248,0.786c-11.977,12.401-11.977,32.061,0,44.462L188.821,377.6z" fill="black"></path>
+			<path d="M330.667,309.333c-17.673,0-32,14.327-32,32v97.941c-0.012,4.814-3.911,8.714-8.725,8.725H72.725   c-4.814-0.012-8.714-3.911-8.725-8.725v-97.941c0-17.673-14.327-32-32-32s-32,14.327-32,32v97.941   C0.047,479.42,32.58,511.953,72.725,512h217.216c40.146-0.047,72.678-32.58,72.725-72.725v-97.941   C362.667,323.66,348.34,309.333,330.667,309.333z" fill="black"></path>
+			<!-- The override mark: a bang, for "do it regardless". -->
+			<path d="M448,288c-14.359,0-26,11.641-26,26v96c0,14.359,11.641,26,26,26s26-11.641,26-26v-96   C474,299.641,462.359,288,448,288z" fill="black"></path>
+			<circle cx="448" cy="480" r="28" fill="black"></circle>
+		</g>
+	</g>
+</svg>

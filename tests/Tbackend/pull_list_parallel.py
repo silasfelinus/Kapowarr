@@ -86,6 +86,33 @@ class pull_list_parallel_runner(unittest.TestCase):
             'Release calendar updated for 2026-05-04.'
         )
 
+    def test_selected_week_applies_publisher_rules_and_queues_grabs(self):
+        runner = self._runner()
+        requested_week = date(2026, 5, 4)
+        releases = [{
+            'release_title': 'Batman',
+            'publisher': 'DC Comics',
+            'week_start': '2026-05-04'
+        }]
+        downloads = [('https://example.test/batman.nzb', 7, 70)]
+        with patch.object(
+            parallel, 'check_weekly_pull_list', return_value=releases
+        ), patch.object(
+            parallel, 'process_publisher_subscriptions', return_value=downloads
+        ) as process, patch.object(
+            parallel, 'DownloadHandler'
+        ) as download_handler, patch.object(runner, '_record_history'):
+            runner._run(1, requested_week)
+
+        process.assert_called_once_with(releases)
+        download_handler.return_value.add_multiple.assert_called_once()
+        queued = list(
+            download_handler.return_value.add_multiple.call_args.args[0]
+        )
+        self.assertEqual(queued, [
+            ('https://example.test/batman.nzb', 7, 70, False)
+        ])
+
     def test_run_surfaces_refresh_failure(self):
         runner = self._runner()
         with patch.object(

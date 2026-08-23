@@ -52,7 +52,7 @@ def _main(
             Defaults to None.
 
         url_base (Union[str, None], optional): The URL base to use for the
-            server.
+        server.
             Defaults to None.
 
     Raises:

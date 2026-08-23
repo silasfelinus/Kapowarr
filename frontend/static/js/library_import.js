@@ -211,7 +211,8 @@ function loadProposal(api_key) {
 	};
 	const ffi = document.querySelector('#folder-filter-input');
 	if (ffi.offsetParent !== null && (ffi.value || null) !== null)
-		params.folder_filter = encodeURIComponent(ffi.value);
+		// Encoded by buildQuery; encoding here as well would double it.
+		params.folder_filter = ffi.value;
 
 	continuousReviewOpen = false;
 	hide(

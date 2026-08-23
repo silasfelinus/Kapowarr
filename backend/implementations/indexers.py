@@ -22,6 +22,7 @@ from backend.base.definitions import (DownloadSource,
 from backend.base.file_extraction import extract_filename_data, refine_special_version
 from backend.base.helpers import AsyncSession, extract_year_from_date
 from backend.base.logging import LOGGER
+from backend.features.grab_size_limits import filter_search_results
 from backend.implementations import indexers_core as _core
 from backend.implementations.indexers_core import *
 from backend.implementations.matching import check_search_result_match
@@ -167,6 +168,64 @@ def _xml_child_text(element, name: str):
     return None
 
 
+def _byte_count(value):
+    try:
+        result = int(value)
+    except (TypeError, ValueError):
+        return None
+    return result if result >= 0 else None
+
+
+def _xml_item_size(item):
+    candidates = []
+    for child in item:
+        name = _local_name(child.tag)
+        if (
+            name == 'attr'
+            and str(child.attrib.get('name', '')).lower() == 'size'
+        ):
+            candidates.append(child.attrib.get('value'))
+        elif name == 'enclosure':
+            candidates.append(child.attrib.get('length'))
+        elif name == 'size':
+            candidates.append((child.text or '').strip())
+
+    for candidate in candidates:
+        size = _byte_count(candidate)
+        if size is not None:
+            return size
+    return None
+
+
+def _json_item_size(item):
+    candidates = [item.get('size')]
+
+    attrs = item.get('newznab:attr', item.get('attr', []))
+    if isinstance(attrs, dict):
+        attrs = [attrs]
+    if isinstance(attrs, list):
+        for attr in attrs:
+            if not isinstance(attr, dict):
+                continue
+            values = attr.get('@attributes', attr)
+            if not isinstance(values, dict):
+                continue
+            if str(values.get('name', '')).lower() == 'size':
+                candidates.append(values.get('value'))
+
+    enclosure = item.get('enclosure')
+    if isinstance(enclosure, dict):
+        values = enclosure.get('@attributes', enclosure)
+        if isinstance(values, dict):
+            candidates.append(values.get('length'))
+
+    for candidate in candidates:
+        size = _byte_count(candidate)
+        if size is not None:
+            return size
+    return None
+
+
 def _parse_newznab_xml(body: str, indexer) -> list:
     """Parse canonical Newznab RSS/XML into the normal search-result shape."""
     try:
@@ -206,12 +265,16 @@ def _parse_newznab_xml(body: str, indexer) -> list:
                     link = child.text.strip()
         if not link:
             continue
-        results.append({
+        result = {
             **extract_filename_data(title, assume_volume_number=False, fix_year=True),
             'link': link,
             'display_title': title,
             'source': indexer.title
-        })
+        }
+        size = _xml_item_size(item)
+        if size is not None:
+            result['size'] = size
+        results.append(result)
     return results
 
 
@@ -241,12 +304,16 @@ def _parse_newznab_json(data, indexer) -> list:
         link = _extract_item_link(item) if title else None
         if not title or not link:
             continue
-        results.append({
+        result = {
             **extract_filename_data(title, assume_volume_number=False, fix_year=True),
             'link': link,
             'display_title': title,
             'source': indexer.title
-        })
+        }
+        size = _json_item_size(item)
+        if size is not None:
+            result['size'] = size
+        results.append(result)
     return results
 
 
@@ -270,9 +337,10 @@ async def search_indexer(session: AsyncSession, indexer: Indexer, query: str) ->
     if not body:
         return []
     try:
-        return _parse_newznab_json(json_loads(body), indexer)
+        results = _parse_newznab_json(json_loads(body), indexer)
     except ValueError:
-        return _parse_newznab_xml(body, indexer)
+        results = _parse_newznab_xml(body, indexer)
+    return filter_search_results(results)
 
 
 async def create_nzb_download(

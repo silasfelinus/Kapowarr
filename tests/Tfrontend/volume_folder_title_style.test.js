@@ -18,9 +18,20 @@ test('media management loads the volume folder title-style helper', () => {
 	assert.match(template, /settings_volume_folder_title\.js/);
 });
 
+test('volume folder title style can drop a leading article token', () => {
+	assert.equal(
+		setVolumeFolderSeriesToken('{series_name} ({year})', 'drop'),
+		'{series_name_no_article} ({year})'
+	);
+	assert.equal(
+		detectVolumeFolderSeriesToken('{series_name_no_article} ({year})'),
+		'drop'
+	);
+});
+
 test('volume folder title style can move a leading article to the end token', () => {
 	assert.equal(
-		setVolumeFolderSeriesToken('{series_name} ({year})', 'sort'),
+		setVolumeFolderSeriesToken('{series_name_no_article} ({year})', 'sort'),
 		'{clean_series_name} ({year})'
 	);
 	assert.equal(
@@ -42,6 +53,13 @@ test('volume folder title style can restore the canonical series-name token', ()
 
 test('custom naming formats stay untouched', () => {
 	const custom = '{publisher}/{year}/Volume {volume_number}';
-	assert.equal(setVolumeFolderSeriesToken(custom, 'sort'), custom);
+	assert.equal(setVolumeFolderSeriesToken(custom, 'drop'), custom);
 	assert.equal(detectVolumeFolderSeriesToken(custom), 'custom');
+});
+
+test('formats mixing series-name tokens remain custom', () => {
+	assert.equal(
+		detectVolumeFolderSeriesToken('{series_name} - {clean_series_name}'),
+		'custom'
+	);
 });

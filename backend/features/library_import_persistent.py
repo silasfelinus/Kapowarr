@@ -632,13 +632,19 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
                 self._emit_persistent_status('complete')
 
         except Exception as error:
-            if self.job_id is not None:
+            if self.job_id is not None and not self.stop:
                 # A real worker error should not spin forever on every page load.
                 # Preserve all checkpoints and wait for an explicit retry.
                 mark_job_paused(
                     self.job_id,
                     f'{type(error).__name__}: {error}'
                 )
+            # A shutdown that interrupts the worker is deliberately left alone.
+            # Whatever it raises on the way down -- a closed database, a torn
+            # down app context -- is a consequence of stopping, not a reason to
+            # hold the job for a human. The row is already `running`, and that
+            # is exactly the state startup resumes from; pausing it here is
+            # what made a restart cost the rest of the import.
             raise
 
         finally:

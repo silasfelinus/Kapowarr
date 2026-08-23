@@ -21,8 +21,17 @@ if TYPE_CHECKING:
     from backend.base.definitions import (FilenameData, SearchResultData,
                                           SearchResultMatchData, VolumeData)
 
+# `\bthe\b`, not `\bthe\s`: a great many libraries file a series under its
+# trailing article -- "Immortal Hulk, The", "Crow - Pestilence, The", and in
+# this shape all the way up to a folder named "Art of, The". A "the" at the end
+# of a name has no whitespace after it, so the old pattern left it in place
+# while stripping the leading "the" from the ComicVine title, and the two could
+# never be equal. `?` is stripped for the same reason: a folder name cannot
+# carry one on most filesystems, so "Are You Afraid of Darkseid" could never
+# reach "Are You Afraid of Darkseid?". Neither character distinguishes one
+# series from another, and spaces are removed straight afterwards anyway.
 clean_title_regex = compile(
-    r'((?<=annual)s|/|\-|–|\+|,|\.|\!|:|\bthe\s|\band\b|&|’|\'|\"|\bone[\-\s]?shot\b|\bhard[\-\s]?cover\b|\bomnibus\b|\btpb\b)'
+    r'((?<=annual)s|/|\-|–|\+|,|\.|\!|\?|:|\bthe\b|\band\b|&|’|\'|\"|\bone[\-\s]?shot\b|\bhard[\-\s]?cover\b|\bomnibus\b|\btpb\b)'
 )
 
 

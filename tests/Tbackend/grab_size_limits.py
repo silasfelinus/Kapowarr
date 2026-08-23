@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+from asyncio import run
 from unittest import TestCase
 from unittest.mock import patch
 
@@ -7,12 +8,14 @@ from backend.base.custom_exceptions import InvalidKeyValue
 from backend.features import grab_size_limits as limits
 from backend.implementations.indexers import (_parse_newznab_json,
                                               _parse_newznab_xml)
+from backend.implementations.torznab import search_torznab_indexer
 
 
 MIB = 1024 * 1024
+MISSING = object()
 
 
-def result(size_marker=object()):
+def result(size_marker=MISSING):
     entry = {
         'series': 'Batman',
         'year': 2020,
@@ -24,7 +27,7 @@ def result(size_marker=object()):
         'display_title': 'Batman 001 (2020)',
         'source': 'test'
     }
-    if size_marker.__class__ is not object:
+    if size_marker is not MISSING:
         entry['size'] = size_marker
     return entry
 
@@ -145,3 +148,34 @@ class newznab_size_metadata(TestCase):
             }
         }, self.Indexer())
         self.assertEqual(parsed[0]['size'], 30 * MIB)
+
+
+class torznab_size_metadata(TestCase):
+    class Indexer:
+        id = 7
+        title = 'Example Torrents'
+        base_url = 'https://example.invalid/api'
+        api_key = 'secret'
+        category_filter_enabled = False
+        categories = ''
+
+    class Session:
+        async def get_text(self, *_args, **_kwargs):
+            return '''<?xml version="1.0"?>
+            <rss xmlns:torznab="http://torznab.com/schemas/2015/feed">
+              <channel><item>
+                <title>Batman 001 (2020)</title>
+                <enclosure url="https://example.invalid/1" length="41943040" />
+                <torznab:attr name="seeders" value="12" />
+              </item></channel>
+            </rss>'''
+
+    @patch(
+        'backend.implementations.torznab.filter_search_results',
+        side_effect=lambda entries: entries
+    )
+    def test_enclosure_length_is_exposed_as_size(self, _filter):
+        parsed = run(search_torznab_indexer(
+            self.Session(), self.Indexer(), 'Batman'
+        ))
+        self.assertEqual(parsed[0]['size'], 40 * MIB)

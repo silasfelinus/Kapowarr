@@ -41,7 +41,12 @@
 		<td class="leechers-column peer-column"></td>
 		<td class="search-action-column action-list" aria-label="Actions">
 			{{ icon_button('', "Download", "download.svg") }}
-			{{ icon_button('', "Force Download", "manual_search.svg") }}
+			{#
+				Force Download borrowed manual_search.svg, so a "search" icon sat
+				inside a list of search results and read as "search again" rather
+				than as a variant of the button beside it.
+			#}
+			{{ icon_button('', "Download anyway - skips the check that this release matches the issue", "force_download.svg") }}
 			{{ icon_button('', "Add to blocklist", "blocklist.svg") }}
 		</td>
 	</tr>

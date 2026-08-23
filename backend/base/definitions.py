@@ -546,6 +546,16 @@ class EnqueuingDownloadFailureReason(BaseEnum):
 
     WEBPAGE_BROKEN = "Webpage unavailable"
     NO_MATCHES = "No links found on webpage that match to volume and are not blocklisted"
+    # A single indexer result that was fetched successfully and then refused by
+    # the match check. NO_MATCHES describes scraping a page and finding nothing
+    # usable on it, which reads as though the release could not be reached --
+    # here it was reached, it just is not the issue that was asked for. Naming
+    # the override matters because the button that performs it sits next to the
+    # one that was pressed.
+    RESULT_DOES_NOT_MATCH = (
+        "This release does not match the issue you asked for. Use Download "
+        "anyway (next to Download) to add it regardless."
+    )
     NO_WORKING_LINKS = "All download links found on the webpage are broken"
     ONLY_RATE_LIMITED_LINKS = "All working download links on the webpage are from rate limited services"
 

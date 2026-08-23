@@ -525,7 +525,7 @@ async def create_nzb_download(
     Raises:
         EnqueuingDownloadFailure: The link couldn't be reached
             (LINK_BROKEN), or it doesn't match what's being downloaded for
-            and force_match is False (NO_MATCHES).
+            and force_match is False (RESULT_DOES_NOT_MATCH).
 
     Returns:
         Download: The download, ready to be queued.
@@ -594,7 +594,7 @@ async def create_nzb_download(
         )
         if not match["match"]:
             raise EnqueuingDownloadFailure(
-                EnqueuingDownloadFailureReason.NO_MATCHES
+                EnqueuingDownloadFailureReason.RESULT_DOES_NOT_MATCH
             )
 
     return NZBDownload(

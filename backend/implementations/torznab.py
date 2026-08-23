@@ -710,7 +710,7 @@ async def create_torznab_download(
         )
         if not match['match']:
             raise EnqueuingDownloadFailure(
-                EnqueuingDownloadFailureReason.NO_MATCHES
+                EnqueuingDownloadFailureReason.RESULT_DOES_NOT_MATCH
             )
 
     magnet = await _normalise_torrent_link(link, title)

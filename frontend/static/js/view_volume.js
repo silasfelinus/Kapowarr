@@ -396,17 +396,16 @@ function showManualSearch(api_key, issue_id=null, issue_title=null) {
 			entry.querySelector('.seeders-column').innerText = result.seeders ?? '—';
 			entry.querySelector('.leechers-column').innerText = result.leechers ?? '—';
 
+			const action = downloadActionFor(result);
 			const download_button = entry.querySelector('.search-action-column :nth-child(1)');
 			download_button.classList.add('icon-text-color');
+			setImage(download_button, action.icon, action.title);
 			download_button.onclick =
-				e => addManualSearch(result.link, false, download_button, api_key, issue_id);
+				e => addManualSearch(
+					result.link, action.force, download_button, api_key, issue_id
+				);
 
-			const force_download_button = entry.querySelector('.search-action-column :nth-child(2)');
-			force_download_button.classList.add('icon-text-color');
-			force_download_button.onclick =
-				e => addManualSearch(result.link, true, force_download_button, api_key, issue_id);
-
-			const blocklist_button = entry.querySelector('.search-action-column :nth-child(3)')
+			const blocklist_button = entry.querySelector('.search-action-column :nth-child(2)')
 			if (result.match_issue === null || !result.match_issue.includes('blocklist'))
 				// Show blocklist button
 				blocklist_button.onclick =
@@ -424,6 +423,24 @@ function showManualSearch(api_key, issue_id=null, issue_title=null) {
 
 		hide([message], [table]);
 	});
+};
+
+// What the one download button on a search-result row should be.
+//
+// There were two buttons here -- Download and Force Download -- side by side
+// and near-identical, and on a result that does not match the issue the first
+// always failed while the second always worked. Whether a result matches is
+// already decided and shown in the Match column, so the row does not need to
+// ask: it uses the right one, and says so.
+function downloadActionFor(result) {
+	if (result.match)
+		return {force: false, icon: 'download.svg', title: 'Download'};
+
+	return {
+		force: true,
+		icon: 'force_download.svg',
+		title: `Download anyway - ${result.match_issue || 'this release does not match the issue'}`
+	};
 };
 
 function addManualSearch(link, force, button, api_key, issue_id=null) {

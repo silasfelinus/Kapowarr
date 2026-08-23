@@ -6,7 +6,7 @@ and abstract classes.
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from enum import Enum
 from threading import Event, Thread
 from typing import (TYPE_CHECKING, Any, Callable, Dict, List, Mapping,
@@ -51,13 +51,13 @@ class Constants:
     "Displayed application title when no custom app_title setting is set"
 
     DB_TIMEOUT = 10.0 # seconds
-    "Seconds to wait on database connection before timing out"
+    "Seconds to wait on database command before timing out"
 
     DB_MAX_CONCURRENT_CONNECTIONS = 32
     "Maximum allowed database connections to be open at the same time"
 
     LOGGER_NAME = "Kapowarr"
-    "The name of the logger that is used"
+    "Name of the logger that is used"
 
     LOGGER_FILENAME = "Kapowarr.log"
     "Filename that the logs are put in"
@@ -96,7 +96,7 @@ class Constants:
     """The HTTP status codes for which a retry should be done
 
     429 is here because it is the one status that explicitly asks to be
-    retried. Without it a throttled request failed on its first answer, and
+    retried. Without it a throttled request failed on the first answer, and
     the caller cannot tell "slow down" from "gone" -- GetComics starts
     answering 429 under load, and every link offered while it does was
     recorded as broken. urllib3 honours a `Retry-After` header for it, and
@@ -222,7 +222,7 @@ class FileConstants:
         ".xml", ".json",
         ".XML", ".JSON"
     )
-    "Metadata extensions, both lowercase and uppercase, with dot-prefix"
+    "Metadata file extensions, both lowercase and uppercase, with dot-prefix"
 
     METADATA_FILES = {
         "cvinfo.xml", "comicinfo.xml",
@@ -339,7 +339,7 @@ class WebSocketEventType(BaseEnum):
     QUEUE_ADDED = "queue_added"
     "A download is added to the queue"
     QUEUE_STATUS = "queue_status"
-    "A status update of a download in the queue"
+    "A status update on a download in the queue"
     QUEUE_ENDED = "queue_ended"
     "A download has finished in the queue"
 
@@ -478,7 +478,7 @@ class LibrarySorting(BaseEnum):
 
 class LibraryFilter(BaseEnum):
     """
-    The way to filter the library, where the key value is the entire
+    The filter to apply to the library, where the key value is the entire
     `WHERE ...` SQL statement
     """
 
@@ -509,7 +509,7 @@ class BlocklistReasonID(BaseEnum):
 
 
 class BlocklistReason(BaseEnum):
-    "The reason for putting the link on the blocklist"
+    "The reason for putting a link on the blocklist"
 
     LINK_BROKEN = "Link broken"
     NO_WORKING_LINKS = "No supported or working links"
@@ -557,7 +557,7 @@ class EnqueuingDownloadFailureReason(BaseEnum):
         "anyway (next to Download) to add it regardless."
     )
     NO_WORKING_LINKS = "All download links found on the webpage are broken"
-    ONLY_RATE_LIMITED_LINKS = "All working download links found are from services whose download limit has been reached"
+    ONLY_RATE_LIMITED_LINKS = "All working download links on the webpage are from rate limited services"
 
     LINK_BROKEN = "Download link broken"
 
@@ -601,7 +601,7 @@ service on the GC page
 
 # Future proofing. In the future, there'll be sources like 'torrent' and
 # 'usenet'. In part of the code, we want access to all download sources,
-# and in the other part we only want access to GC services. So in preparation
+# and in the other part we only want the GC services. So in preparation
 # of the torrent and usenet sources coming, we're already making the
 # distinction here.
 class DownloadSource(BaseEnum):
@@ -773,7 +773,7 @@ class WeeklyReleaseData(TypedDict):
     issue_number: Union[str, None]
     year: Union[int, None]
     link: str
-    "Link to the source post/page for the release"
+    "Link to the source post/page the release was found on"
     source: str
     "Display name of the weekly-release source (e.g. 'GetComics')"
     publisher: Union[str, None]
@@ -974,14 +974,6 @@ class BaseNamingKeys:
 @dataclass
 class VolumeNamingKeys(BaseNamingKeys):
     special_version: Union[str, None]
-    series_name_no_article: str = field(init=False)
-
-    def __post_init__(self) -> None:
-        self.series_name_no_article = self.series_name
-        for prefix in ('The ', 'A '):
-            if self.series_name.startswith(prefix):
-                self.series_name_no_article = self.series_name[len(prefix):]
-                break
 
 
 @dataclass
@@ -1301,7 +1293,7 @@ class ExternalDownloadClient(ABC):
         """Create a connection with a client.
 
         Args:
-            client_id (int): The ID/hash of the download to get info of.
+            client_id (int): The ID of the client.
         """
         ...
 
@@ -1779,8 +1771,8 @@ class ExternalDownload(Download):
     @abstractmethod
     def update_status(self) -> None:
         """
-        Update the various variables about the download based on the status
-        of the external download client.
+        Update the various variables about the state/progress
+        of the external download.
 
         Raises:
             ClientNotWorking: Can't connect to client.

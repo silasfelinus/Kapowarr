@@ -8,8 +8,9 @@ from collections import Counter
 from os.path import basename, isdir
 from typing import Dict, List, Set, Tuple, Union
 
-from backend.base.definitions import (FileConstants, FileMatch,
-                                      GeneralFileType, SpecialVersion)
+from backend.base.definitions import (FileConstants, FileMatch, FilenameData,
+                                      GeneralFileType, SpecialVersion,
+                                      VolumeData)
 from backend.base.file_extraction import (extract_filename_data,
                                           refine_special_version)
 from backend.base.files import (create_folder, delete_empty_child_folders,
@@ -18,7 +19,8 @@ from backend.base.files import (create_folder, delete_empty_child_folders,
 from backend.base.helpers import (extract_year_from_date,
                                   filtered_iter, force_range)
 from backend.base.logging import LOGGER
-from backend.implementations.matching import file_importing_filter
+from backend.implementations.matching import (COLLECTED_EDITION_MATCH,
+                                              file_importing_filter)
 from backend.implementations.root_folders import RootFolders
 from backend.internals.db import commit, get_db
 from backend.internals.db_models import FilesDB
@@ -27,6 +29,31 @@ from backend.internals.settings import Settings
 
 
 # region Automatic Match
+def collected_edition_covers_volume(
+    file_data: FilenameData,
+    volume_data: VolumeData
+) -> bool:
+    """Whether one file stands in for every issue of a normal volume.
+
+    An omnibus in the series' own folder is the whole run, not one issue of
+    it. Binding it to issue one and calling the rest missing would send
+    Kapowarr off to download issues that are already on disk inside this very
+    file, so it covers every issue instead and the volume reads complete.
+
+    The volume number has to agree for that to be safe. The parser defaults to
+    1 when a name carries no volume at all, so "Black Hammer Omnibus" lands on
+    the volume's own number and qualifies, while "Batman Volume 3" names one
+    part of a longer run, cannot be said to cover it, and is left alone
+    exactly as before.
+    """
+    return (
+        volume_data.special_version == SpecialVersion.NORMAL
+        and file_data['special_version'] in COLLECTED_EDITION_MATCH
+        and file_data['issue_number'] is None
+        and file_data['volume_number'] == volume_data.volume_number
+    )
+
+
 def scan_files(
     volume_id: int,
     filepath_filter: List[str] = [],
@@ -176,6 +203,18 @@ def scan_files(
             new_issue_bindings.add(
                 (current_issue_files[file], volume_issues[0].id)
             )
+
+        elif (
+            volume_issues
+            and collected_edition_covers_volume(file_data, volume_data)
+        ):
+            if file not in current_issue_files:
+                current_issue_files[file] = FilesDB.add_file(file)
+
+            for issue in volume_issues:
+                new_issue_bindings.add(
+                    (current_issue_files[file], issue.id)
+                )
 
         elif file_data["issue_number"] is not None:
             # Normal issue

@@ -165,7 +165,8 @@ def add_to_blocklist(
 
     # Add to database
     LOGGER.info(
-        f'Adding {blocked_link} to blocklist with reason "{reason.value}"'
+        f'Adding {redact_url(blocked_link)} to blocklist with reason '
+        f'"{reason.value}"'
     )
 
     reason_id = BlocklistReasonID[reason.name].value

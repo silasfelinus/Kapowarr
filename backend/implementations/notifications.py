@@ -43,7 +43,7 @@ from requests import RequestException, Response
 from backend.base.custom_exceptions import (InvalidKeyValue, KeyNotFound,
                                             NotificationServiceNotFound)
 from backend.base.definitions import NotificationEvent, NotificationServiceType
-from backend.base.helpers import Session, normalise_base_url
+from backend.base.helpers import Session, normalise_base_url, redact_url
 from backend.base.logging import LOGGER
 from backend.internals.db import get_db
 from backend.internals.server import Server
@@ -112,7 +112,9 @@ def _post_bounded(url: str, payload: Dict[str, Any]) -> Union[Response, None]:
         return None
 
     except RequestException:
-        LOGGER.exception("Failed to send notification to %s", url)
+        LOGGER.exception(
+            "Failed to send notification to %s", redact_url(url)
+        )
         return None
 
     finally:

@@ -1,0 +1,115 @@
+# -*- coding: utf-8 -*-
+
+"""Credentials in URLs must not reach the log file people share."""
+
+import unittest
+
+from backend.base.helpers import redact_url
+
+
+class credential_bearing_urls_are_masked(unittest.TestCase):
+    """Indexer and tracker URLs carry a working key in the query string.
+
+    Kapowarr logs the download link on every enqueue, on every request retry,
+    and again when a broken link is blocklisted -- so a log downloaded for a
+    bug report, or handed to someone helping, contained a live Prowlarr API
+    key in plain text several times over.
+    """
+
+    def test_a_prowlarr_api_key_is_masked(self):
+        self.assertEqual(
+            redact_url(
+                'https://prowlarr.example.com/9/download'
+                '?apikey=0123456789abcdef0123456789abcdef'
+            ),
+            'https://prowlarr.example.com/9/download?apikey=***'
+        )
+
+    def test_the_rest_of_the_query_survives(self):
+        """The other parameters are what make a link diagnosable at all."""
+        self.assertEqual(
+            redact_url('https://p/9/download?apikey=k&link=abc&file=n.nzb'),
+            'https://p/9/download?apikey=***&link=abc&file=n.nzb'
+        )
+
+    def test_tracker_passkeys_are_masked_too(self):
+        self.assertEqual(
+            redact_url('http://tracker/announce?passkey=deadbeef'),
+            'http://tracker/announce?passkey=***'
+        )
+
+    def test_case_does_not_matter(self):
+        self.assertEqual(
+            redact_url('https://x/y?ApiKey=secret'),
+            'https://x/y?ApiKey=***'
+        )
+
+    def test_a_url_with_no_credentials_is_returned_unchanged(self):
+        url = 'https://getcomics.org/dc/100-bullets-the-us-of-anger-2-2026/'
+        self.assertEqual(redact_url(url), url)
+
+    def test_a_query_with_nothing_sensitive_is_untouched(self):
+        url = 'https://x/y?page=2&sort=name'
+        self.assertEqual(redact_url(url), url)
+
+    def test_an_empty_value_is_left_alone(self):
+        """Masking an absent key would invent a credential that is not there."""
+        self.assertEqual(redact_url('https://x/y?apikey='), 'https://x/y?apikey=')
+
+    def test_junk_is_returned_rather_than_raising(self):
+        # Logging must never be able to raise on the way to reporting a
+        # failure.
+        for value in ('', 'not a url', 'http://['):
+            self.assertIsInstance(redact_url(value), str)
+
+
+class the_sites_that_log_urls_use_it(unittest.TestCase):
+    def test_every_credential_bearing_log_site_redacts(self):
+        import inspect
+
+        from backend.base import helpers
+        from backend.features import download_queue
+        from backend.implementations import blocklist
+
+        self.assertIn('redact_url(url)', inspect.getsource(helpers.AsyncSession))
+        self.assertIn(
+            'redact_url(link)',
+            inspect.getsource(download_queue.DownloadHandler.add)
+        )
+        self.assertIn(
+            'redact_url(blocked_link)', inspect.getsource(blocklist)
+        )
+
+
+class a_failed_request_says_why(unittest.TestCase):
+    """"Request failed" alone cannot be diagnosed.
+
+    A 503 from the indexer, a refused connection and an expired certificate
+    all read identically, and the caller reports every one of them as
+    "Download link broken" -- which is what made a whole class of download
+    failure impossible to tell apart from the log.
+    """
+
+    def test_the_retry_warning_carries_a_reason(self):
+        import inspect
+
+        from backend.base import helpers
+
+        source = inspect.getsource(helpers.AsyncSession)
+        self.assertIn("reason = f'HTTP {response.status}'", source)
+        self.assertIn('type(error).__name__', source)
+        self.assertIn('Retrying for round', source)
+
+    def test_exhausting_retries_is_logged_with_the_reason(self):
+        import inspect
+
+        from backend.base import helpers
+
+        self.assertIn(
+            'failed after %d attempts',
+            inspect.getsource(helpers.AsyncSession)
+        )
+
+
+if __name__ == '__main__':
+    unittest.main()

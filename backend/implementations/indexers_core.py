@@ -69,6 +69,7 @@ from backend.base.file_extraction import (extract_filename_data,
                                           refine_special_version)
 from backend.base.helpers import (AsyncSession, Session,
                                   extract_year_from_date, normalise_base_url)
+from backend.base.helpers import redact_url
 from backend.base.logging import LOGGER
 from backend.implementations.download_clients import NZBDownload
 from backend.implementations.matching import check_search_result_match
@@ -170,7 +171,7 @@ def _test_bounded(base_url: str, api_key: str) -> bool:
         return False
 
     except RequestException:
-        LOGGER.warning("Failed to reach indexer at %s", base_url)
+        LOGGER.warning("Failed to reach indexer at %s", redact_url(base_url))
         return False
 
     finally:

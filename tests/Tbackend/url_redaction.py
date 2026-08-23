@@ -101,27 +101,72 @@ class credentials_outside_the_query_string(unittest.TestCase):
         self.assertEqual(redact_url(url), url)
 
 
-class the_sites_that_log_urls_use_it(unittest.TestCase):
-    def test_every_credential_bearing_log_site_redacts(self):
-        import inspect
+class every_call_site_can_actually_call_it(unittest.TestCase):
+    """Matching source text does not prove the name resolves.
 
-        from backend.base import helpers
-        from backend.features import download_queue
-        from backend.implementations import blocklist
+    The previous version of this asserted that `redact_url(...)` appeared in
+    each module's source, which it did -- in a module that never imported it.
+    Every call raised NameError instead, and because the failing call was
+    inside the blocklist path taken when a download link breaks, a handled
+    "link broken" became a 500 from the API. Resolve the name in each module
+    rather than reading for it.
+    """
 
-        self.assertIn('redact_url(url)', inspect.getsource(helpers.AsyncSession))
-        self.assertIn(
-            'redact_url(link)',
-            inspect.getsource(download_queue.DownloadHandler.add)
+    def test_the_name_resolves_in_every_module_that_uses_it(self):
+        import importlib
+
+        modules = (
+            'backend.base.helpers',
+            'backend.features.download_queue',
+            'backend.implementations.blocklist',
+            'backend.implementations.indexers_core',
+            'backend.implementations.notifications',
+            'backend.implementations.weekly_releases',
         )
-        self.assertIn(
-            'redact_url(blocked_link)', inspect.getsource(blocklist)
+        missing = []
+        for name in modules:
+            module = importlib.import_module(name)
+            with open(module.__file__) as handle:
+                uses_it = 'redact_url(' in handle.read()
+            if uses_it and not hasattr(module, 'redact_url'):
+                missing.append(name)
+
+        self.assertEqual(
+            missing, [],
+            'these modules call redact_url without importing it'
         )
-        # The prepper-miss warning logs the same indexer link.
-        self.assertIn(
-            'redact_url(link)',
-            inspect.getsource(download_queue.DownloadHandler)
-        )
+
+
+class blocklisting_a_broken_link_works(unittest.TestCase):
+    """The path a failed download actually takes.
+
+    A broken indexer link is blocklisted, and that call logs the link. When
+    the log line raised NameError, the blocklist insert never happened and the
+    API returned a 500 instead of the handled failure.
+    """
+
+    def test_logging_the_link_does_not_raise(self):
+        from unittest.mock import MagicMock, patch
+
+        from backend.base.definitions import BlocklistReason
+        from backend.implementations import blocklist as bl
+
+        with patch.object(bl, 'get_db', return_value=MagicMock()), \
+                patch.object(bl, 'blocklist_contains', return_value=None), \
+                patch.object(bl, 'get_blocklist_entry'), \
+                patch.object(bl, 'LOGGER') as logger:
+            bl.add_to_blocklist(
+                web_link=None, web_title=None, web_sub_title=None,
+                download_link=(
+                    'https://prowlarr.example.com/9/download?apikey=secret'
+                ),
+                source=None, volume_id=1, issue_id=None,
+                reason=BlocklistReason.LINK_BROKEN
+            )
+
+        logged = logger.info.call_args[0][0]
+        self.assertIn('apikey=***', logged)
+        self.assertNotIn('secret', logged)
 
 
 class a_failed_request_says_why(unittest.TestCase):

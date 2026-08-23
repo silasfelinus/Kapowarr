@@ -50,6 +50,7 @@ from urllib.parse import quote
 from aiohttp import BasicAuth, ClientError
 from asyncio import run
 
+from backend.base.logging import LOGGER
 from backend.base.definitions import Constants, IssueMetadata, VolumeMetadata
 from backend.base.file_extraction import extract_issue_number
 from backend.base.helpers import AsyncSession, force_range, normalise_string
@@ -291,7 +292,21 @@ class Gcd(MetadataProvider):
         if not sanitised:
             return []
         page = await self._get(f'series/name/{quote(sanitised, safe="")}')
-        results = [self._volume(item) for item in page.get('results') or []]
+        # One unusable entry must not cost the whole search. GCD has returned
+        # series rows with no `id`, and indexing it unconditionally raised
+        # KeyError out through the search endpoint -- so a query that matched
+        # twenty series returned nothing at all and looked like a total
+        # failure. An entry with no id could not be added anyway: there is
+        # nothing to link it to.
+        results = []
+        for item in page.get('results') or []:
+            if not isinstance(item, dict) or item.get('id') is None:
+                LOGGER.debug(
+                    'Skipping unidentifiable GCD series in results for %r',
+                    sanitised
+                )
+                continue
+            results.append(self._volume(item))
         for item in results:
             item['already_added'] = MetadataIdentityStore.resolve(
                 'volume', self.provider_id, item['external_id']

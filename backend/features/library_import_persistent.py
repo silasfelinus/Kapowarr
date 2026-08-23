@@ -59,7 +59,7 @@ from backend.features.library_import_state import (
     mark_job_paused,
     mark_job_running,
 )
-from backend.features.metadata import get_metadata_provider
+from backend.features.metadata import search_volumes_everywhere
 from backend.features.tasks import Task, task_library
 from backend.internals.server import TaskStatusEvent, WebSocket
 
@@ -184,7 +184,7 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
         if not self._wait_for_resource_slot('last_started'):
             return None
 
-        results = asyncio_run(get_metadata_provider().search_volumes(query))
+        results = asyncio_run(search_volumes_everywhere(query))
         # The folder query is itself a legitimate exact title query when a group
         # has the same series name, so retaining it under its own key is safe.
         self.search_cache[query] = results

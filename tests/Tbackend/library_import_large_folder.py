@@ -50,19 +50,18 @@ class continuous_import_large_folder(unittest.TestCase):
             }
             broad_results.append(self._volume(idx, title))
 
-        provider = Mock()
-        provider.search_volumes = AsyncMock(return_value=broad_results)
+        search = AsyncMock(return_value=broad_results)
 
         # Persistent import owns the broad search, while the shared matcher
-        # constructs its provider through backend.features.library_import even
+        # reaches the same helper through backend.features.library_import even
         # when every title is already present in its temporary cache. Stub both
         # call sites so this unit test stays independent of Flask/Settings.
         with patch(
-            'backend.features.library_import_persistent.get_metadata_provider',
-            return_value=provider
+            'backend.features.library_import_persistent'
+            '.search_volumes_everywhere', new=search
         ), patch(
-            'backend.features.library_import.get_metadata_provider',
-            return_value=provider
+            'backend.features.library_import.search_volumes_everywhere',
+            new=search
         ):
             result = importer._match_search_groups(groups, '/content/ElfQuest')
 
@@ -74,7 +73,7 @@ class continuous_import_large_folder(unittest.TestCase):
             f'elfquest arc {idx}'
             for idx in range(1, LARGE_FOLDER_SHARED_SEARCH_MIN_TITLES + 1)
         })
-        provider.search_volumes.assert_awaited_once_with('elfquest')
+        search.assert_awaited_once_with('elfquest')
         # Broad results are retained only under the query that actually produced
         # them; unrelated exact-title cache keys are folder-local.
         self.assertEqual(set(importer.search_cache), {'elfquest'})

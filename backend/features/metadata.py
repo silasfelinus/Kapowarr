@@ -16,6 +16,7 @@ from time import time
 from typing import Dict, List, Sequence, Tuple, Union
 
 from backend.base.definitions import IssueMetadata, VolumeMetadata
+from backend.base.logging import LOGGER
 from backend.internals.db import get_db
 
 #: The provider every ComicVine-ID-shaped code path still assumes.
@@ -291,6 +292,66 @@ class MetadataIdentityStore:
             LIMIT 1;
             """, (provider_id, str(external_id))).fetchone()
         return row[0] if row else None
+
+
+async def search_volumes_everywhere(title: str) -> List[VolumeMetadata]:
+    """Ask each configured provider for `title` until one recognises it.
+
+    ComicVine is a huge database but far from a complete one, and it is
+    thinnest in exactly the places a personal library runs deepest:
+    small-press, indie and adult material. The Grand Comics Database and
+    Metron carry a great deal it never indexed. Both were configurable
+    and neither was ever asked -- library import went straight to the
+    default provider, so a folder ComicVine had not heard of was held
+    for review as though no database in the world had it.
+
+    "Recognises" means a result whose title actually matches, not merely
+    a non-empty response. ComicVine answers almost anything with fifty
+    rows; a search for an obscure title comes back full of unrelated
+    series, and stopping there would keep every fallback permanently out
+    of reach. Checking the titles costs nothing and is the same
+    comparison the ranker applies moments later.
+
+    A title the default provider knows therefore costs the single
+    request it always did. The extra requests only happen for titles
+    that were going to be held for review anyway, and they go to
+    different services, so no one provider's rate limit sees more
+    traffic than before.
+
+    Returns every result gathered when nobody recognises the title, so
+    the review queue records what was actually considered.
+    """
+    from backend.implementations.matching import match_title
+
+    provider_ids = configured_metadata_provider_ids(
+        MetadataCapability.SEARCH_VOLUMES
+    ) or [DEFAULT_METADATA_PROVIDER_ID]
+
+    everything: List[VolumeMetadata] = []
+    for provider_id in provider_ids:
+        provider = get_metadata_provider(provider_id)
+        try:
+            results = await provider.search_volumes(title)
+        except Exception as error:
+            # One provider being down is not a reason to abandon an import
+            # that the others can still serve.
+            LOGGER.warning(
+                'Metadata provider %s failed searching for %r: %s',
+                provider_id, title, error
+            )
+            continue
+
+        if any(match_title(title, result['title']) for result in results):
+            if everything:
+                LOGGER.info(
+                    'Found %r through %s, which the earlier provider(s) '
+                    'did not recognise', title, provider_id
+                )
+            return results
+
+        everything.extend(results)
+
+    return everything
 
 
 def get_metadata_provider(

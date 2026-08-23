@@ -23,7 +23,7 @@ from backend.base.logging import LOGGER
 from backend.features.library_import_policy import (
     REVIEW_REASON_NO_CANDIDATE, REVIEW_REASON_TIE, REVIEW_REASON_WEAK_SCORE,
     select_auto_import_volume_result)
-from backend.features.metadata import get_metadata_provider
+from backend.features.metadata import search_volumes_everywhere
 from backend.features.tasks import Task, task_library
 from backend.implementations.file_matching import scan_files
 from backend.implementations.matching import select_best_volume_result_for_file
@@ -189,7 +189,6 @@ async def _match_file_groups(
         titles_to_groups.setdefault(series_name, []).append(group_number)
 
     cache = search_cache if search_cache is not None else {}
-    comicvine = get_metadata_provider()
     searches_made = 0
 
     for title in titles_to_groups:
@@ -217,7 +216,7 @@ async def _match_file_groups(
             )
             await async_sleep(request_delay)
 
-        cache[title] = await comicvine.search_volumes(title)
+        cache[title] = await search_volumes_everywhere(title)
         searches_made += 1
 
     matches: Dict[int, Dict[str, Any]] = {}

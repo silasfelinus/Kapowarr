@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 
-"""An omnibus is the run it collects, not issue one of it."""
+"""An omnibus belongs to its series without claiming to be it."""
 
 import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from backend.base.definitions import SpecialVersion
+from backend.base.definitions import GeneralFileType, SpecialVersion
 from backend.implementations import file_matching as FM
 from backend.implementations.matching import (_rank_volume_results_for_file,
                                               match_special_version)
@@ -108,41 +108,47 @@ class the_file_belongs_to_that_volume(unittest.TestCase):
         )
 
 
-class which_issues_it_covers(unittest.TestCase):
-    def test_an_omnibus_covers_the_whole_run(self):
-        self.assertTrue(FM.collected_edition_covers_volume(
+class which_volume_it_belongs_to(unittest.TestCase):
+    def test_an_omnibus_belongs_to_the_series(self):
+        self.assertTrue(FM.collected_edition_of_volume(
             _file('Black Hammer', 'omnibus'), _volume()
         ))
 
-    def test_a_named_part_of_a_longer_run_does_not(self):
-        """"Batman Volume 3" collects part of Batman; it is not Batman."""
-        self.assertFalse(FM.collected_edition_covers_volume(
+    def test_so_does_a_named_part_of_a_longer_run(self):
+        """It is a real file in the folder; Kapowarr should know about it.
+
+        Nothing is claimed about coverage either way now, so there is no
+        reason to leave it unmatched and invisible.
+        """
+        self.assertTrue(FM.collected_edition_of_volume(
             _file('Batman', 'tpb', volume_number=3), _volume(title='Batman')
         ))
 
     def test_a_file_with_an_issue_number_does_not(self):
-        self.assertFalse(FM.collected_edition_covers_volume(
+        """That is an ordinary issue and is bound as one."""
+        self.assertFalse(FM.collected_edition_of_volume(
             _file('Black Hammer', 'tpb', issue_number=4.0), _volume()
         ))
 
     def test_a_volume_that_is_itself_a_special_version_does_not(self):
         """Those already bind through the existing special-version branch."""
-        self.assertFalse(FM.collected_edition_covers_volume(
+        self.assertFalse(FM.collected_edition_of_volume(
             _file('Black Hammer', 'omnibus'),
             _volume(sv=SpecialVersion.OMNIBUS)
         ))
 
     def test_an_ordinary_issue_file_does_not(self):
-        self.assertFalse(FM.collected_edition_covers_volume(
+        self.assertFalse(FM.collected_edition_of_volume(
             _file('Black Hammer', None, issue_number=4.0), _volume()
         ))
 
 
-class scanning_binds_it_to_every_issue(unittest.TestCase):
-    """The whole point: never issue one with the rest left missing.
+class scanning_files_it_to_the_volume(unittest.TestCase):
+    """It lands in the folder, and claims none of the issues.
 
-    Bound to issue one alone, Kapowarr would count issues 2-50 as missing
-    and go download comics that are already on disk inside this very file.
+    Bound to issue one, Kapowarr would count 2-50 as missing. Bound to
+    all of them, a partial collection would strand every issue it does
+    not actually contain. So it is neither: a volume file.
     """
 
     def _scan(self, filename, volume=None):
@@ -174,35 +180,56 @@ class scanning_binds_it_to_every_issue(unittest.TestCase):
                       return_value=fake_volume):
             FM.scan_files(1)
 
-        # The bindings are written through executemany on the cursor.
-        written = set()
+        # Bindings are written through executemany on the cursor.
+        issue_bindings, volume_bindings = set(), set()
         for call in cursor.executemany.call_args_list:
             sql, rows = call.args[0], call.args[1]
-            if 'issues_files' in sql and 'INSERT' in sql.upper():
-                written.update(tuple(r) for r in rows)
-        return written, issues
+            if 'INSERT' not in sql.upper():
+                continue
+            if 'issues_files' in sql:
+                issue_bindings.update(tuple(r) for r in rows)
+            elif 'volume_files' in sql:
+                volume_bindings.update(tuple(r) for r in rows)
+        return issue_bindings, volume_bindings, issues
 
-    def test_every_issue_gets_the_omnibus(self):
-        written, issues = self._scan('/content/Black Hammer/Black Hammer Omnibus (2022).cbz')
-
-        self.assertEqual(
-            written, {(7, issue.id) for issue in issues},
-            'the omnibus must cover the run, not just its first issue'
+    def test_it_is_filed_against_the_volume(self):
+        _, volume_bindings, _ = self._scan(
+            '/content/Black Hammer/Black Hammer Omnibus (2022).cbz'
         )
 
-    def test_a_named_part_of_the_run_is_left_alone(self):
-        """"Batman Volume 3" must not mark all of Batman as had."""
-        written, _ = self._scan(
+        self.assertEqual(len(volume_bindings), 1)
+        self.assertIn(
+            GeneralFileType.COLLECTED.value, volume_bindings.pop(),
+            'the omnibus belongs to the volume, as a collected edition'
+        )
+
+    def test_no_issue_is_marked_as_had(self):
+        """A partial collection must not strand what it does not contain."""
+        issue_bindings, _, _ = self._scan(
+            '/content/Black Hammer/Black Hammer Omnibus (2022).cbz'
+        )
+
+        self.assertEqual(
+            issue_bindings, set(),
+            'the individual issues stay wanted and are fetched normally'
+        )
+
+    def test_a_named_part_of_the_run_is_filed_the_same_way(self):
+        issue_bindings, volume_bindings, _ = self._scan(
             '/content/Batman/Batman Volume 3 (2022).cbz',
             volume=_volume(title='Batman')
         )
 
-        self.assertEqual(written, set())
+        self.assertEqual(issue_bindings, set())
+        self.assertEqual(len(volume_bindings), 1)
 
-    def test_it_is_not_bound_to_issue_one_alone(self):
-        written, issues = self._scan('/content/Black Hammer/Black Hammer Omnibus (2022).cbz')
+    def test_it_is_not_bound_to_issue_one(self):
+        """The original bug: the rest of the run reads as missing."""
+        issue_bindings, _, issues = self._scan(
+            '/content/Black Hammer/Black Hammer Omnibus (2022).cbz'
+        )
 
-        self.assertNotEqual(written, {(7, issues[0].id)})
+        self.assertNotIn((7, issues[0].id), issue_bindings)
 
 
 if __name__ == '__main__':

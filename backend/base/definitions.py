@@ -6,7 +6,7 @@ and abstract classes.
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 from threading import Event, Thread
 from typing import (TYPE_CHECKING, Any, Callable, Dict, List, Mapping,
@@ -974,6 +974,14 @@ class BaseNamingKeys:
 @dataclass
 class VolumeNamingKeys(BaseNamingKeys):
     special_version: Union[str, None]
+    series_name_no_article: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.series_name_no_article = self.series_name
+        for prefix in ('The ', 'A '):
+            if self.series_name.startswith(prefix):
+                self.series_name_no_article = self.series_name[len(prefix):]
+                break
 
 
 @dataclass

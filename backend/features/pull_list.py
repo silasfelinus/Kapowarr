@@ -30,6 +30,16 @@ DownloadTuple = Tuple[str, int, Union[int, None]]
 WEEKLY_RELEASE_FETCH_TIMEOUT = 45.0
 _PUBLISHER_AUTOMATION_LOCK = Lock()
 
+PUBLISHER_RETRY_INTERVAL = 24 * 60 * 60
+"""
+How long to leave a failed publisher automation attempt alone before
+trying it again. A comic that no indexer is carrying on release morning
+is very often carried by one a day later, so giving up after a single
+attempt loses the release outright -- but retrying every pull list check
+would hammer the indexers for every release that is simply not out.
+Daily is the compromise.
+"""
+
 
 class _NotAvailableYet(Exception):
     """The release is real, it just has not turned up anywhere yet.
@@ -819,9 +829,20 @@ def _process_publisher_subscriptions_unlocked(
     failed = 0
     skipped = 0
 
+    today = date.today().isoformat()
+    now = round(time())
+
     for entry in entries:
         week_start = str(entry.get('week_start') or '')
         if not week_start or week_start > current_week:
+            continue
+
+        # The week filter alone is not enough. A week starts on Monday, so
+        # from Monday morning it admits every release in it -- including
+        # Friday's, three days before anyone could have it. Those were
+        # attempted, failed for the only possible reason, and recorded.
+        release_date = str(entry.get('release_date') or '')
+        if release_date and release_date > today:
             continue
         publisher = str(entry.get('publisher') or '').lower()
         if publisher_filter is not None and publisher != publisher_filter:
@@ -831,14 +852,21 @@ def _process_publisher_subscriptions_unlocked(
             continue
         action = 'auto_search' if subscription['auto_search'] else 'auto_add'
         release_key = _release_key(entry)
-        completed = cursor.execute(
+        history = cursor.execute(
             """
-            SELECT success FROM publisher_automation_history
+            SELECT success, attempted_at FROM publisher_automation_history
             WHERE release_key = ? AND action = ?;
             """,
             (release_key, action)
-        ).exists()
-        if completed:
+        ).fetchone()
+        # A row used to mean "done", whatever it said. `.exists()` matches a
+        # failed attempt just as happily as a successful one, so a release
+        # that was merely not out yet was attempted once and then never
+        # again -- while the summary below counted it as `pending retry`.
+        # A success is final; a failure waits out the retry interval.
+        if history is not None and (
+            history[0] or now - history[1] < PUBLISHER_RETRY_INTERVAL
+        ):
             skipped += 1
             continue
 
@@ -885,7 +913,7 @@ def _process_publisher_subscriptions_unlocked(
                 message = excluded.message,
                 attempted_at = excluded.attempted_at;
             """,
-            (release_key, action, success, message, round(time()))
+            (release_key, action, success, message, now)
         )
 
     LOGGER.info(

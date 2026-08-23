@@ -35,8 +35,8 @@ class continuous_import_review_snapshot(unittest.IsolatedAsyncioTestCase):
         comicvine.search_volumes = Mock()
 
         with patch(
-            'backend.features.library_import.get_metadata_provider',
-            return_value=comicvine
+            'backend.features.library_import.search_volumes_everywhere',
+            new=comicvine.search_volumes
         ), patch(
             'backend.features.library_import.select_auto_import_volume_result',
             return_value=(None, REVIEW_REASON_TIE)

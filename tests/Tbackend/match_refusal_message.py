@@ -63,33 +63,27 @@ class the_indexer_paths_use_it(unittest.TestCase):
         )
 
 
-class the_force_button_looks_like_a_download(unittest.TestCase):
-    """It borrowed the manual-search icon, so a "search" glyph sat inside a
-    list of search results and read as "search again" rather than as a
-    variant of the button beside it."""
+class the_row_offers_one_download_button(unittest.TestCase):
+    """Two near-identical buttons, one of which never worked on the rows that
+    needed it, read as the app being broken. Whether a result matches is
+    already decided and shown in the Match column, so the row uses the right
+    button rather than offering both."""
 
     def _template(self):
         with open('frontend/templates/view_volume.html') as handle:
             return handle.read()
 
-    def test_the_action_row_uses_a_download_variant(self):
-        template = self._template()
+    def test_the_second_download_button_is_gone(self):
+        self.assertNotIn('Force Download', self._template())
 
-        self.assertIn('"force_download.svg"', template)
-        self.assertNotIn(
-            '{{ icon_button(\'\', "Force Download", "manual_search.svg") }}',
-            template
-        )
-
-    def test_the_icon_file_exists(self):
+    def test_both_icons_are_still_available_to_the_renderer(self):
         import os
 
+        self.assertTrue(os.path.isfile('frontend/static/img/download.svg'))
         self.assertTrue(
-            os.path.isfile('frontend/static/img/force_download.svg')
+            os.path.isfile('frontend/static/img/force_download.svg'),
+            'the renderer swaps to this one for a row that needs forcing'
         )
-
-    def test_its_tooltip_explains_what_it_skips(self):
-        self.assertIn('skips the check', self._template())
 
     def test_manual_search_keeps_its_own_icon_elsewhere(self):
         # The issue row's real "search for this issue" action is unaffected.

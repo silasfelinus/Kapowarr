@@ -215,6 +215,16 @@ def match_special_version(
     ):
         return True
 
+    if (
+        check_version in COLLECTED_EDITION_MATCH
+        and reference_version == SpecialVersion.NORMAL
+        and issue_number is None
+    ):
+        # A collected edition sitting in a normal volume's folder. The file is
+        # the whole run rather than one issue of it, so it belongs to this
+        # volume even though the volume itself is not a special version.
+        return True
+
     # Volume's Special Version could be one that often isn't explicitly
     # mentioned in the filename or that isn't possible to determine from the
     # filename. EF will determine the file to be a TPB in such scenario.
@@ -516,6 +526,18 @@ If a volume is one of these types, it can only match to search results
 with one issue.
 """
 
+COLLECTED_EDITION_MATCH = (
+    SpecialVersion.TPB,
+    SpecialVersion.HARD_COVER,
+    SpecialVersion.OMNIBUS
+)
+"""
+A file of one of these types collects a run of issues rather than being one
+of them, so it can describe a volume of any length: it covers every issue.
+A one-shot is deliberately absent -- it is a single standalone issue, not a
+collection, so it still only matches a one-issue volume.
+"""
+
 # Continuous auto-import is intentionally stricter than the review scan. A
 # candidate needs strong filename evidence and, when another viable candidate
 # exists, a decisive lead over the runner-up before unattended import is safe.
@@ -605,6 +627,12 @@ def _rank_volume_results_for_file(
         sv_issue_count_allowed = (
             first_file['special_version'] not in ONE_ISSUE_MATCH
             or result['issue_count'] == 1
+            # An omnibus collects a run instead of being one issue of it, so
+            # the series it collects is exactly what it should match. Without
+            # this, "Black Hammer Omnibus" could only ever match a one-issue
+            # namesake, and the real Black Hammer was filtered out before
+            # anything was scored.
+            or first_file['special_version'] in COLLECTED_EDITION_MATCH
         )
         if not sv_issue_count_allowed:
             continue

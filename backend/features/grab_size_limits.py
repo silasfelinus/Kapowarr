@@ -9,10 +9,13 @@ the range; unknown-size results stay eligible rather than silently penalising
 sources that cannot report a size.
 """
 
+from sqlite3 import OperationalError, connect
 from typing import Any, Dict, List, Mapping
 
+from flask import has_app_context
+
 from backend.base.custom_exceptions import InvalidKeyValue, KeyNotFound
-from backend.internals.db import commit, get_db
+from backend.internals.db import DBConnection, commit, get_db
 
 MEBIBYTE = 1024 * 1024
 DEFAULT_MINIMUM_GRAB_SIZE_MB = 1
@@ -43,13 +46,38 @@ def _validated_limit(key: str, value: Any) -> int:
     return value
 
 
-def get_grab_size_limits() -> Dict[str, int]:
-    """Return minimum/maximum grab sizes in MiB, inserting defaults lazily."""
-    _ensure_defaults()
-    rows = dict(get_db().execute(
-        """SELECT key, value FROM config
+def _read_limits() -> Dict[str, Any]:
+    """Read config without requiring a Flask request/application context.
+
+    Search providers are also exercised by background tasks and pure parser
+    tests, where Flask's ``g``-backed cursor cache is intentionally absent.
+    Use Kapowarr's normal cursor when a context exists; otherwise do the tiny
+    read through an independent SQLite connection. The fallback is read-only,
+    so it does not bypass Kapowarr's normal write/transaction discipline.
+    """
+    query = """SELECT key, value FROM config
         WHERE key IN ('minimum_grab_size_mb', 'maximum_grab_size_mb');"""
-    ).fetchall())
+
+    if has_app_context():
+        _ensure_defaults()
+        return dict(get_db().execute(query).fetchall())
+
+    if not DBConnection.file:
+        return {}
+
+    try:
+        with connect(DBConnection.file) as connection:
+            return dict(connection.execute(query).fetchall())
+    except OperationalError:
+        # Early startup/tests can legitimately reach this helper before the
+        # database or config table exists. Defaults are the correct policy in
+        # that case and will be persisted once a normal app context exists.
+        return {}
+
+
+def get_grab_size_limits() -> Dict[str, int]:
+    """Return minimum/maximum grab sizes in MiB."""
+    rows = _read_limits()
 
     result: Dict[str, int] = {}
     for key, default in _DEFAULTS.items():

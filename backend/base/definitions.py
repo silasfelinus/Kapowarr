@@ -469,7 +469,7 @@ class LibrarySorting(BaseEnum):
     YEAR = "year, title, volume_number"
     VOLUME_NUMBER = "volume_number, title, year"
     RECENTLY_ADDED = "id DESC, title, year, volume_number"
-    PUBLISHER = "publisher, title, year, volume_number"
+    PUBLISHER = "publisher, title, volume_number"
     WANTED = ("issues_downloaded_monitored >= issue_count_monitored, "
               "title, year, volume_number")
     RECENTLY_RELEASED = ("(SELECT MAX(date) FROM vol_issues) DESC, "
@@ -688,7 +688,7 @@ RAR_EXECUTABLES = {
     OSType.WINDOWS: "rar_windows_64.exe"
 }
 """
-A mapping of the OS to the rar executable to use
+A mapping of the OS to the rar executable to use"
 """
 
 
@@ -1112,7 +1112,7 @@ class StartTypeHandler(ABC):
 class WebSocketEvent(ABC):
     @abstractmethod
     def get_type(self) -> WebSocketEventType:
-        """Get the type of websocket event.
+        """Get the type of event.
 
         Returns:
             WebSocketEventType: The event type.
@@ -1754,8 +1754,8 @@ class ExternalDownload(Download):
 
             LinkBroken: The link doesn't work.
 
-            DownloadLimitReached: At the source that is downloaded from,
-                we've reached a rate limit.
+            DownloadLimitReached: Can't download because the limit of the service
+                is reached.
         """
         ...
 

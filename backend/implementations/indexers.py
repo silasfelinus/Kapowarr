@@ -337,7 +337,7 @@ async def create_nzb_download(
         )
         if not match['match']:
             raise EnqueuingDownloadFailure(
-                EnqueuingDownloadFailureReason.NO_MATCHES
+                EnqueuingDownloadFailureReason.RESULT_DOES_NOT_MATCH
             )
 
     return NZBDownload(

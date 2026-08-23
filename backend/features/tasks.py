@@ -8,7 +8,7 @@ its own lane instead of monopolising every unrelated task for hours.
 """
 
 from threading import RLock, Thread
-from time import sleep, time
+from time import monotonic, sleep, time
 
 from backend.features.tasks_core import *
 from backend.features.tasks_core import TaskHandler
@@ -203,6 +203,11 @@ def _remove_laned(self, task_id: int) -> None:
     self._process_queue()
 
 
+# A task gets this long, in total, to notice `stop` and leave its work
+# somewhere it can be resumed from.
+SHUTDOWN_GRACE_SECONDS = 30.0
+
+
 def _stop_handle_laned(self) -> None:
     LOGGER.debug('Stopping task threads')
     if self.task_interval_waiter:
@@ -212,15 +217,33 @@ def _stop_handle_laned(self) -> None:
         running = [
             entry for entry in self.queue if entry['status'] == 'running'
         ]
+    # `stop` is the process-shutdown signal; `request_stop()` is the user's
+    # Stop button. They are not interchangeable, and tasks that expose both
+    # persist differently for each: the continuous import records a
+    # user-requested stop as a *paused* job, which does not auto-resume, and a
+    # shutdown as a still-*running* one, which does. Calling request_stop()
+    # here told every such task that a human had paused it, so an update, a
+    # config change or a crash fix left the import stopped until someone
+    # noticed and pressed Resume.
     for entry in running:
-        task = entry['task']
-        request_stop = getattr(task, 'request_stop', None)
-        if callable(request_stop):
-            request_stop()
-        else:
-            task.stop = True
+        entry['task'].stop = True
+
+    deadline = monotonic() + SHUTDOWN_GRACE_SECONDS
     for entry in running:
-        entry['thread'].join()
+        thread = entry.get('thread')
+        if thread is None or not thread.is_alive():
+            continue
+
+        thread.join(timeout=max(deadline - monotonic(), 0.0))
+        if thread.is_alive():
+            # Shutdown must not hang on a task that will not stop. Its job row
+            # is left as it stands, which for the continuous import is exactly
+            # the state the next start resumes from.
+            LOGGER.warning(
+                'Task %s did not stop within %.0fs; leaving it to be picked '
+                'up on the next start',
+                entry['task'].display_title, SHUTDOWN_GRACE_SECONDS
+            )
 
 
 # Patch the class object exported by tasks_core. Every existing importer sees

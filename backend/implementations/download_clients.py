@@ -209,15 +209,7 @@ class BaseDirectDownload(Download):
                 self._ssn.close()
 
         except RequestException as e:
-            if (
-                e.response is not None
-                and e.response.url.startswith(Constants.PIXELDRAIN_API_URL)
-                and e.response.status_code == 403
-            ):
-                # Pixeldrain rate limit because of hotlinking
-                raise DownloadLimitReached(DownloadSource.PIXELDRAIN)
-
-            raise LinkBroken(download_link)
+            self._raise_for_request_failure(e, download_link)
 
         self._size = int(response.headers.get('Content-Length', -1))
         self._supports_range_header = (
@@ -245,6 +237,35 @@ class BaseDirectDownload(Download):
         self._title = basename(self._filename_body)
         self._files = [self._build_filename(response)]
         return
+
+    def _raise_for_request_failure(
+        self,
+        error: RequestException,
+        download_link: str
+    ) -> NoReturn:
+        """Decide what a failed fetch means, and raise accordingly.
+
+        The distinction matters because the caller blocklists a `LinkBroken`
+        permanently and merely backs off from a `DownloadLimitReached`. A
+        throttle classified as broken destroys a working link: GetComics
+        answers 429 under load, and every link it offered while doing so was
+        recorded as broken and never tried again, long after the throttling
+        stopped.
+        """
+        response = error.response
+        if response is not None:
+            if (
+                response.url.startswith(Constants.PIXELDRAIN_API_URL)
+                and response.status_code == 403
+            ):
+                # Pixeldrain rate limit because of hotlinking.
+                raise DownloadLimitReached(DownloadSource.PIXELDRAIN)
+
+            if response.status_code == 429:
+                # The status that means "slow down" and nothing else.
+                raise DownloadLimitReached(self._source_type)
+
+        raise LinkBroken(download_link)
 
     def _convert_to_pure_link(self) -> str:
         return self.download_link

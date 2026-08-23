@@ -493,8 +493,12 @@ class create_nzb_download_link_resolution(unittest.IsolatedAsyncioTestCase):
                 await create_nzb_download(
                     'https://api.nzbgeek.info/get/1', 1, None, force_match=False
                 )
+        # A single indexer result was fetched successfully and refused for
+        # being a different issue -- not a page that yielded no usable links,
+        # which is what NO_MATCHES describes.
         self.assertEqual(
-            ctx.exception.reason, EnqueuingDownloadFailureReason.NO_MATCHES
+            ctx.exception.reason,
+            EnqueuingDownloadFailureReason.RESULT_DOES_NOT_MATCH
         )
 
     async def test_match_builds_download_when_not_forced(self):

@@ -21,11 +21,28 @@ function hide(to_hide, to_show=null) {
 		to_show.forEach(el => el.classList.remove('hidden'));
 };
 
+// Query values are encoded here rather than at each call site. Joining them
+// raw meant any value containing `&`, `?` or `=` broke out of its own
+// parameter: a manual-search download link is
+// `…/download?apikey=…&link=…&file=…`, so appending it unencoded turned its
+// `&link=` and `&file=` into parameters of Kapowarr's own request. Flask reads
+// the first `link`, which is the URL truncated at its first `&` -- and Prowlarr
+// answers `Invalid Prowlarr link` because the parts it needs never arrived.
+function buildQuery(params) {
+	const entries = Object.entries(params).filter(
+		([, value]) => value !== undefined && value !== null
+	);
+	if (!entries.length)
+		return '';
+
+	return '&' + entries.map(
+		([key, value]) =>
+			`${encodeURIComponent(key)}=${encodeURIComponent(value)}`
+	).join('&');
+};
+
 async function fetchAPI(endpoint, api_key, params={}, json_return=true) {
-	let formatted_params = '';
-	if (Object.keys(params).length) {
-		formatted_params = '&' + Object.entries(params).map(p => p.join('=')).join('&');
-	};
+	const formatted_params = buildQuery(params);
 
 	return fetch(`${url_base}/api${endpoint}?api_key=${api_key}${formatted_params}`)
 	.then(response => {
@@ -46,10 +63,7 @@ async function fetchAPI(endpoint, api_key, params={}, json_return=true) {
 };
 
 async function sendAPI(method, endpoint, api_key, params={}, body={}) {
-	let formatted_params = '';
-	if (Object.keys(params).length) {
-		formatted_params = '&' + Object.entries(params).map(p => p.join('=')).join('&');
-	};
+	const formatted_params = buildQuery(params);
 
 	return fetch(`${url_base}/api${endpoint}?api_key=${api_key}${formatted_params}`, {
 		'method': method,

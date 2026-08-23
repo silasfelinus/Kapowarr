@@ -40,8 +40,15 @@
 		<td class="seeders-column peer-column"></td>
 		<td class="leechers-column peer-column"></td>
 		<td class="search-action-column action-list" aria-label="Actions">
+			{#
+				One download button. There were two -- Download and Force
+				Download -- sitting side by side looking near-identical, and on
+				a result that does not match the issue the first one always
+				failed while the second always worked. Whether a result matches
+				is already decided and shown in the Match column, so the row can
+				simply use the right one: see the search-result renderer.
+			#}
 			{{ icon_button('', "Download", "download.svg") }}
-			{{ icon_button('', "Force Download", "manual_search.svg") }}
 			{{ icon_button('', "Add to blocklist", "blocklist.svg") }}
 		</td>
 	</tr>

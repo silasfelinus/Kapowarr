@@ -39,6 +39,7 @@ from backend.base.file_extraction import (extract_filename_data,
 from backend.base.helpers import (AsyncSession, Session,
                                   extract_year_from_date, normalise_base_url)
 from backend.base.logging import LOGGER
+from backend.features.grab_size_limits import filter_search_results
 from backend.implementations.download_clients import TorrentDownload
 from backend.implementations.external_clients import ExternalClients
 from backend.implementations.matching import check_search_result_match
@@ -197,6 +198,13 @@ def _item_enclosure(item) -> Union[str, None]:
     return None
 
 
+def _item_enclosure_length(item) -> Union[str, None]:
+    for child in list(item):
+        if _xml_local_name(child.tag) == 'enclosure':
+            return child.attrib.get('length')
+    return None
+
+
 def _peer_count(value: Union[str, None]) -> Union[int, None]:
     if value is None:
         return None
@@ -204,6 +212,16 @@ def _peer_count(value: Union[str, None]) -> Union[int, None]:
         return max(int(value), 0)
     except ValueError:
         return None
+
+
+def _byte_count(value: Union[str, None]) -> Union[int, None]:
+    if value is None:
+        return None
+    try:
+        result = int(value)
+    except ValueError:
+        return None
+    return result if result >= 0 else None
 
 
 def _build_magnet(
@@ -536,6 +554,11 @@ async def search_torznab_indexer(
             peers = _peer_count(attrs.get('peers'))
             if peers is not None and seeders is not None:
                 leechers = max(peers - seeders, 0)
+        size = _byte_count(
+            attrs.get('size')
+            or _item_enclosure_length(item)
+            or _item_text(item, 'size')
+        )
 
         result: SearchResultData = {
             **extract_filename_data(
@@ -551,9 +574,11 @@ async def search_torznab_indexer(
             result['seeders'] = seeders
         if leechers is not None:
             result['leechers'] = leechers
+        if size is not None:
+            result['size'] = size  # type: ignore[typeddict-unknown-key]
         results.append(result)
 
-    return results
+    return filter_search_results(results)  # type: ignore[arg-type,return-value]
 
 
 class IndexerTorrentDownload(TorrentDownload):

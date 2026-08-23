@@ -29,6 +29,13 @@ test('volume folder title style can drop a leading article token', () => {
 	);
 });
 
+test('drop can replace the trailing-article token too', () => {
+	assert.equal(
+		setVolumeFolderSeriesToken('{clean_series_name} ({year})', 'drop'),
+		'{series_name_no_article} ({year})'
+	);
+});
+
 test('volume folder title style can move a leading article to the end token', () => {
 	assert.equal(
 		setVolumeFolderSeriesToken('{series_name_no_article} ({year})', 'sort'),

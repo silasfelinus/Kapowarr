@@ -1114,7 +1114,19 @@ class NZBDownload(ExternalDownload, BaseDirectDownload):
         # ExternalDownloadClient necessarily reports this, hence .get().
         storage = usenet_status.get('storage')
         if storage and self.state == DownloadState.IMPORTING_STATE:
-            self._files = [storage]
+            # The client reports where *it* put the file, in its own
+            # filesystem. `run()` already translates the other direction when
+            # telling the client where to download to, and the return trip was
+            # missing: a SABnzbd in another container reports a path Kapowarr
+            # cannot open, so the download completed, was recorded as a
+            # success, and then vanished -- post-processing raised
+            # FileNotFoundError on a path that only exists on the client's
+            # side, and the issue stayed unfiled.
+            self._files = [
+                RemoteMappings.remote_to_local(
+                    self._external_client.id, storage
+                )
+            ]
 
         return
 

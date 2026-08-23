@@ -164,3 +164,60 @@ class import_of_files_that_moved(_ImportHarness):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class a_file_that_vanishes_mid_batch(_ImportHarness):
+    """Adding a volume can rescan and relocate files itself, so a path that
+    existed when the batch started can be gone by the time its turn comes.
+
+    The resulting FileNotFoundError escaped `import_library` into the
+    continuous import task and ended the whole run -- thousands of folders
+    stopped over one file that had already been dealt with.
+    """
+
+    def _patches_with_existing_volume(self):
+        from backend.base.custom_exceptions import VolumeAlreadyAdded
+
+        root = SimpleNamespace(id=1, folder=self.root + '/')
+        return (
+            patch(
+                'backend.features.library_import.RootFolders.get_all',
+                return_value=[root]
+            ),
+            patch(
+                'backend.features.library_import.Library.add',
+                side_effect=VolumeAlreadyAdded(99, 42)
+            ),
+            patch('backend.features.library_import.scan_files'),
+            patch('backend.features.library_import.commit'),
+        )
+
+    def test_the_batch_survives_a_file_that_moved(self):
+        present = self._file('Megazine', 'megazine 294.cbz')
+        gone = self._missing('Megazine', 'megazine 293.cbz')
+        volume_folder = self._file('Target', 'keep')  # ensures Target exists
+
+        patches = self._patches_with_existing_volume()
+        with patches[0], patches[1], patches[2] as scan, patches[3], patch(
+            'backend.features.library_import.Library.get_volume'
+        ) as get_volume, patch(
+            'backend.features.library_import.rename_file'
+        ) as rename, patch(
+            'backend.features.library_import.delete_empty_parent_folders'
+        ):
+            get_volume.return_value.vd.folder = join(self.root, 'Target')
+            result = import_library([
+                {'id': 99, 'filepath': gone},
+                {'id': 99, 'filepath': present},
+            ], continue_on_error=True)
+
+        self.assertEqual(
+            result['failed'], [],
+            'one moved file must not fail the volume'
+        )
+        renamed = [call.args[0] for call in rename.call_args_list]
+        self.assertIn(present, renamed)
+        self.assertNotIn(
+            gone, renamed, 'a vanished file must not be handed to shutil'
+        )
+        self.assertTrue(scan.called)

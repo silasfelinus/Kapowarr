@@ -503,13 +503,34 @@ def import_library(
                 else:
                     file_changes = change_basefolder(files, lcf, vf)
 
+                moved = []
                 for old, new in file_changes.items():
-                    if old != new:
-                        rename_file(old, new)
-                        delete_empty_parent_folders(
-                            dirname(old), root_folder.folder
+                    if old == new:
+                        moved.append(new)
+                        continue
+
+                    # Checked immediately before the move, not once up front.
+                    # Adding a volume can rescan and relocate files itself, so
+                    # a path that existed when this batch started can be gone
+                    # by the time its turn comes -- and the resulting
+                    # FileNotFoundError escaped `import_library` into the
+                    # continuous import task, ending the whole run over one
+                    # file that had already been dealt with.
+                    if not exists(old):
+                        LOGGER.info(
+                            'Skipping %s: it moved before it could be '
+                            'imported, most likely by an earlier volume in '
+                            'this batch', old
                         )
-                files = list(file_changes.values())
+                        continue
+
+                    rename_file(old, new)
+                    delete_empty_parent_folders(
+                        dirname(old), root_folder.folder
+                    )
+                    moved.append(new)
+
+                files = moved
 
             scan_files(volume_id, filepath_filter=files)
             if rename_files:

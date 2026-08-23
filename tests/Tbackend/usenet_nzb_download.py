@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from backend.base.definitions import DownloadState
 from backend.features.download_queue import download_type_to_class
+from backend.implementations import download_clients
 from backend.implementations.download_clients import (BaseDirectDownload,
                                                       ExternalDownload,
                                                       NZBDownload)
@@ -117,7 +118,13 @@ class nzb_download_update_status(unittest.TestCase):
             'state': DownloadState.IMPORTING_STATE,
             'storage': '/downloads/kapowarr/Batman 001'
         }
-        dl.update_status()
+        # The reported path is now translated out of the client's filesystem;
+        # with no mapping configured it comes back unchanged.
+        with patch.object(
+            download_clients.RemoteMappings, 'remote_to_local',
+            side_effect=lambda client_id, path: path
+        ):
+            dl.update_status()
 
         self.assertEqual(dl.state, DownloadState.IMPORTING_STATE)
         self.assertEqual(dl.files, ['/downloads/kapowarr/Batman 001'])

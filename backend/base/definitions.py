@@ -10,7 +10,11 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from threading import Event, Thread
 from typing import (TYPE_CHECKING, Any, Callable, Dict, List, Mapping,
-                    NotRequired, Sequence, Tuple, TypedDict, TypeVar, Union)
+                    Sequence, Tuple, TypedDict, TypeVar, Union)
+
+# NotRequired is typing-3.11+; the project supports 3.8. Same reason the
+# modules using assert_never take it from here.
+from typing_extensions import NotRequired
 
 if TYPE_CHECKING:
     from backend.base.helpers import AsyncSession

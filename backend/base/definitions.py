@@ -1112,7 +1112,7 @@ class StartTypeHandler(ABC):
 class WebSocketEvent(ABC):
     @abstractmethod
     def get_type(self) -> WebSocketEventType:
-        """Get the type of websocket event.
+        """Get the type of event.
 
         Returns:
             WebSocketEventType: The event type.
@@ -1754,8 +1754,8 @@ class ExternalDownload(Download):
 
             LinkBroken: The link doesn't work.
 
-            DownloadLimitReached: At the source that is downloaded from,
-                we've reached a rate limit.
+            DownloadLimitReached: Can't download because the limit of the service
+                is reached.
         """
         ...
 

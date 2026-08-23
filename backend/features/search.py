@@ -283,6 +283,45 @@ async def search_multiple_queries(*queries: str) -> List[SearchResultData]:
     return _dedupe_search_results(responses)
 
 
+def _probe_order(queries: Sequence[str]) -> List[str]:
+    """Broadest query first, then the rest in their original order.
+
+    The builders phrase one search several ways, from most specific to just
+    the series title, and every specific phrasing is the broad one plus extra
+    terms. Newznab and Torznab AND the terms in `q`, so the broad query
+    returns a superset of what any of the others would: asking all of them
+    spends a request per phrasing to receive results already contained in the
+    first.
+
+    Order alone does not save anything -- :func:`_search_source` is what stops
+    early -- but it decides which single query is usually the only one sent.
+    """
+    if len(queries) < 2:
+        return list(queries)
+
+    broadest = min(queries, key=lambda query: len(query.split()))
+    return [broadest] + [query for query in queries if query != broadest]
+
+
+async def _search_source(Source, queries: Sequence[str], session):
+    """Ask one source, widening only if the broad query found nothing.
+
+    Stopping at the first query that returns anything turns a search from one
+    request per phrasing into one request, in the case where the broad query
+    works -- which is the usual case, since it is the least constrained. The
+    remaining phrasings are still tried when it comes back empty: an indexer
+    caps how many results it will return, so a broad query against a prolific
+    title can push the wanted release off the end of the list where a more
+    specific phrasing would surface it.
+    """
+    for query in _probe_order(queries):
+        results = await Source(query).search(session)
+        if results:
+            return results
+
+    return []
+
+
 async def search_planned_queries(
     query_plan: Mapping[DownloadType, Sequence[str]]
 ) -> List[SearchResultData]:
@@ -291,13 +330,15 @@ async def search_planned_queries(
     Protocol preference changes the stable input order, so otherwise-equal
     results inherit the user's preferred acquisition source without making
     source choice more important than matching correctness.
+
+    Sources are still searched concurrently; the phrasings within one source
+    are not, because each is only sent when the one before it found nothing.
     """
     async with AsyncSession() as session:
         searches = [
-            Source(query).search(session)
+            _search_source(Source, query_plan[download_type], session)
             for download_type in ordered_download_types(tuple(query_plan))
             for Source in SearchSources.sources.get(download_type, [])
-            for query in query_plan[download_type]
         ]
         responses = await gather(*searches)
 

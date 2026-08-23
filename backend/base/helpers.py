@@ -57,9 +57,43 @@ SENSITIVE_QUERY_KEYS = frozenset((
 ))
 
 
+# A credential is not always a query parameter. A Discord webhook puts its
+# token in the path -- anyone holding it can post to the channel -- and a proxy
+# URL carries `user:password@` in the netloc.
+WEBHOOK_PATH_MARKERS = ('/api/webhooks/', '/services/')
+
+
+def _redact_netloc(netloc: str) -> str:
+    """Mask the password in a `user:password@host` authority."""
+    if '@' not in netloc:
+        return netloc
+
+    userinfo, _, host = netloc.rpartition('@')
+    if ':' not in userinfo:
+        return netloc
+    user, _, _password = userinfo.partition(':')
+    return f'{user}:***@{host}'
+
+
+def _redact_path(path: str) -> str:
+    """Mask a webhook token, which identifies the caller by itself."""
+    lowered = path.lower()
+    for marker in WEBHOOK_PATH_MARKERS:
+        if marker in lowered and path.rstrip('/').count('/') > 2:
+            head, _, _token = path.rstrip('/').rpartition('/')
+            return f'{head}/***'
+    return path
+
+
 def redact_url(url: str) -> str:
-    """Return `url` with credential-bearing query values masked."""
-    if not url or '?' not in url:
+    """Return `url` with anything that authenticates the caller masked.
+
+    Kept deliberately narrow. Everything that is not a known credential stays
+    readable, because a redacted URL nobody can act on is no more useful in a
+    bug report than no URL at all -- `link=` and `file=` are exactly what make
+    a broken indexer link diagnosable.
+    """
+    if not url:
         return url
 
     try:
@@ -68,19 +102,20 @@ def redact_url(url: str) -> str:
         return url
 
     pairs = parse_qsl(parts.query, keep_blank_values=True)
-    if not pairs:
-        return url
-
     redacted = [
         (key, '***' if key.lower() in SENSITIVE_QUERY_KEYS and value else value)
         for key, value in pairs
     ]
-    if redacted == pairs:
+
+    netloc = _redact_netloc(parts.netloc)
+    path = _redact_path(parts.path)
+    if redacted == pairs and netloc == parts.netloc and path == parts.path:
         return url
 
     return urlunsplit((
-        parts.scheme, parts.netloc, parts.path,
-        urlencode(redacted, safe='*'), parts.fragment
+        parts.scheme, netloc, path,
+        urlencode(redacted, safe='*') if pairs else parts.query,
+        parts.fragment
     ))
 
 

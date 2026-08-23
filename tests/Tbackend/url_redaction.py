@@ -63,6 +63,44 @@ class credential_bearing_urls_are_masked(unittest.TestCase):
             self.assertIsInstance(redact_url(value), str)
 
 
+class credentials_outside_the_query_string(unittest.TestCase):
+    """A credential is not always a query parameter.
+
+    Masking only the query left two shapes readable: a Discord webhook token,
+    which sits in the path and lets anyone holding it post to the channel, and
+    a proxy password in the `user:password@host` authority.
+    """
+
+    def test_a_webhook_token_in_the_path_is_masked(self):
+        self.assertEqual(
+            redact_url('https://discord.com/api/webhooks/123456789/tokenXYZ'),
+            'https://discord.com/api/webhooks/123456789/***'
+        )
+
+    def test_the_webhook_id_survives_so_the_target_is_identifiable(self):
+        # Which webhook failed is the diagnostic value; the token is not.
+        self.assertIn(
+            '123456789',
+            redact_url('https://discord.com/api/webhooks/123456789/tokenXYZ')
+        )
+
+    def test_a_proxy_password_is_masked_but_the_user_is_kept(self):
+        self.assertEqual(
+            redact_url('http://user:hunter2@proxy.internal:8080'),
+            'http://user:***@proxy.internal:8080'
+        )
+
+    def test_a_host_with_no_userinfo_is_untouched(self):
+        self.assertEqual(
+            redact_url('http://proxy.internal:8080/x'),
+            'http://proxy.internal:8080/x'
+        )
+
+    def test_an_ordinary_path_is_not_mistaken_for_a_token(self):
+        url = 'https://getcomics.org/dc/100-bullets-the-us-of-anger-2-2026/'
+        self.assertEqual(redact_url(url), url)
+
+
 class the_sites_that_log_urls_use_it(unittest.TestCase):
     def test_every_credential_bearing_log_site_redacts(self):
         import inspect
@@ -78,6 +116,11 @@ class the_sites_that_log_urls_use_it(unittest.TestCase):
         )
         self.assertIn(
             'redact_url(blocked_link)', inspect.getsource(blocklist)
+        )
+        # The prepper-miss warning logs the same indexer link.
+        self.assertIn(
+            'redact_url(link)',
+            inspect.getsource(download_queue.DownloadHandler)
         )
 
 

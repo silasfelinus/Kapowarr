@@ -549,7 +549,9 @@ class DownloadHandler(metaclass=Singleton):
 
         link_type = self.__determine_link_type(link)
         if link_type is None:
-            LOGGER.warning('No download prepper recognised link: %s', link)
+            LOGGER.warning(
+                'No download prepper recognised link: %s', redact_url(link)
+            )
             return [], None
 
         try:

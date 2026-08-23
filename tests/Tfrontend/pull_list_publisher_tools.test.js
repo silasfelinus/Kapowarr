@@ -11,6 +11,7 @@ function read(relative) {
 
 const template = read('frontend/templates/pull_list.html');
 const helper = read('frontend/static/js/pull_list_publisher_tools.js');
+const styles = read('frontend/static/css/pull_list.css');
 const statusRoutes = read('frontend/pull_list_status.py');
 
 
@@ -31,15 +32,34 @@ test('publisher automation offers one-click grab-all for listed publishers', () 
 });
 
 
-test('publisher rows expose a question-mark information dialog', () => {
+test('publisher rows expose question-mark information with hover summaries', () => {
 	assert.match(template, /class="publisher-info-button"/);
 	assert.match(template, /id="publisher-info-dialog"/);
 	assert.match(helper, /const PUBLISHER_PROFILES =/);
 	assert.match(helper, /'marvel comics'/);
 	assert.match(helper, /'image comics'/);
-	assert.match(helper, /No built-in profile yet/);
+	assert.match(helper, /'heavy metal'/);
+	assert.match(helper, /'comixology originals'/);
+	assert.match(helper, /'american mythology productions'/);
+	assert.match(helper, /'fire ant entertainment'/);
+	assert.match(helper, /publisherProfileKey\(name\)/);
+	assert.match(helper, /dataset\.publisherTooltip = description/);
+	assert.match(helper, /addEventListener\('pointerover'/);
+	assert.match(helper, /addEventListener\('focusin'/);
+	assert.match(styles, /data-publisher-tooltip/);
+	assert.match(styles, /:hover::after/);
+	assert.match(styles, /:focus-visible::after/);
 	assert.match(helper, /Special:Search\?search=/);
 	assert.match(helper, /publisherAutomationLabel\(publisher\)/);
+});
+
+
+test('unknown publisher labels get an honest curated fallback', () => {
+	assert.match(
+		helper,
+		/Independent or specialist publisher listed by the release catalogue/
+	);
+	assert.match(helper, /catalogue names can also represent imprints or distribution labels/);
 });
 
 

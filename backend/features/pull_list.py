@@ -31,6 +31,19 @@ WEEKLY_RELEASE_FETCH_TIMEOUT = 45.0
 _PUBLISHER_AUTOMATION_LOCK = Lock()
 
 
+class _NotAvailableYet(Exception):
+    """The release is real, it just has not turned up anywhere yet.
+
+    A comic that no indexer is carrying on release morning is the ordinary
+    case, not a fault, and neither is one ComicVine has not indexed issues
+    for. Both are still recorded as unsuccessful so the pull list can show
+    them as pending, but they do not belong in the error log: a single
+    check produced 139 ERROR tracebacks for releases that were simply not
+    out, which buried the failures that actually needed reading.
+    """
+
+
+
 def _monday(value: date) -> date:
     return value - timedelta(days=value.weekday())
 
@@ -836,17 +849,25 @@ def _process_publisher_subscriptions_unlocked(
             )
             if subscription['auto_search']:
                 if issue_id is None:
-                    raise RuntimeError(
+                    raise _NotAvailableYet(
                         'The released issue is not in metadata yet'
                     )
                 results = auto_search(volume_id, issue_id)
                 if not results:
-                    raise RuntimeError('No matching download was found yet')
+                    raise _NotAvailableYet('No matching download was found yet')
                 downloads.extend((
                     result['link'], volume_id, issue_id
                 ) for result in results)
             success, message = True, None
             succeeded += 1
+        except _NotAvailableYet as pending:
+            LOGGER.info(
+                'Publisher automation has nothing yet for %s: %s',
+                release_key, pending
+            )
+            success, message = False, str(pending)[:240]
+            failed += 1
+
         except Exception as error:
             LOGGER.exception(
                 'Publisher automation failed for %s', release_key

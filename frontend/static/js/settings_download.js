@@ -18,6 +18,8 @@ function fillSettings(api_key) {
 			acquisition.acquisition_source_preference,
 			{direct: 'Direct', torrent: 'Torrent', usenet: 'Usenet'}
 		);
+		document.querySelector('#minimum-grab-size-input').value = acquisition.minimum_grab_size_mb;
+		document.querySelector('#maximum-grab-size-input').value = acquisition.maximum_grab_size_mb;
 		document.querySelector('#getcomics-quality-input').value = acquisition.getcomics_quality_preference;
 		document.querySelector('#pack-preference-input').value = acquisition.pack_preference;
 	});
@@ -27,6 +29,8 @@ function saveSettings(api_key) {
 	document.querySelector("#save-button p").innerText = 'Saving';
 	document.querySelector('#download-folder-input').classList.remove('error-input');
 	document.querySelector('#watched-folder-input').classList.remove('error-input');
+	document.querySelector('#minimum-grab-size-input').classList.remove('error-input');
+	document.querySelector('#maximum-grab-size-input').classList.remove('error-input');
 	const settingsData = {
 		'download_folder': document.querySelector('#download-folder-input').value,
 		'watched_folder': document.querySelector('#watched-folder-input').value,
@@ -38,6 +42,8 @@ function saveSettings(api_key) {
 	};
 	const acquisitionData = {
 		'acquisition_source_preference': [...document.querySelectorAll('#source-pref-table select')].map(e => e.value),
+		'minimum_grab_size_mb': parseInt(document.querySelector('#minimum-grab-size-input').value || 0),
+		'maximum_grab_size_mb': parseInt(document.querySelector('#maximum-grab-size-input').value || 0),
 		'getcomics_quality_preference': document.querySelector('#getcomics-quality-input').value,
 		'pack_preference': document.querySelector('#pack-preference-input').value
 	};
@@ -61,6 +67,12 @@ function saveSettings(api_key) {
 
 			else if (key === "download_folder")
 				document.querySelector('#download-folder-input').classList.add('error-input');
+
+			else if (key === "minimum_grab_size_mb")
+				document.querySelector('#minimum-grab-size-input').classList.add('error-input');
+
+			else if (key === "maximum_grab_size_mb")
+				document.querySelector('#maximum-grab-size-input').classList.add('error-input');
 
 			else if (e.error === "FolderNotFound") {
 				document.querySelector('#download-folder-input').classList.add('error-input');

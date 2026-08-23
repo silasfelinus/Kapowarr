@@ -7,6 +7,7 @@ from backend.base.custom_exceptions import BlocklistEntryNotFound
 from backend.base.definitions import (BlocklistEntry, BlocklistReason,
                                       BlocklistReasonID, DownloadSource,
                                       GCDownloadSource)
+from backend.base.helpers import redact_url
 from backend.base.logging import LOGGER
 from backend.internals.db import get_db
 

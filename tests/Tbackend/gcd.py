@@ -224,3 +224,52 @@ class TestGcdRequests(IsolatedAsyncioTestCase):
 if __name__ == '__main__':
     import unittest
     unittest.main()
+
+
+class GcdSearchSurvivesAnUnusableResult(IsolatedAsyncioTestCase):
+    """One bad entry must not cost the whole search.
+
+    GCD has returned series rows with no `id`. Indexing it unconditionally
+    raised KeyError out through /api/volumes/search, so a query that matched
+    twenty series returned nothing at all and looked like a total failure. An
+    entry with no id cannot be added anyway -- there is nothing to link to.
+    """
+
+    async def _search(self, results):
+        provider = _provider()
+        with patch.object(
+            provider, '_get', AsyncMock(return_value={'results': results})
+        ), patch(
+            'backend.implementations.gcd.MetadataIdentityStore.resolve',
+            return_value=None
+        ):
+            return await provider.search_volumes('rocketfellers')
+
+    async def test_an_entry_with_no_id_is_skipped_not_fatal(self):
+        found = await self._search([
+            {'name': 'Broken Row'},
+            {'id': 42, 'name': 'The Rocketfellers', 'year_began': 2003},
+        ])
+
+        self.assertEqual([v['title'] for v in found], ['The Rocketfellers'])
+
+    async def test_a_null_id_is_treated_the_same(self):
+        found = await self._search([
+            {'id': None, 'name': 'Broken Row'},
+            {'id': 7, 'name': 'Keeper', 'year_began': 1999},
+        ])
+
+        self.assertEqual([v['external_id'] for v in found], ['7'])
+
+    async def test_a_page_of_only_bad_rows_returns_empty_rather_than_raising(self):
+        self.assertEqual(
+            await self._search([{'name': 'a'}, {'name': 'b'}]), []
+        )
+
+    async def test_a_normal_page_is_unaffected(self):
+        found = await self._search([
+            {'id': 1, 'name': 'One', 'year_began': 2001},
+            {'id': 2, 'name': 'Two', 'year_began': 2002},
+        ])
+
+        self.assertEqual([v['external_id'] for v in found], ['1', '2'])

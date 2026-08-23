@@ -1,19 +1,24 @@
+const VOLUME_FOLDER_SERIES_TOKENS = {
+	original: '{series_name}',
+	drop: '{series_name_no_article}',
+	sort: '{clean_series_name}'
+};
+
 function setVolumeFolderSeriesToken(format, style) {
-	if (style === 'sort')
-		return format.split('{series_name}').join('{clean_series_name}');
-	if (style === 'original')
-		return format.split('{clean_series_name}').join('{series_name}');
-	return format;
+	const target = VOLUME_FOLDER_SERIES_TOKENS[style];
+	if (!target)
+		return format;
+
+	return Object.values(VOLUME_FOLDER_SERIES_TOKENS).reduce(
+		(result, token) => result.split(token).join(target),
+		format
+	);
 };
 
 function detectVolumeFolderSeriesToken(format) {
-	const hasOriginal = format.includes('{series_name}');
-	const hasClean = format.includes('{clean_series_name}');
-	if (hasOriginal && !hasClean)
-		return 'original';
-	if (hasClean && !hasOriginal)
-		return 'sort';
-	return 'custom';
+	const matches = Object.entries(VOLUME_FOLDER_SERIES_TOKENS)
+		.filter(([, token]) => format.includes(token));
+	return matches.length === 1 ? matches[0][0] : 'custom';
 };
 
 if (typeof module !== 'undefined')
@@ -37,6 +42,7 @@ if (typeof document !== 'undefined') {
 		select.id = 'volume-folder-title-style-input';
 		[
 			['original', 'Keep at front (The Rocketfellers)'],
+			['drop', 'Drop article (Rocketfellers)'],
 			['sort', 'Move to end (Rocketfellers, The)'],
 			['custom', 'Custom naming tokens']
 		].forEach(([value, text]) => {
@@ -49,7 +55,7 @@ if (typeof document !== 'undefined') {
 		});
 
 		const help = document.createElement('p');
-		help.innerText = "A convenience preset for the volume-folder naming token. 'Move to end' uses {clean_series_name}, which sorts leading 'The' or 'A' after the title. It only affects newly generated folder names; existing and manually customized folders are left alone.";
+		help.innerText = "A convenience preset for the volume-folder naming token. 'Drop article' uses {series_name_no_article}; 'Move to end' uses {clean_series_name}. Both handle leading 'The' or 'A'. It only affects newly generated folder names; existing and manually customized folders are left alone.";
 		cell.appendChild(select);
 		cell.appendChild(help);
 		row.appendChild(heading);

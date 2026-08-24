@@ -8,6 +8,7 @@
 // images only around the viewport.
 window.installVolumesGalleryRenderer(() => {
 	const original_build_library_view = buildLibraryView;
+	const original_clear_library_view = clearLibraryView;
 	let cover_observer = null;
 
 	function disconnectCoverObserver() {
@@ -93,7 +94,6 @@ window.installVolumesGalleryRenderer(() => {
 		clearLibraryView('list');
 		library_built_views.list = true;
 		library_render_pending.list = true;
-		disconnectCoverObserver();
 
 		// Give the loading state a paint before doing the one bulk shell build.
 		scheduleLibraryPaint(() => {
@@ -124,6 +124,12 @@ window.installVolumesGalleryRenderer(() => {
 			// scroll height are final before any cover requests begin.
 			observeCovers(images);
 		});
+	};
+
+	clearLibraryView = function(view) {
+		if (view === 'list')
+			disconnectCoverObserver();
+		return original_clear_library_view(view);
 	};
 
 	buildLibraryView = function(view, api_key, generation, on_first_batch=null) {

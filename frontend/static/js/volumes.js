@@ -23,6 +23,7 @@ const library_els = {
 		input: document.querySelector('#search-input')
 	},
 	stats: {
+		footer: document.querySelector('#lib-stats'),
 		volume_count: document.querySelector('#volume-count'),
 		volume_monitored_count: document.querySelector('#volume-monitored-count'),
 		volume_unmonitored_count: document.querySelector('#volume-unmonitored-count'),
@@ -46,25 +47,38 @@ const pre_build_els = {
 	table_entry: document.querySelector('.pre-build-els .table-entry')
 };
 
-const LIBRARY_RENDER_BATCH_SIZE = 50;
+// Keep each individual main-thread job small enough for mobile browsers. More
+// importantly, do not drain the entire library once the first batch is visible:
+// render only a viewport-sized runway and extend it as the user approaches the
+// footer. A 2,000-volume library should not become a 2,000-card DOM just because
+// the page was opened.
+const LIBRARY_RENDER_BATCH_SIZE = 16;
+const LIBRARY_RENDER_AHEAD_PX = 1200;
 let library_render_generation = 0;
+let library_render_check_scheduled = false;
+let library_fetching = false;
 
 // Volume ID -> LibraryEntry, covering every volume in the current listing.
-// A keyed registry rather than a `.vol-<id>` querySelector per update: progress
-// and download-status events arrive one volume at a time, and looking each one
-// up by scanning the whole library made a busy download queue cost O(library)
-// per event.
+// The registry is deliberately complete even when most rows/cards have not been
+// rendered yet, so socket progress updates remain correct for off-screen volumes.
 const library_entries = new Map();
 
 // The most recent `/volumes` payload, kept so that switching views can build the
 // other view without going back to the server.
 let library_volumes = [];
 
-// Only the visible view is built. A library of any size is otherwise paying
-// twice: the poster grid allocates an <img> per volume, and every table row
-// parses a full inline SVG through `setIcon`, so building the hidden view was
-// as expensive as building the one being looked at.
+// Only the visible view is built. `library_render_offsets` is how much of each
+// view currently exists in the DOM; it advances only while the footer is near the
+// viewport rather than racing to library_volumes.length in the background.
 const library_built_views = {list: false, table: false};
+const library_render_offsets = {list: 0, table: 0};
+const library_render_pending = {list: false, table: false};
+const selected_volume_ids = new Set();
+
+// Queue change events carry the complete current queue. Remember which volumes
+// were represented last time so an ended download can clear its badge without
+// walking every volume in the library on every progress tick.
+let library_download_volume_ids = new Set();
 
 function showLibraryPage(el) {
 	hide(Object.values(library_els.pages), [el]);
@@ -76,6 +90,13 @@ function scheduleLibraryRender(callback) {
 	} else {
 		setTimeout(callback, 0);
 	};
+};
+
+function scheduleLibraryPaint(callback) {
+	if (typeof window.requestAnimationFrame === 'function')
+		window.requestAnimationFrame(callback);
+	else
+		setTimeout(callback, 0);
 };
 
 function inMassEdit() {
@@ -240,6 +261,21 @@ function buildTableEntry(entry, volume, api_key, fragment) {
 		`View the volume ${volume.title} (${volume.year}) Volume ${volume.volume_number}`;
 	table_entry.classList.add(`vol-${volume.id}`);
 	table_entry.dataset.id = volume.id;
+	// Selection lives in data, not in the presence of a DOM row. A lazy row
+	// therefore appears with the same state it would have had if every table row
+	// had been built eagerly.
+	const checkbox = table_entry.querySelector('input[type="checkbox"]');
+	checkbox.checked = selected_volume_ids.has(Number(volume.id));
+	checkbox.onchange = () => {
+		const volume_id = Number(volume.id);
+		if (checkbox.checked)
+			selected_volume_ids.add(volume_id);
+		else
+			selected_volume_ids.delete(volume_id);
+
+		library_els.mass_edit.select_all.checked =
+			selected_volume_ids.size === library_volumes.length;
+	};
 
 	const link = table_entry.querySelector('.table-link');
 	link.href = `${url_base}/volumes/${volume.id}`;
@@ -258,25 +294,32 @@ const view_builders = {
 	table: buildTableEntry
 };
 
+function createLibraryEntry(volume, api_key) {
+	const entry = new LibraryEntry(volume.id, api_key);
+	entry.monitored = Boolean(volume.monitored);
+	entry.downloaded_count = Math.min(
+		volume.issues_downloaded_monitored,
+		volume.issue_count_monitored
+	);
+	entry.total_count = volume.issue_count_monitored;
+	library_entries.set(volume.id, entry);
+	return entry;
+};
+
 // Build `view` for `volumes[offset:end]` and paint the results in one insert.
 function renderLibraryBatch(view, volumes, api_key, offset, end) {
 	const fragment = document.createDocumentFragment();
 
 	for (let i = offset; i < end; i++) {
 		const volume = volumes[i];
-
 		let entry = library_entries.get(volume.id);
-		if (entry === undefined) {
-			entry = new LibraryEntry(volume.id, api_key);
-			entry.monitored = Boolean(volume.monitored);
-			entry.setProgressBar(
-				volume.issues_downloaded_monitored,
-				volume.issue_count_monitored
-			);
-			entry.download_status = getVolumeDownloadStatus(volume.id);
-			library_entries.set(volume.id, entry);
-		};
+		if (entry === undefined)
+			entry = createLibraryEntry(volume, api_key);
 
+		// Queue state may have changed while this volume was still off-screen.
+		// Recompute only when a card/row actually materialises, rather than doing
+		// an O(library * queue) sweep up front.
+		entry.download_status = getVolumeDownloadStatus(volume.id);
 		view_builders[view](entry, volume, api_key, fragment);
 
 		// Applied after the element is attached to the entry so that the freshly
@@ -296,14 +339,16 @@ function renderLibraryBatch(view, volumes, api_key, offset, end) {
 };
 
 function clearLibraryView(view) {
-	if (view === 'list')
-		library_els.views.list.querySelectorAll('.list-entry').forEach(
-			e => e.remove()
-		);
-	else
-		library_els.views.table.innerHTML = '';
+	if (view === 'list') {
+		const space_taker = library_els.views.list.querySelector('.space-taker');
+		library_els.views.list.replaceChildren(space_taker);
+	} else {
+		library_els.views.table.replaceChildren();
+	};
 
 	library_built_views[view] = false;
+	library_render_offsets[view] = 0;
+	library_render_pending[view] = false;
 	library_entries.forEach(entry => {
 		if (view === 'list')
 			entry.list_entry = null;
@@ -312,56 +357,127 @@ function clearLibraryView(view) {
 	});
 };
 
-// Build `view` in idle-time batches. `on_first_batch` fires once the first batch
-// is on screen, so the loading screen can be swapped out before the rest of a
-// large library has finished rendering.
+function viewHasMoreToRender(view) {
+	return library_built_views[view]
+		&& library_render_offsets[view] < library_volumes.length;
+};
+
+function renderNextLibraryBatch(view, api_key, generation, on_first_batch=null) {
+	if (
+		generation !== library_render_generation
+		|| !library_built_views[view]
+	)
+		return;
+
+	const offset = library_render_offsets[view];
+	if (offset >= library_volumes.length)
+		return;
+
+	const end = Math.min(
+		offset + LIBRARY_RENDER_BATCH_SIZE,
+		library_volumes.length
+	);
+	renderLibraryBatch(view, library_volumes, api_key, offset, end);
+	library_render_offsets[view] = end;
+
+	if (offset === 0 && on_first_batch !== null)
+		on_first_batch();
+};
+
+function scheduleNextLibraryBatch(view, api_key, generation) {
+	if (
+		library_render_pending[view]
+		|| !viewHasMoreToRender(view)
+	)
+		return;
+
+	library_render_pending[view] = true;
+	scheduleLibraryRender(() => {
+		if (generation !== library_render_generation)
+			return;
+		library_render_pending[view] = false;
+
+		renderNextLibraryBatch(view, api_key, generation);
+		// One batch may still leave the footer close to the viewport. Re-check on
+		// the next paint, but stop completely once the runway is long enough.
+		scheduleLibraryRenderCheck(api_key);
+	});
+};
+
+function maybeRenderLibraryMore(api_key) {
+	if (library_fetching || library_volumes.length === 0)
+		return;
+
+	const view = activeLibraryView();
+	if (!viewHasMoreToRender(view) || library_render_pending[view])
+		return;
+
+	const viewport_height = window.innerHeight
+		|| document.documentElement.clientHeight;
+	if (
+		library_els.stats.footer.getBoundingClientRect().top
+		> viewport_height + LIBRARY_RENDER_AHEAD_PX
+	)
+		return;
+
+	scheduleNextLibraryBatch(view, api_key, library_render_generation);
+};
+
+function scheduleLibraryRenderCheck(api_key) {
+	if (library_render_check_scheduled)
+		return;
+
+	library_render_check_scheduled = true;
+	scheduleLibraryPaint(() => {
+		library_render_check_scheduled = false;
+		maybeRenderLibraryMore(api_key);
+	});
+};
+
+// Build only the first small batch now. Further batches are demand-driven by
+// scroll/resize checks against the footer, not queued all the way to the end.
 function buildLibraryView(view, api_key, generation, on_first_batch=null) {
 	clearLibraryView(view);
 	library_built_views[view] = true;
+	library_render_pending[view] = true;
 
-	const volumes = library_volumes;
-	let offset = 0;
-	let first_batch = true;
-
-	function renderBatch() {
+	// Yield once even for the first batch. JSON parsing and a network callback can
+	// otherwise run straight into DOM construction before the browser gets a paint.
+	scheduleLibraryPaint(() => {
 		if (generation !== library_render_generation)
 			return;
+		library_render_pending[view] = false;
 
-		const end = Math.min(offset + LIBRARY_RENDER_BATCH_SIZE, volumes.length);
-		renderLibraryBatch(view, volumes, api_key, offset, end);
-		offset = end;
-
-		if (first_batch) {
-			first_batch = false;
-			if (on_first_batch !== null)
-				on_first_batch();
-		};
-
-		if (offset < volumes.length) {
-			scheduleLibraryRender(renderBatch);
-		} else {
-			library_els.mass_edit.button.disabled = false;
-		};
-	};
-
-	renderBatch();
+		renderNextLibraryBatch(view, api_key, generation, on_first_batch);
+		library_els.mass_edit.button.disabled = false;
+		scheduleLibraryRenderCheck(api_key);
+	});
 };
 
 // Make sure the view the user is about to look at exists, building it on the
 // spot if this is the first time it has been asked for.
 function ensureLibraryViewBuilt(api_key) {
-	const view = activeLibraryView();
-	if (library_built_views[view] || library_volumes.length === 0)
+	if (library_fetching || library_volumes.length === 0)
 		return;
 
-	buildLibraryView(view, api_key, library_render_generation);
+	const view = activeLibraryView();
+	if (!library_built_views[view])
+		buildLibraryView(view, api_key, library_render_generation);
+	else
+		scheduleLibraryRenderCheck(api_key);
 };
 
 function populateLibrary(volumes, api_key, generation, on_first_batch) {
-	library_volumes = volumes;
-	library_entries.clear();
 	clearLibraryView('list');
 	clearLibraryView('table');
+	library_entries.clear();
+	library_volumes = volumes;
+	selected_volume_ids.clear();
+	library_els.mass_edit.select_all.checked = false;
+
+	// Seed only lightweight state for every volume. DOM and queue summaries are
+	// created on demand, but socket progress remains correct before that happens.
+	volumes.forEach(volume => createLibraryEntry(volume, api_key));
 
 	buildLibraryView(
 		activeLibraryView(),
@@ -375,6 +491,7 @@ function fetchLibrary(api_key) {
 	library_els.mass_edit.progress.innerText = '';
 	library_els.mass_edit.button.disabled = true;
 	showLibraryPage(library_els.pages.loading);
+	library_fetching = true;
 	const generation = ++library_render_generation;
 
 	const params = {
@@ -390,11 +507,12 @@ function fetchLibrary(api_key) {
 		if (generation !== library_render_generation)
 			return;
 
+		library_fetching = false;
 		if (json.result.length === 0) {
-			library_volumes = [];
-			library_entries.clear();
 			clearLibraryView('list');
 			clearLibraryView('table');
+			library_volumes = [];
+			library_entries.clear();
 			library_els.mass_edit.button.disabled = false;
 			showLibraryPage(library_els.pages.empty);
 		} else {
@@ -439,9 +557,7 @@ function fetchStats(api_key) {
 function runAction(api_key, action, args={}) {
 	showLibraryPage(library_els.pages.loading);
 
-	const volume_ids = [...library_els.views.table.querySelectorAll(
-		'input[type="checkbox"]:checked'
-	)].map(v => parseInt(v.parentNode.parentNode.dataset.id))
+	const volume_ids = [...selected_volume_ids];
 
 	sendAPI('POST', '/masseditor', api_key, {}, {
 		'volume_ids': volume_ids,
@@ -449,9 +565,36 @@ function runAction(api_key, action, args={}) {
 		'args': args
 	})
 	.then(response => {
+		selected_volume_ids.clear();
 		library_els.mass_edit.select_all.checked = false;
 		fetchLibrary(api_key);
 	});
+};
+
+function updateLibraryDownloadStatuses(downloads) {
+	const next_volume_ids = new Set(
+		downloads
+			.map(download => Number(download.volume_id))
+			.filter(Number.isFinite)
+	);
+	const changed_volume_ids = new Set([
+		...library_download_volume_ids,
+		...next_volume_ids
+	]);
+
+	changed_volume_ids.forEach(volume_id => {
+		const entry = library_entries.get(volume_id);
+		if (entry === undefined)
+			return;
+
+		// Do not spend DOM work on a volume whose two views are both still lazy.
+		// Its status is recomputed from the shared queue when it materialises.
+		if (entry.list_entry === null && entry.table_entry === null)
+			return;
+
+		entry.setDownloadStatus(getVolumeDownloadStatus(volume_id));
+	});
+	library_download_volume_ids = next_volume_ids;
 };
 
 // code run on load
@@ -492,37 +635,37 @@ usingApiKey()
 		fetchLibrary(api_key);
 	};
 
-    library_els.mass_edit.button.onclick =
-    library_els.mass_edit.cancel.onclick =
-        e => {
-            const toggle = library_els.mass_edit.toggle;
-            if (toggle.hasAttribute('checked')) {
-                toggle.removeAttribute('checked');
-                // Back to whatever the view selector says, which may never have
-                // been built if the session started in mass edit.
-                ensureLibraryViewBuilt(api_key);
-            } else {
-                const select = document.querySelector('select[name="root_folder_id"]');
-                if (select.querySelector('option') === null) {
-                    fetchAPI('/rootfolder', api_key)
-                    .then(json => {
-                        json.result.forEach(rf => {
-                            const entry = document.createElement('option');
-                            entry.value = rf.id;
-                            entry.innerText = rf.folder;
-                            select.appendChild(entry);
-                        });
-                        toggle.setAttribute('checked', '');
-                        // Mass edit is always the table view, whatever the view
-                        // selector is set to.
-                        ensureLibraryViewBuilt(api_key);
-                    });
-                } else {
-                    toggle.setAttribute('checked', '');
-                    ensureLibraryViewBuilt(api_key);
-                };
-            }
-        };
+	library_els.mass_edit.button.onclick =
+	library_els.mass_edit.cancel.onclick =
+		e => {
+			const toggle = library_els.mass_edit.toggle;
+			if (toggle.hasAttribute('checked')) {
+				toggle.removeAttribute('checked');
+				// Back to whatever the view selector says, which may never have
+				// been built if the session started in mass edit.
+				ensureLibraryViewBuilt(api_key);
+			} else {
+				const select = document.querySelector('select[name="root_folder_id"]');
+				if (select.querySelector('option') === null) {
+					fetchAPI('/rootfolder', api_key)
+					.then(json => {
+						json.result.forEach(rf => {
+							const entry = document.createElement('option');
+							entry.value = rf.id;
+							entry.innerText = rf.folder;
+							select.appendChild(entry);
+						});
+						toggle.setAttribute('checked', '');
+						// Mass edit is always the table view, whatever the view
+						// selector is set to.
+						ensureLibraryViewBuilt(api_key);
+					});
+				} else {
+					toggle.setAttribute('checked', '');
+					ensureLibraryViewBuilt(api_key);
+				};
+			}
+		};
 	library_els.mass_edit.bar.querySelectorAll('.action-divider > button[data-action]').forEach(
 		b => b.onclick = e => runAction(api_key, e.target.dataset.action)
 	);
@@ -559,9 +702,18 @@ usingApiKey()
 
 	document.addEventListener(
 		'kapowarr:download-queue-changed',
-		() => library_entries.forEach(
-			entry => entry.setDownloadStatus(getVolumeDownloadStatus(entry.id))
-		)
+		e => updateLibraryDownloadStatuses(e.detail || [])
+	);
+
+	window.addEventListener(
+		'scroll',
+		() => scheduleLibraryRenderCheck(api_key),
+		{passive: true}
+	);
+	window.addEventListener(
+		'resize',
+		() => scheduleLibraryRenderCheck(api_key),
+		{passive: true}
 	);
 
 	socket.on(
@@ -583,6 +735,13 @@ usingApiKey()
 	);
 });
 library_els.search.container.action = 'javascript:searchLibrary();';
-library_els.mass_edit.select_all.onchange =
-	e => library_els.views.table.querySelectorAll('input[type="checkbox"]')
-			.forEach(c => c.checked = library_els.mass_edit.select_all.checked);
+library_els.mass_edit.select_all.onchange = e => {
+	selected_volume_ids.clear();
+	if (library_els.mass_edit.select_all.checked)
+		library_volumes.forEach(
+			volume => selected_volume_ids.add(Number(volume.id))
+		);
+
+	library_els.views.table.querySelectorAll('input[type="checkbox"]')
+		.forEach(c => c.checked = library_els.mass_edit.select_all.checked);
+};

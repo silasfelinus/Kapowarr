@@ -33,8 +33,19 @@ _DEDUPE_ACTIONS = {
 }
 
 
+# Both of these tasks are heavyweight writers to the same library tables.
+# Running them in separate lanes allowed Update All's multiprocessing scan to
+# collide with a continuous import and exhaust SQLite's 10-second busy timeout.
+# Keep the historical lane name for API/UI compatibility, but make Update All
+# share it so unrelated searches/download tasks can still run concurrently.
+_LIBRARY_WRITE_ACTIONS = {
+    'continuous_library_import',
+    'update_all',
+}
+
+
 def _task_lane(task) -> str:
-    if getattr(task, 'action', '') == 'continuous_library_import':
+    if getattr(task, 'action', '') in _LIBRARY_WRITE_ACTIONS:
         return 'continuous_import'
     return getattr(task, 'queue_lane', 'default') or 'default'
 

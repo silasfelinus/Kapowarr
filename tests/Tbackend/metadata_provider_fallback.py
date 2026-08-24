@@ -6,7 +6,9 @@ import unittest
 from asyncio import run
 from unittest.mock import AsyncMock, patch
 
+from backend.base.custom_exceptions import CVRateLimitReached
 from backend.features import metadata as MD
+from backend.implementations.metron import MetronError
 
 
 def _result(title, provider_id='comicvine'):
@@ -114,6 +116,46 @@ class asking_the_others_when_the_first_does_not_know(unittest.TestCase):
             run(MD.search_volumes_everywhere('Danger Jane'))
 
         get.assert_called_once_with(MD.DEFAULT_METADATA_PROVIDER_ID)
+
+
+class fallback_does_not_relabel_primary_outages(unittest.TestCase):
+    """A fallback miss must not turn a retryable ComicVine throttle fatal."""
+
+    def _providers(self, fallback_error):
+        comicvine = AsyncMock()
+        comicvine.fetch_volume = AsyncMock(side_effect=CVRateLimitReached)
+        metron = AsyncMock()
+        metron.fetch_volume_by_comicvine_id = AsyncMock(
+            side_effect=fallback_error
+        )
+
+        def provider(provider_id=MD.DEFAULT_METADATA_PROVIDER_ID):
+            return metron if provider_id == 'metron' else comicvine
+
+        return provider, comicvine, metron
+
+    def test_metron_crosslink_miss_preserves_the_comicvine_rate_limit(self):
+        provider, comicvine, metron = self._providers(
+            MetronError('Metron has no unique series for ComicVine ID 139594')
+        )
+
+        with patch.object(
+            MD, 'is_metadata_provider_configured', return_value=True
+        ), patch.object(MD, 'get_metadata_provider', side_effect=provider):
+            with self.assertRaises(CVRateLimitReached):
+                run(MD.fetch_volume_with_fallback(139594))
+
+        comicvine.fetch_volume.assert_awaited_once_with(139594)
+        metron.fetch_volume_by_comicvine_id.assert_awaited_once_with(139594)
+
+    def test_unexpected_fallback_bugs_are_still_real_errors(self):
+        provider, _, _ = self._providers(RuntimeError('fallback bug'))
+
+        with patch.object(
+            MD, 'is_metadata_provider_configured', return_value=True
+        ), patch.object(MD, 'get_metadata_provider', side_effect=provider):
+            with self.assertRaisesRegex(RuntimeError, 'fallback bug'):
+                run(MD.fetch_volume_with_fallback(139594))
 
 
 class library_import_uses_it(unittest.TestCase):

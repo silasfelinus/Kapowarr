@@ -19,6 +19,7 @@ from backend.base.custom_exceptions import CVRateLimitReached
 from backend.base.definitions import CVFileMapping, FilenameData
 from backend.features.library_import import (
     CONTINUOUS_IMPORT_RATE_LIMIT_BACKOFF,
+    CV_REQUEST_DELAY,
     ContinuousLibraryImport,
     _collect_unimported_files,
     _match_file_groups,
@@ -64,13 +65,17 @@ from backend.features.tasks import Task, task_library
 from backend.internals.server import TaskStatusEvent, WebSocket
 
 
-# ComicVine documents a per-resource hourly limit. Continuous import uses a
-# deliberately lower ceiling than that advertised maximum so ordinary Kapowarr
-# activity still has headroom. Search requests and the metadata fetches triggered
-# by Library.add() use independent clocks because they hit different resources.
-# This also closes the old fast-path hole where trusted Mylar cvinfo/series.json
-# skipped the paced search and could then hammer volume/issue metadata requests.
-CONTINUOUS_IMPORT_CV_RESOURCE_DELAY = 30.0
+# ComicVine documents a per-resource hourly limit. Search requests and the
+# metadata fetches triggered by Library.add() use independent clocks because
+# they hit different resources. This also closes the old fast-path hole where
+# trusted Mylar cvinfo/series.json skipped the paced search and could then
+# hammer volume/issue metadata requests.
+#
+# The interval itself is no longer a constant. It used to sit at a flat 30
+# seconds -- comfortably short of the documented rate, for a limit it might
+# never have come near, and paid for in every hour of every import.
+# `CV_REQUEST_DELAY` starts at the documented rate and widens only when
+# ComicVine actually objects.
 
 # A folder containing many differently parsed series is often an organizer
 # longbox rather than one volume per directory. Before spending one paced search
@@ -150,7 +155,7 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
         if last_started is not None:
             elapsed = monotonic() - last_started
             remaining_delay = max(
-                CONTINUOUS_IMPORT_CV_RESOURCE_DELAY - elapsed,
+                CV_REQUEST_DELAY.current() - elapsed,
                 0.0
             )
             if remaining_delay and not self._interruptible_wait(remaining_delay):
@@ -614,8 +619,10 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
                         break
 
                     except CVRateLimitReached:
+                        widened = CV_REQUEST_DELAY.record_block()
                         self._emit_persistent_status(
-                            'ComicVine rate limit reached; cooling down for 15 minutes'
+                            'ComicVine rate limit reached; cooling down for '
+                            f'15 minutes, then {widened:.0f}s between requests'
                         )
                         for _ in range(CONTINUOUS_IMPORT_RATE_LIMIT_BACKOFF):
                             if self._should_stop():

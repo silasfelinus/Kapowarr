@@ -1,14 +1,19 @@
 import unittest
 from unittest.mock import AsyncMock, Mock, call, patch
 
-from backend.features.library_import import _match_file_groups
-from backend.features.library_import_persistent import (
-    CONTINUOUS_IMPORT_CV_RESOURCE_DELAY,
-    PersistentContinuousLibraryImport,
-)
+from backend.features.library_import import (CV_REQUEST_DELAY,
+                                             _match_file_groups)
+from backend.features.library_import_persistent import \
+    PersistentContinuousLibraryImport
 
 
 class continuous_import_pacing(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        # The interval is shared process-wide, so a backoff recorded by
+        # another test would otherwise change what these expect.
+        CV_REQUEST_DELAY.reset()
+        self.addCleanup(CV_REQUEST_DELAY.reset)
+
     @staticmethod
     def _group():
         return {
@@ -95,7 +100,7 @@ class continuous_import_pacing(unittest.IsolatedAsyncioTestCase):
             allowed = importer._wait_for_metadata_slot()
 
         self.assertTrue(allowed)
-        expected_delay = CONTINUOUS_IMPORT_CV_RESOURCE_DELAY - 12.0
+        expected_delay = CV_REQUEST_DELAY.current() - 12.0
         self.assertEqual(sleep_mock.call_count, int(expected_delay))
         self.assertEqual(
             sleep_mock.call_args_list,

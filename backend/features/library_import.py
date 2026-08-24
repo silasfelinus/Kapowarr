@@ -4,6 +4,7 @@ from asyncio import run, sleep as async_sleep
 from glob import glob
 from itertools import chain
 from os.path import abspath, basename, dirname, exists, isfile, join, splitext
+from threading import Lock
 from time import monotonic, sleep
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
@@ -39,8 +40,94 @@ from backend.internals.server import TaskStatusEvent, WebSocket
 # import processing time toward that interval instead of sleeping a full 20
 # seconds after the work is already finished. The normal review importer keeps
 # the existing short brake between searches.
-CONTINUOUS_IMPORT_CV_DELAY = 20.0
 CONTINUOUS_IMPORT_RATE_LIMIT_BACKOFF = 15 * 60
+
+CV_REQUEST_FLOOR = 18.0
+"""
+The fastest continuous import will ever ask ComicVine: its documented
+allowance of 200 requests per resource per hour, and not a request more.
+"""
+
+CV_REQUEST_CEILING = 90.0
+"The slowest it will throttle itself to, however often ComicVine objects."
+
+CV_BACKOFF_FACTOR = 1.5
+CV_RECOVERY_PERIOD = 60 * 60
+"An hour without a complaint -- ComicVine's own accounting period."
+
+
+class AdaptiveDelay:
+    """A pacing interval that gives ground when ComicVine pushes back.
+
+    The limit is per resource per hour, and how much of it is left
+    depends on what the rest of Kapowarr has been doing: a manual search,
+    a refresh, a volume add all draw on the same budget. A fixed interval
+    has to assume the worst hour and then pay for that assumption in
+    every hour -- which is why this used to sit at 30 seconds, well short
+    of the documented rate, for a limit it might never have come near.
+
+    So it starts at the documented rate instead and widens only when
+    ComicVine actually objects, easing back once an hour has passed
+    without a complaint. Overshooting is expensive here -- a refused
+    request costs a fifteen minute cooldown, far more than the seconds a
+    tighter interval saves -- so it backs off by half again each time and
+    recovers in one step rather than creeping down.
+    """
+
+    def __init__(
+        self,
+        floor: float = CV_REQUEST_FLOOR,
+        ceiling: float = CV_REQUEST_CEILING,
+        factor: float = CV_BACKOFF_FACTOR,
+        recovery_period: float = CV_RECOVERY_PERIOD
+    ) -> None:
+        self._floor = floor
+        self._ceiling = ceiling
+        self._factor = factor
+        self._recovery_period = recovery_period
+        self._current = floor
+        self._last_block: Optional[float] = None
+        self._lock = Lock()
+
+    def current(self) -> float:
+        "The interval to leave before the next request."
+        with self._lock:
+            if (
+                self._last_block is not None
+                and monotonic() - self._last_block >= self._recovery_period
+            ):
+                self._current = self._floor
+                self._last_block = None
+                LOGGER.info(
+                    'An hour without a ComicVine rate limit; import pacing '
+                    'back to %.0fs', self._current
+                )
+            return self._current
+
+    def record_block(self) -> float:
+        "ComicVine refused a request. Widen the interval and report it."
+        with self._lock:
+            self._current = min(self._current * self._factor, self._ceiling)
+            self._last_block = monotonic()
+            LOGGER.warning(
+                'ComicVine rate limit reached; import pacing widened to '
+                '%.0fs between requests', self._current
+            )
+            return self._current
+
+    def reset(self) -> None:
+        "Forget the current backoff. Intended for tests."
+        with self._lock:
+            self._current = self._floor
+            self._last_block = None
+
+
+CV_REQUEST_DELAY = AdaptiveDelay()
+"""
+Shared by both continuous importers on purpose: ComicVine's budget is one
+budget, so two importers pacing themselves independently would each think
+they were within it while together they were not.
+"""
 
 
 def create_groups(
@@ -719,7 +806,7 @@ class ContinuousLibraryImport(Task):
                     group_to_cv = run(_match_file_groups(
                         group_to_files,
                         only_english=True,
-                        request_delay=CONTINUOUS_IMPORT_CV_DELAY,
+                        request_delay=CV_REQUEST_DELAY.current(),
                         search_cache=self.search_cache,
                         require_confident_match=True,
                         request_clock=self.cv_request_clock
@@ -780,11 +867,13 @@ class ContinuousLibraryImport(Task):
                     break
 
                 except CVRateLimitReached:
+                    widened = CV_REQUEST_DELAY.record_block()
                     self._emit_status(
                         checked,
                         total,
                         imported,
-                        'ComicVine rate limit reached; cooling down for 15 minutes'
+                        'ComicVine rate limit reached; cooling down for 15 '
+                        f'minutes, then {widened:.0f}s between requests'
                     )
                     for _ in range(CONTINUOUS_IMPORT_RATE_LIMIT_BACKOFF):
                         if self.stop_requested:

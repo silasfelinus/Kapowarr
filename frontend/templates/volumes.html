@@ -5,7 +5,9 @@
 	<link rel="stylesheet" href="{{ url_for('static', filename='css/volumes.css') }}">
 {% endblock %}
 {% block js %}
+	<script src="{{ url_for('static', filename='js/volumes_gallery_gate.js') }}" defer></script>
 	<script src="{{ url_for('static', filename='js/volumes.js') }}" defer></script>
+	<script src="{{ url_for('static', filename='js/volumes_gallery.js') }}" defer></script>
 {% endblock %}
 
 {% block pre_build_els %}

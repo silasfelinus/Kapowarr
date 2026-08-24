@@ -118,6 +118,15 @@ class task_handler_lanes(unittest.TestCase):
             time.sleep(0.01)
         TaskHandler.queue.clear()
 
+    def _patched_task_runtime(self):
+        fake_cursor = MagicMock()
+        fake_cursor.execute.return_value = fake_cursor
+        return (
+            patch.object(tasks_module, 'get_db', return_value=fake_cursor),
+            patch.object(tasks_module, 'commit'),
+            patch.object(tasks_module, 'WebSocket', return_value=MagicMock()),
+        )
+
     def test_continuous_import_does_not_block_default_lane(self):
         import_started = threading.Event()
         import_release = threading.Event()
@@ -136,11 +145,8 @@ class task_handler_lanes(unittest.TestCase):
             default_release, default_finished
         )
 
-        fake_cursor = MagicMock()
-        fake_cursor.execute.return_value = fake_cursor
-        with patch.object(tasks_module, 'get_db', return_value=fake_cursor), \
-             patch.object(tasks_module, 'commit'), \
-             patch.object(tasks_module, 'WebSocket', return_value=MagicMock()):
+        db_patch, commit_patch, socket_patch = self._patched_task_runtime()
+        with db_patch, commit_patch, socket_patch:
             import_id = self.handler.add(importer)
             self.assertTrue(import_started.wait(1))
             normal_id = self.handler.add(normal)
@@ -155,6 +161,43 @@ class task_handler_lanes(unittest.TestCase):
             import_release.set()
             self.assertTrue(import_finished.wait(1))
 
+    def test_update_all_waits_for_continuous_import_writer_lane(self):
+        import_started = threading.Event()
+        import_release = threading.Event()
+        import_finished = threading.Event()
+        update_started = threading.Event()
+        update_release = threading.Event()
+        update_release.set()
+        update_finished = threading.Event()
+
+        importer = _LaneTask(
+            'continuous_library_import', import_started,
+            import_release, import_finished
+        )
+        update_all = _LaneTask(
+            'update_all', update_started, update_release, update_finished
+        )
+
+        db_patch, commit_patch, socket_patch = self._patched_task_runtime()
+        with db_patch, commit_patch, socket_patch:
+            import_id = self.handler.add(importer)
+            self.assertTrue(import_started.wait(1))
+            update_id = self.handler.add(update_all)
+
+            # The production failure was both tasks writing volume_files at
+            # once. Update All should be visible as queued, not disappear into
+            # a database-is-locked traceback while import owns this lane.
+            self.assertFalse(update_started.wait(0.1))
+            queue = self.handler.get_all()
+            update_row = next(row for row in queue if row['id'] == update_id)
+            self.assertEqual(update_row['status'], 'queued')
+            self.assertEqual(update_row['queue_lane'], 'continuous_import')
+
+            import_release.set()
+            self.assertTrue(import_finished.wait(1))
+            self.assertTrue(update_finished.wait(1))
+            self.assertNotEqual(import_id, update_id)
+
     def test_duplicate_interval_style_task_reuses_existing_queue_entry(self):
         started = threading.Event()
         release = threading.Event()
@@ -164,11 +207,8 @@ class task_handler_lanes(unittest.TestCase):
             'watched_folder_import', threading.Event(),
             threading.Event(), threading.Event()
         )
-        fake_cursor = MagicMock()
-        fake_cursor.execute.return_value = fake_cursor
-        with patch.object(tasks_module, 'get_db', return_value=fake_cursor), \
-             patch.object(tasks_module, 'commit'), \
-             patch.object(tasks_module, 'WebSocket', return_value=MagicMock()):
+        db_patch, commit_patch, socket_patch = self._patched_task_runtime()
+        with db_patch, commit_patch, socket_patch:
             first_id = self.handler.add(first)
             self.assertTrue(started.wait(1))
             second_id = self.handler.add(second)

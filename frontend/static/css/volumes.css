@@ -281,3 +281,117 @@ main:has(#massedit-toggle:checked) #table-container {
 main:not(:has(#massedit-toggle:checked)) #table-container :where(td, th):first-child {
 	display: none;
 }
+
+.action-bar {
+	margin-bottom: 1rem;
+	position: sticky;
+	top: 0px;
+	z-index: 2;
+
+	display: none;
+	flex-wrap: wrap;
+	gap: 1rem;
+
+	padding: .5rem;
+	border-radius: 4px;
+	background-color: var(--tool-bar-color);
+}
+
+main:has(#massedit-toggle:checked) .action-bar {
+	display: flex;
+}
+
+.action-divider {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 1rem;
+}
+
+.action-bar button {
+	min-width: 5rem;
+
+	border: 2px solid var(--border-color);
+	border-radius: 4px;
+	padding: .4rem .5rem;
+	color: var(--text-color);
+	background-color: var(--background-color);
+
+	transition: background-color 100ms linear;
+}
+
+.action-bar button:hover {
+	background-color: var(--foreground-color);
+}
+
+.option-container {
+    display: flex;
+    justify-content: space-between;
+
+	overflow: hidden;
+	border-radius: 4px;
+	border: 2px solid var(--border-color);
+	background-color: var(--background-color);
+}
+
+.option-container button {
+    min-width: 6.8rem;
+	border-radius: 0px;
+	border: none;
+}
+
+.option-container select {
+    flex-grow: 1;
+	height: 100%;
+	background-color: var(--background-color);
+	color: var(--text-color);
+}
+
+#cancel-massedit {
+	background-color: var(--error-color);
+	border-color: var(--error-color);
+}
+
+main:has(#massedit-toggle:checked) #lib-stats {
+	display: none;
+}
+
+@media (max-width: 860px) {
+	.action-bar {
+        flex-direction: column;
+		justify-content: center;
+	}
+	.action-divider {
+		width: 100%;
+	}
+	.action-divider > *,
+	.action-divider  {
+        flex: 1 1 0;
+	}
+    .action-divider > .option-container {
+        flex: 1 1 auto;
+    }
+}
+
+@media (max-width: 535px) {
+	header {
+		justify-content: flex-start;
+	}
+
+	#lib-stats {
+		flex-direction: column;
+	}
+
+	#lib-stats th {
+		width: 50%;
+	}
+}
+
+@media (max-width: 442px) {
+	#library-container {
+		padding: 1rem;
+	}
+
+	#list-library {
+		gap: .75rem;
+	}
+}

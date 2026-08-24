@@ -99,6 +99,13 @@ main:has(#massedit-toggle:checked) #library-container {
 	background-color: var(--foreground-color);
 	border-radius: 1px;
 
+	/* The full poster index can contain thousands of lightweight shells. Keep
+	   their geometry in layout, but let supporting browsers skip paint/style work
+	   for shells far outside the viewport. The intrinsic size is only a fallback
+	   estimate; normal flex sizing still determines the actual card dimensions. */
+	content-visibility: auto;
+	contain-intrinsic-size: auto 15rem;
+
 	transition: box-shadow 200ms ease-in;
 }
 
@@ -108,7 +115,23 @@ main:has(#massedit-toggle:checked) #library-container {
 }
 
 .list-img {
+	display: block;
+	width: 100%;
 	aspect-ratio: 2/3;
+	object-fit: cover;
+	background-color: var(--tool-bar-color);
+}
+
+/* A source-less image is an intentional skeleton slot. The real cover URL is
+   attached only when the card comes near the viewport. */
+.list-img:not([src]) {
+	background-image: linear-gradient(
+		110deg,
+		var(--tool-bar-color),
+		var(--foreground-color),
+		var(--tool-bar-color)
+	);
+	background-size: 200% 100%;
 }
 
 .list-entry > :where(h2, p) {

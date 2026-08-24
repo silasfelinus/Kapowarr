@@ -433,13 +433,23 @@ async def fetch_volume_with_fallback(cv_id: int) -> VolumeMetadata:
     """Fetch a CV-linked volume from Metron if ComicVine is unavailable."""
     from backend.base.custom_exceptions import (CVRateLimitReached,
                                                 InvalidComicVineApiKey)
+    from backend.implementations.metron import MetronError
+
     try:
         return await get_metadata_provider().fetch_volume(cv_id)
-    except (CVRateLimitReached, InvalidComicVineApiKey):
+    except (CVRateLimitReached, InvalidComicVineApiKey) as primary_error:
         if not is_metadata_provider_configured('metron'):
             raise
         metron = get_metadata_provider('metron')
-        return await metron.fetch_volume_by_comicvine_id(cv_id)  # type: ignore
+        try:
+            return await metron.fetch_volume_by_comicvine_id(cv_id)  # type: ignore
+        except MetronError:
+            # Fallback is opportunistic. If it cannot rescue this CV-linked
+            # volume, preserve the primary provider's transient/configuration
+            # signal so callers can apply their existing retry/cooldown policy.
+            # In particular, a missing Metron CV cross-link must not turn a
+            # ComicVine rate limit into a fatal background-task error.
+            raise primary_error from None
 
 
 async def fetch_volumes_with_fallback(

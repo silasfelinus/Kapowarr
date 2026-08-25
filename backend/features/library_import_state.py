@@ -277,6 +277,30 @@ def mark_folder_result(
             folder
         )
     )
+    # A folder that has just been re-checked supersedes whatever an earlier
+    # pass concluded about it. Without this, an old job's hold row keeps
+    # `state = review` forever, even once this pass has imported the folder:
+    # the review queue only retires rows when it is *read*, and the count on
+    # the progress panel is a SQL `COUNT(DISTINCT folder)` across every job
+    # precisely so that polling it does not decode every held row.
+    #
+    # So the backlog figure and the "Review Holds (N)" button sat at the old
+    # number for the length of a pass and only dropped when the user opened
+    # the list -- and the better the importer gets at resolving old holds,
+    # the more wrong that number is while it works. Retire the superseded
+    # rows here, where the new verdict is already being written.
+    cursor.execute(
+        """
+        UPDATE library_import_items
+        SET
+            state = ?,
+            review_reason = NULL,
+            review_items = '[]',
+            updated_at = ?
+        WHERE folder = ? AND job_id != ? AND state = ?;
+        """,
+        (ITEM_DONE, now, folder, job_id, ITEM_REVIEW)
+    )
     cursor.execute(
         "UPDATE library_import_jobs SET updated_at = ? WHERE id = ?;",
         (now, job_id)

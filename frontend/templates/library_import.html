@@ -166,7 +166,13 @@
 					<td id="continuous-imported">0</td>
 				</tr>
 				<tr>
-					<td>Need manual review</td>
+					<!-- Every other row in this table is about the pass that
+					     is running. This one is the whole outstanding backlog
+					     across every pass, which is what the Review Holds
+					     button opens -- so it is normally larger than the
+					     "N need review" in the status line above, and saying
+					     so is the difference between a total and a bug. -->
+					<td>Held for review<br><small>all passes</small></td>
 					<td id="continuous-review">0</td>
 				</tr>
 				<tr>

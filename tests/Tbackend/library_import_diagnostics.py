@@ -119,7 +119,11 @@ class library_import_review_diagnostics(unittest.TestCase):
             review_reason='weak-score'
         )
 
-        self.assertEqual(diagnostics['decision']['best_score'], -3)
+        # -1 base (no year or volume corroboration, and the ranker's own
+        # issue-capacity penalty) then -1 for policy's capacity penalty net of
+        # the ranker's, which policy hands back so the same fact is not
+        # charged for twice. Still an explicit contradiction, still weak.
+        self.assertEqual(diagnostics['decision']['best_score'], -2)
         self.assertEqual(diagnostics['decision']['best_base_score'], -1)
         self.assertIsNone(diagnostics['decision']['runner_up_score'])
         self.assertIsNone(diagnostics['decision']['score_margin'])

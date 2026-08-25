@@ -233,14 +233,42 @@ def scan_files(
                 if n_start <= issue.calculated_issue_number <= n_end
             ]
 
-            if matching_issues:
-                if file not in current_issue_files:
-                    current_issue_files[file] = FilesDB.add_file(file)
+            if file not in current_issue_files:
+                current_issue_files[file] = FilesDB.add_file(file)
 
+            if matching_issues:
                 for issue in matching_issues:
                     new_issue_bindings.add(
                         (current_issue_files[file], issue)
                     )
+
+            else:
+                # The file passed every check for belonging to this volume
+                # and then named an issue the volume does not have. That is
+                # almost always a stale provider issue list rather than a
+                # wrong file: ongoing and self-published series routinely run
+                # ahead of what ComicVine records.
+                #
+                # Dropping it here was silent and total. `add_file` was never
+                # reached, so the file never entered `files`, never appeared
+                # on the volume, and could not be told apart from a file that
+                # was never offered -- which made it unfixable from the UI.
+                # Library import read that same table to decide whether a
+                # review hold had been resolved, so importing such a file
+                # cleared nothing and the next pass held the same folder
+                # again, forever.
+                #
+                # Bind it to the volume rather than to an issue, exactly as a
+                # partial collected edition is: the issues the volume does
+                # know about stay wanted, and the file is accounted for.
+                LOGGER.info(
+                    'Filing %s against volume %d as a volume file: it names '
+                    'issue %s, which the volume does not have',
+                    file, volume_id, file_data["issue_number"]
+                )
+                new_general_bindings[current_issue_files[file]] = (
+                    GeneralFileType.UNMATCHED_ISSUE.value
+                )
 
     # Determine old and new bindings, and which issues change in
     # their marking of being downloaded because of the new bindings

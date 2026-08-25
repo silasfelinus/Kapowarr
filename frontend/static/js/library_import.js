@@ -12,6 +12,7 @@ const LIEls = {
 		error: document.querySelector('#import-error-window'),
 		continuous: document.querySelector('#continuous-window')
 	},
+	progress: document.querySelector('#import-progress'),
 	proposal_list: document.querySelector('.proposal-list'),
 	proposal_note: document.querySelector('#continuous-review-note'),
 	import_result: document.querySelector('#import-result-message'),
@@ -349,6 +350,7 @@ function importLibrary(api_key, rename=false) {
 
 	const was_continuous_review = continuousReviewOpen;
 	const submitted_paths = new Set(data.map(entry => entry.filepath));
+	showImportProgress(`Importing ${data.length} file(s)...`);
 	hide([LIEls.views.list], [LIEls.views.loading]);
 	sendAPI('POST', '/libraryimport', api_key, {rename_files: rename}, data)
 	.then(response => response.json())
@@ -394,6 +396,7 @@ function importLibrary(api_key, rename=false) {
 				);
 			const detail = (failed[0] || skipped[0]).reason;
 			LIEls.import_result.innerText = `${parts.join(' · ')}. ${detail}`;
+			hideImportProgress();
 			hide(
 				[LIEls.views.loading],
 				[LIEls.views.list, LIEls.import_result]
@@ -401,6 +404,7 @@ function importLibrary(api_key, rename=false) {
 			return;
 		};
 
+		hideImportProgress();
 		hide([LIEls.import_result]);
 		continuousReviewOpen = false;
 		if (was_continuous_review && continuousTaskId !== null) {
@@ -410,7 +414,24 @@ function importLibrary(api_key, rename=false) {
 			hide([LIEls.views.loading], [LIEls.views.start]);
 		};
 	})
-	.catch(e => showImportError(e));
+	.catch(e => {
+		hideImportProgress();
+		showImportError(e);
+	});
+};
+
+function showImportProgress(message) {
+	if (LIEls.progress === null)
+		return;
+	LIEls.progress.innerText = message;
+	LIEls.progress.classList.remove('hidden');
+};
+
+function hideImportProgress() {
+	if (LIEls.progress === null)
+		return;
+	LIEls.progress.innerText = '';
+	LIEls.progress.classList.add('hidden');
 };
 
 function renderContinuousProgress(checked, total, imported, remaining) {
@@ -797,6 +818,17 @@ usingApiKey()
 		else
 			stopContinuousImport(api_key);
 	};
+	// The import runs inside the POST, so this is the only signal the page
+	// gets that it is moving rather than wedged.
+	if (typeof socket !== 'undefined' && socket)
+		socket.on(
+			'library_import_status',
+			data => showImportProgress(
+				`Importing ${data.current_item} of ${data.total_items}`
+				+ (data.title ? ` · ${data.title}` : '')
+			)
+		);
+
 	LIEls.buttons.import.onclick = e => importLibrary(api_key, false);
 	LIEls.buttons.import_rename.onclick = e => importLibrary(api_key, true);
 	pollContinuousTask(api_key);

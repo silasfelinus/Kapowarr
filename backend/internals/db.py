@@ -83,7 +83,8 @@ class KapowarrCursor(Cursor):
     def __enter__(self):
         """Start a transaction"""
         self.connection.isolation_level = None
-        self.execute("BEGIN TRANSACTION;")
+        # IMMEDIATE, not the default DEFERRED -- see `WRITE_TRANSACTION_MODE`.
+        self.execute("BEGIN IMMEDIATE;")
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -94,7 +95,7 @@ class KapowarrCursor(Cursor):
             else:
                 self.execute("COMMIT;")
 
-        self.connection.isolation_level = "DEFERRED"
+        self.connection.isolation_level = WRITE_TRANSACTION_MODE
         return
 
 
@@ -124,6 +125,27 @@ class DBConnectionManager(type):
             del cls.instances[thread_id]
         return
 
+
+# sqlite3 opens an implicit transaction before a write statement, and the
+# mode it uses decides what happens under concurrency. DEFERRED -- the
+# module default -- takes no lock until the first statement, so a
+# transaction that reads before it writes holds a read lock and then has to
+# upgrade. If another connection took the write lock in between, SQLite
+# cannot make that upgrade wait: both sides would be waiting on each other,
+# so it returns SQLITE_BUSY at once. `timeout` does not help, because the
+# busy handler is exactly what SQLite refuses to run here.
+#
+# That is not a hypothetical. Two tasks died of it in one import run
+# (2026-08-24): `Search All` in `grab_size_limits._ensure_defaults`, and
+# `refresh_and_scan` in `scan_files` -- both read-then-write, both killed
+# mid-run by "database is locked" while the library import held the writer.
+#
+# IMMEDIATE takes the write lock up front instead, which the busy handler
+# *can* wait on, so contention becomes a wait of up to `DB_TIMEOUT` rather
+# than an instant failure. It costs nothing on reads: sqlite3 only opens
+# these implicit transactions for DML, so plain SELECTs stay in autocommit
+# and never take a write lock at all.
+WRITE_TRANSACTION_MODE = "IMMEDIATE"
 
 CONNECTION_PRAGMAS = (
     "PRAGMA foreign_keys = ON;",
@@ -176,6 +198,7 @@ class DBConnection(Connection, metaclass=DBConnectionManager):
             timeout=timeout,
             detect_types=PARSE_DECLTYPES
         )
+        self.isolation_level = WRITE_TRANSACTION_MODE
         c = super().cursor()
         for pragma in CONNECTION_PRAGMAS:
             c.execute(pragma)

@@ -418,6 +418,18 @@ class GeneralFileType(BaseEnum):
     is visible, while the individual issues stay wanted.
     """
 
+    UNMATCHED_ISSUE = "unmatched-issue"
+    """
+    An issue file that belongs to the volume but names an issue the volume
+    does not have. Metadata providers carry stale issue lists for ongoing
+    and self-published series all the time -- ComicVine lists two issues of
+    "Death of Power" while issues three through six are on disk -- so a file
+    naming #6 matched no issue and was dropped without a trace: never in
+    `files`, never on the volume, and invisible to every later check.
+    Filed against the volume instead, so the file is accounted for and the
+    real issues stay wanted until the provider catches up.
+    """
+
 
 class SpecialVersion(BaseEnum):
     "The type of volume"

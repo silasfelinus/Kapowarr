@@ -34,6 +34,12 @@ clean_title_regex = compile(
     r'((?<=annual)s|/|\-|–|\+|,|\.|\!|\?|:|\bthe\b|\band\b|&|’|\'|\"|\bone[\-\s]?shot\b|\bhard[\-\s]?cover\b|\bomnibus\b|\btpb\b)'
 )
 
+# How much `rate_search_result` disprefers a candidate whose issue count
+# cannot reach the highest issue number in the files. Named so a caller that
+# weighs the same evidence with its own policy can tell how much of a base
+# score is already this penalty, instead of charging for it a second time.
+ISSUE_CAPACITY_RATING_PENALTY = 1
+
 
 def match_title(
     title1: str,
@@ -673,7 +679,7 @@ def _rank_volume_results_for_file(
             # Disprefer because there's a file with an issue number that's
             # higher than the issue count of the search result. E.g. a file with
             # issue 6 but the search result only has 4 issues.
-            rating -= 1
+            rating -= ISSUE_CAPACITY_RATING_PENALTY
 
         return rating
 

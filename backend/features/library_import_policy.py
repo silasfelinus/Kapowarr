@@ -10,7 +10,8 @@ without changing the more conservative generic confident-match helper.
 from typing import Dict, List, Optional, Tuple
 
 from backend.base.definitions import FilenameData, VolumeMetadata
-from backend.implementations.matching import _rank_volume_results_for_file
+from backend.implementations.matching import (
+    ISSUE_CAPACITY_RATING_PENALTY, _rank_volume_results_for_file)
 
 
 # Ranking already applies the important hard safety gates before assigning a
@@ -78,7 +79,26 @@ def _policy_score(
             score += AUTO_IMPORT_ISSUE_CAPACITY_BONUS
         else:
             # Keep this as a score penalty rather than a hard filter because
-            # legacy numbering can legitimately start above one.
+            # legacy numbering can legitimately start above one -- and because
+            # a provider issue count is a claim about the provider's records,
+            # not about the series. Ongoing and self-published runs sit ahead
+            # of ComicVine constantly.
+            #
+            # The ranker already docked this exact candidate for this exact
+            # fact, so `base_score` is short by that much before policy adds
+            # anything. Charging the full policy penalty on top made one piece
+            # of evidence cost three points on a scale whose realistic ceiling
+            # is five, and put a 4-point gap between "can hold #6" (+2) and
+            # "cannot" (-2). Give the ranker's penalty back and take this one
+            # instead, so the axis is priced once.
+            #
+            # Concretely: "Death of Power" #6 against the 2-issue ComicVine
+            # record of the very series it belongs to -- exact title, matching
+            # volume number, the only viable candidate, and the rest of the
+            # folder already imported into it -- scored 1 on the base scale
+            # and -1 after policy, landing under the floor and back in the
+            # review queue on every pass.
+            score += ISSUE_CAPACITY_RATING_PENALTY
             score -= AUTO_IMPORT_ISSUE_CAPACITY_PENALTY
 
     return score

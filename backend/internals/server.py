@@ -556,6 +556,45 @@ class MassEditorStatusEvent(WebSocketEvent):
         }
 
 
+class LibraryImportStatusEvent(WebSocketEvent):
+    """Progress of a library import that is running inside a request.
+
+    Importing a review list means one provider round-trip and one volume
+    folder per entry, so a few dozen rows is comfortably a minute of work.
+    The page showed only its rotating loading line for all of it, which is
+    indistinguishable from a hang -- and a user who reloads or clicks away
+    mid-import leaves half the rows imported and the other half still held.
+    """
+
+    def __init__(
+        self,
+        current_item: int,
+        total_items: int,
+        title: str
+    ) -> None:
+        """Create the event.
+
+        Args:
+            current_item (int): The entry number currently being imported.
+            total_items (int): The total number of entries in this import.
+            title (str): The folder the current entry came from.
+        """
+        self.current_item = current_item
+        self.total_items = total_items
+        self.title = title
+        return
+
+    def get_type(self) -> WebSocketEventType:
+        return WebSocketEventType.LIBRARY_IMPORT_STATUS
+
+    def get_body(self) -> Dict[str, Any]:
+        return {
+            "current_item": self.current_item,
+            "total_items": self.total_items,
+            "title": self.title
+        }
+
+
 class DownloadedStatusEvent(WebSocketEvent):
     "A change in what issues are marked as downloaded or not for a volume"
 

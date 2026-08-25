@@ -33,7 +33,8 @@ from backend.implementations.root_folders import RootFolders
 from backend.implementations.volumes import Library
 from backend.internals.db import commit
 from backend.internals.db_models import FilesDB
-from backend.internals.server import TaskStatusEvent, WebSocket
+from backend.internals.server import (LibraryImportStatusEvent,
+                                      TaskStatusEvent, WebSocket)
 
 # ComicVine currently documents 200 requests per resource per hour. Continuous
 # import spaces search starts by 20 seconds (at most 180/hour) and counts API /
@@ -529,8 +530,32 @@ def import_library(
         'imported': [], 'skipped': [], 'failed': []
     }
     root_folders = RootFolders().get_all()
-    for key, requested_files in volume_to_filepath.items():
+    # The caller is a request thread, and this loop is minutes long for a
+    # review list of any size. Without this the page can only show its
+    # rotating loading line, which reads as a hang.
+    total_items = len(volume_to_filepath)
+
+    def report(item_index: int, files: List[str], cv_id: Any) -> None:
+        # The import is the work; the progress line is decoration. A socket
+        # that is absent (a task thread with no server, a test) or unhappy
+        # must not take a sixty-volume import down with it on entry one.
+        try:
+            WebSocket().emit(LibraryImportStatusEvent(
+                item_index + 1,
+                total_items,
+                basename(common_folder(files)) or str(cv_id)
+            ))
+        except Exception:
+            LOGGER.debug(
+                'Could not emit library import progress', exc_info=True
+            )
+        return
+
+    for item_index, (key, requested_files) in enumerate(
+        volume_to_filepath.items()
+    ):
         cv_id, provider_id, external_id = volume_identity[key]
+        report(item_index, requested_files, cv_id)
         try:
             # A mapping records where a file was when it was proposed, and
             # importing is not the only thing that moves files: importing any

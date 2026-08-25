@@ -350,6 +350,9 @@ class WebSocketEventType(BaseEnum):
     MASS_EDITOR_STATUS = "mass_editor_status"
     "The progress of a mass editor action"
 
+    LIBRARY_IMPORT_STATUS = "library_import_status"
+    "The progress of an in-flight library import"
+
     DOWNLOADED_STATUS = "downloaded_status"
     "A change in what issues are marked as downloaded and which aren't"
 

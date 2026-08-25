@@ -643,8 +643,21 @@ def _rank_volume_results_for_file(
         if not sv_issue_count_allowed:
             continue
 
+        # A volume the user already added is not a coincidental namesake:
+        # they have already decided it is the real series, and Kapowarr put
+        # its files on disk. Its provider issue count is a claim about the
+        # provider's records, and those records go stale -- ComicVine lists
+        # two issues of "Death of Power" while #3, #4 and #5 sit in the
+        # volume's own folder. Filtering the volume out on that count left
+        # its own files with no candidate at all, so the folder was held as
+        # 'no-candidate' forever with the answer already in the library.
+        #
+        # Scores still apply: an already-added volume that cannot hold the
+        # issues is dispreferred by `rate_search_result` below, it is simply
+        # no longer erased before anything can weigh it.
+        already_in_library = result.get('already_added') is not None
         atleast_min_covered_issues = result['issue_count'] >= min_issue_count
-        if not atleast_min_covered_issues:
+        if not (atleast_min_covered_issues or already_in_library):
             continue
 
         # Search result passed the filters

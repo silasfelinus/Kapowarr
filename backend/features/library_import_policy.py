@@ -10,6 +10,8 @@ without changing the more conservative generic confident-match helper.
 from typing import Dict, List, Optional, Tuple
 
 from backend.base.definitions import FilenameData, VolumeMetadata
+from backend.base.files import common_folder, folder_is_inside_folder
+from backend.base.logging import LOGGER
 from backend.implementations.matching import (
     ISSUE_CAPACITY_RATING_PENALTY, _rank_volume_results_for_file)
 
@@ -104,6 +106,87 @@ def _policy_score(
     return score
 
 
+def _library_volume_folders(volume_ids: List[int]) -> Dict[int, str]:
+    """Map local volume IDs to the folder each one occupies on disk.
+
+    Imported lazily: this module is otherwise pure scoring, and the tests
+    that cover the scoring do not need a database to exist.
+    """
+    if not volume_ids:
+        return {}
+
+    from backend.internals.db import get_db
+
+    placeholders = ','.join('?' * len(volume_ids))
+    return {
+        int(row['id']): str(row['folder'])
+        for row in get_db().execute(
+            f"SELECT id, folder FROM volumes WHERE id IN ({placeholders});",
+            volume_ids
+        ).fetchall()
+        if row['folder']
+    }
+
+
+def _folder_owning_candidate(
+    group: Dict[str, FilenameData],
+    tied: List[VolumeMetadata]
+) -> Optional[VolumeMetadata]:
+    """Break a tie with the one thing the library already knows.
+
+    Filename evidence genuinely runs out sometimes. "Druuna 09 Came from the
+    Wind.cbz" carries no year and no volume number, so the 1986 Druuna and
+    the 2016 Druuna score identically off the filename and the group is held
+    as a tie -- on every pass, forever, because a hold is not a decision.
+
+    But the files are not nowhere. Eight of that folder's nine files were
+    already imported into the 1986 volume, and Kapowarr recorded that volume
+    as owning that exact folder. `already_added` carries the local volume ID
+    on every search result and was never consulted; the answer was sitting in
+    the library the whole time.
+
+    Only a tie is resolved this way, and only when exactly one of the tied
+    candidates owns the folder. A candidate that lost on filename evidence is
+    never promoted by this, and an ambiguous folder still goes to a human.
+    """
+    if len(tied) < 2:
+        return None
+
+    added_ids = {
+        candidate['comicvine_id']: candidate['already_added']
+        for candidate in tied
+        if candidate.get('already_added') is not None
+    }
+    if not added_ids:
+        return None
+
+    group_folder = common_folder(list(group))
+    if not group_folder:
+        return None
+
+    folders = _library_volume_folders(sorted(set(added_ids.values())))
+
+    owners = [
+        candidate
+        for candidate in tied
+        if candidate.get('already_added') in folders
+        and folder_is_inside_folder(
+            folders[candidate['already_added']],
+            group_folder
+        )
+    ]
+    if len(owners) != 1:
+        return None
+
+    LOGGER.info(
+        'Breaking a %d-way tie for %s in favour of %s (%s): volume %s '
+        'already owns this folder',
+        len(tied), group_folder, owners[0]['title'], owners[0]['year'],
+        owners[0]['already_added']
+    )
+    return owners[0]
+
+
 def select_auto_import_volume_result(
     group: Dict[str, FilenameData],
     search_results: List[VolumeMetadata],
@@ -139,6 +222,17 @@ def select_auto_import_volume_result(
     if len(policy_ranked) > 1:
         runner_up_score = policy_ranked[1][1]
         if best_score - runner_up_score < AUTO_IMPORT_MIN_SCORE_MARGIN:
+            owner = _folder_owning_candidate(
+                group,
+                [
+                    result
+                    for result, score in policy_ranked
+                    if score == best_score
+                ]
+            )
+            if owner is not None:
+                return owner, None
+
             return None, REVIEW_REASON_TIE
 
     return best_result, None

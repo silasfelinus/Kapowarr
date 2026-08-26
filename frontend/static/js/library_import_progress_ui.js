@@ -95,10 +95,10 @@ function installContinuousImportProgressUI() {
 		reset.type = 'button';
 		reset.id = 'continuous-recheck-button';
 		reset.dataset.recheckReviewHolds = 'true';
-		reset.innerText = 'Reset & Re-evaluate All Holds';
+		reset.innerText = 'Reset & Re-evaluate Holds';
 		reset.title = (
-			'Clear the saved import/review list, rescan current unimported folders, '
-			+ 'and restart Continuous Auto-Import. Already imported comics stay imported.'
+			'Retry only the folders currently under Review Holds with the latest matcher. '
+			+ 'Other untracked folders are not added to this pass.'
 		);
 		reset.onclick = () => {
 			const primaryReset = document.querySelector(
@@ -108,6 +108,26 @@ function installContinuousImportProgressUI() {
 				primaryReset.click();
 		};
 		actions.appendChild(reset);
+	};
+
+	if (!document.querySelector('#continuous-rescan-button')) {
+		const rescan = document.createElement('button');
+		rescan.type = 'button';
+		rescan.id = 'continuous-rescan-button';
+		rescan.dataset.rescanUntrackedLibrary = 'true';
+		rescan.innerText = 'Rescan Untracked Library';
+		rescan.title = (
+			'Build a fresh Continuous Auto-Import pass from every currently unimported '
+			+ 'folder in the configured roots.'
+		);
+		rescan.onclick = () => {
+			const primaryRescan = document.querySelector(
+				'#rescan-untracked-library-start-button'
+			);
+			if (primaryRescan)
+				primaryRescan.click();
+		};
+		actions.appendChild(rescan);
 	};
 
 	let lastDetailedWork = null;

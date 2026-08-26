@@ -25,6 +25,7 @@ from backend.features.library_import import (
     _match_file_groups,
     create_groups,
     import_library,
+    match_identifies_a_volume,
 )
 from backend.features.library_import_context import apply_series_run_context
 from backend.features.library_import_diagnostics import (
@@ -514,7 +515,7 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
 
                         for group_number, files in group_to_files.items():
                             cv_match = group_to_cv[group_number]
-                            if cv_match['id'] is None:
+                            if not match_identifies_a_volume(cv_match):
                                 review_reason = cv_match.get(
                                     'review_reason',
                                     REVIEW_REASON_NO_CANDIDATE

@@ -373,6 +373,33 @@ async def _match_file_groups(
     return matches
 
 
+def match_identifies_a_volume(cv_match: Dict[str, Any]) -> bool:
+    """Whether some metadata provider actually recognised this group.
+
+    #139 asked GCD and Metron when ComicVine did not know a title, and
+    #140 carried the provider's own identity through to `Library.add` so
+    the answer could be imported. The branch that decides whether to
+    import at all was never updated: it still asks whether `id` -- the
+    ComicVine ID, and nothing else -- is set.
+
+    GCD never carries a ComicVine ID; it has no cross-link, so
+    `comicvine_id` is `None` by design. Metron carries one only when the
+    series happens to be cross-referenced. So a fallback provider could
+    recognise a folder, win the confidence policy outright, and still be
+    routed to review -- where, because a winning match dict carries no
+    `review_reason`, it was stamped `no-candidate`: "no database in the
+    world had this", written about a volume a database had just named.
+
+    Ask the question the import actually needs answered instead. A group
+    is importable when any provider identified it, whether or not that
+    identity happens to be a ComicVine one.
+    """
+    return (
+        cv_match.get('id') is not None
+        or cv_match.get('external_id') is not None
+    )
+
+
 def count_library_import_folders(
     folder_filter: Union[str, None] = None,
     limit_parent_folder: bool = False,
@@ -842,7 +869,7 @@ class ContinuousLibraryImport(Task):
                     folder_review_reasons: Set[str] = set()
                     for group_number, files in group_to_files.items():
                         cv_match = group_to_cv[group_number]
-                        if cv_match['id'] is None:
+                        if not match_identifies_a_volume(cv_match):
                             folder_needs_review = True
                             review_reason = cv_match.get(
                                 'review_reason',
@@ -870,7 +897,19 @@ class ContinuousLibraryImport(Task):
 
                     if matches:
                         import_library(matches, rename_files=False)
-                        imported += len({match['id'] for match in matches})
+                        # By provider identity for the same reason the
+                        # import itself groups that way: every GCD match
+                        # carries `id: None`, so counting distinct IDs
+                        # reported a whole batch of them as one volume.
+                        imported += len({
+                            (
+                                match.get('provider_id') or 'comicvine',
+                                match.get('external_id')
+                                if match.get('external_id') is not None
+                                else match['id']
+                            )
+                            for match in matches
+                        })
 
                     if folder_needs_review:
                         self.review_folders.add(folder)

@@ -52,7 +52,7 @@ def _main(
             Defaults to None.
 
         url_base (Union[str, None], optional): The URL base to use for the
-        server.
+            server.
             Defaults to None.
 
     Raises:
@@ -71,6 +71,9 @@ def _main(
                                           PENDING_RESTORE_SUFFIX,
                                           apply_pending_restore)
     from backend.features.download_queue import DownloadHandler
+    from backend.features.library_import_maintenance import (
+        register_library_import_maintenance_tasks,
+    )
     from backend.features.library_import_persistent import (
         PersistentContinuousLibraryImport,
     )
@@ -115,6 +118,7 @@ def _main(
     with SERVER.app.app_context():
         StartTypeHandlers.start_timer(start_type)
         setup_db()
+        register_library_import_maintenance_tasks()
 
         s = Settings()
 

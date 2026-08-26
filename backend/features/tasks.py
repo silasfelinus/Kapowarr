@@ -37,9 +37,12 @@ _DEDUPE_ACTIONS = {
 # Running them in separate lanes allowed Update All's multiprocessing scan to
 # collide with a continuous import and exhaust SQLite's 10-second busy timeout.
 # Keep the historical lane name for API/UI compatibility, but make Update All
-# share it so unrelated searches/download tasks can still run concurrently.
+# and import-queue maintenance share it so they cannot mutate one durable
+# snapshot while the conveyor is still finishing its current folder.
 _LIBRARY_WRITE_ACTIONS = {
     'continuous_library_import',
+    'recheck_continuous_library_import',
+    'rescan_continuous_library_import',
     'update_all',
 }
 

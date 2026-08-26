@@ -702,7 +702,11 @@ def _rank_volume_results_for_file(
             floor(issue_range[1]) - floor(issue_range[0]) + 1
         )
 
-    def viable(title_matches_series) -> List[VolumeMetadata]:
+    def viable(
+        title_matches_series,
+        exclude_translated: bool,
+        enforce_issue_count: bool
+    ) -> List[VolumeMetadata]:
         filtered_results: List[VolumeMetadata] = []
         for result in search_results:
             # Filter series titles
@@ -710,7 +714,9 @@ def _rank_volume_results_for_file(
                 continue
 
             # Filter non-english languages
-            language_allowed = not (only_english and result['translated'])
+            language_allowed = not (
+                only_english and exclude_translated and result['translated']
+            )
             if not language_allowed:
                 continue
 
@@ -764,7 +770,9 @@ def _rank_volume_results_for_file(
             # no longer erased before anything can weigh it.
             already_in_library = result.get('already_added') is not None
             atleast_min_covered_issues = result['issue_count'] >= min_issue_count
-            if not (atleast_min_covered_issues or already_in_library):
+            if enforce_issue_count and not (
+                atleast_min_covered_issues or already_in_library
+            ):
                 continue
 
             # Search result passed the filters
@@ -772,12 +780,42 @@ def _rank_volume_results_for_file(
 
         return filtered_results
 
-    # Strict title equality first, exactly as before. Only when it admits
-    # nobody at all is the near-title rule consulted -- so no folder that
-    # matches today can have its candidate set changed by this, and the
-    # relaxation reaches only the folders that were being held as
-    # `no-candidate` with the right volume sitting in the response.
-    filtered_results = viable(match_title) or viable(match_title_nearly)
+    # Two of the hard gates that run before anything is scored are each
+    # individually capable of erasing every candidate, leaving the folder
+    # held as `no-candidate` -- "no database has this" -- with the right
+    # volume sitting in the response that was just fetched.
+    #
+    # Neither is wrong as a preference. They are wrong as the last word.
+    # A ladder of strictly widening passes keeps each one the preference
+    # it should be: the first pass that admits anybody wins, so a folder
+    # that matches under the strictest terms never sees a looser
+    # candidate, and a folder that matched nothing gets the best evidence
+    # available instead of nothing at all. The score, margin and tie rules
+    # apply unchanged after that, so a relaxed candidate still has to earn
+    # its import.
+    #
+    # Ordered by what the relaxation costs. A `translated` flag is the
+    # cheaper of the two to give up: it is frequently just wrong, and it
+    # was dropping "Astronaut Down" (2022) on an exact title and an exact
+    # year. The title is the strongest signal there is, so it is relaxed
+    # last, and never abandoned -- see `match_title_nearly`.
+    #
+    # The issue-count gate is deliberately not on this ladder. #146 opened
+    # it for a volume the user already owns, on the grounds that a
+    # provider's issue count is a claim about the provider's records
+    # rather than about the series -- and closed it for everything else,
+    # because a namesake the user has not vouched for and which cannot
+    # hold the files is exactly what that gate is for. Widening it here
+    # would quietly reverse that.
+    for title_rule, exclude_translated in (
+        (match_title, True),
+        (match_title, False),
+        (match_title_nearly, True),
+        (match_title_nearly, False),
+    ):
+        filtered_results = viable(title_rule, exclude_translated, True)
+        if filtered_results:
+            break
 
     def rate_search_result(search_result: VolumeMetadata) -> int:
         rating = 0

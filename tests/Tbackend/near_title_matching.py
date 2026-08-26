@@ -167,17 +167,47 @@ class the_near_tier_only_runs_when_nothing_matched(unittest.TestCase):
         )
         self.assertEqual(ranked, [])
 
-    def test_the_near_tier_still_obeys_the_other_filters(self):
-        # A near title does not buy a candidate past language or issue
-        # count -- it only gets it as far as those filters.
+    def test_the_near_tier_still_obeys_the_issue_count_gate(self):
+        # A near title does not buy a candidate past the issue-count
+        # gate; it only gets it as far as that filter. #146 opened that
+        # gate for a volume the user already owns and deliberately left
+        # it shut for everything else.
+        group = _group('Tear Us')
+        group['/content/Tear Us/Tear Us 04.cbz'] = dict(
+            group['/content/Tear Us/Tear Us 01.cbz'], issue_number=4.0
+        )
+        ranked = _rank_volume_results_for_file(
+            group,
+            [_candidate('Tear Us Apart', comicvine_id=1, issue_count=1)],
+            only_english=True
+        )
+        self.assertEqual(ranked, [])
+
+    def test_an_english_match_hides_a_translated_one(self):
         translated = _candidate('Tear Us Apart', comicvine_id=1)
         translated['translated'] = True
         ranked = _rank_volume_results_for_file(
             _group('Tear Us'),
+            [translated, _candidate('Tear Us Apart', comicvine_id=2)],
+            only_english=True
+        )
+        self.assertEqual(
+            [result['comicvine_id'] for result, _ in ranked],
+            [2]
+        )
+
+    def test_a_translated_flag_is_not_the_last_word_on_its_own(self):
+        # ComicVine's `translated` was dropping "Astronaut Down" (2022)
+        # on an exact title and an exact year, with nothing else in the
+        # response to prefer.
+        translated = _candidate('Astronaut Down', comicvine_id=1, year=2022)
+        translated['translated'] = True
+        ranked = _rank_volume_results_for_file(
+            _group('Astronaut Down', year=2022),
             [translated],
             only_english=True
         )
-        self.assertEqual(ranked, [])
+        self.assertEqual(len(ranked), 1)
 
 
 if __name__ == '__main__':

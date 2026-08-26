@@ -328,6 +328,14 @@ async def search_volumes_everywhere(title: str) -> List[VolumeMetadata]:
     ) or [DEFAULT_METADATA_PROVIDER_ID]
 
     everything: List[VolumeMetadata] = []
+    # A provider that returns nothing leaves no candidate behind, so a
+    # review record built from candidates alone cannot distinguish "the
+    # fallbacks had nothing either" from "the fallbacks were never
+    # asked". Both read as "no database in the world had this", and only
+    # one of them is a reason to stop looking. Say what each provider was
+    # asked and what it gave back, so the answer is in the log even when
+    # the answer is nothing.
+    consulted: List[str] = []
     for provider_id in provider_ids:
         provider = get_metadata_provider(provider_id)
         try:
@@ -339,7 +347,10 @@ async def search_volumes_everywhere(title: str) -> List[VolumeMetadata]:
                 'Metadata provider %s failed searching for %r: %s',
                 provider_id, title, error
             )
+            consulted.append(f'{provider_id}=failed')
             continue
+
+        consulted.append(f'{provider_id}={len(results)}')
 
         if any(match_title(title, result['title']) for result in results):
             if everything:
@@ -351,6 +362,10 @@ async def search_volumes_everywhere(title: str) -> List[VolumeMetadata]:
 
         everything.extend(results)
 
+    LOGGER.info(
+        'No configured provider recognised %r; asked %s',
+        title, ', '.join(consulted) or 'nobody'
+    )
     return everything
 
 

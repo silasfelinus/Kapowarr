@@ -28,6 +28,14 @@ from backend.internals.db import DBConnection
 
 
 POSTMORTEM_FILENAME = 'library_import_review_postmortem.jsonl'
+
+# Per provider, not overall. `search_volumes_everywhere` returns ComicVine's
+# results first and appends each fallback's after them, and ComicVine answers
+# almost any query with fifty rows. A flat cap of 25 therefore truncated the
+# record at ComicVine every time a fallback was reached, so the postmortem
+# could never show what GCD or Metron returned -- the exact case the fan-out
+# exists for was the one case it could not describe. Keeping a budget per
+# provider means every provider that answered is represented.
 RAW_SEARCH_CAPTURE_LIMIT = 25
 
 
@@ -42,13 +50,33 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
+def _candidate_identity(result: VolumeMetadata) -> Any:
+    """Identify a candidate the way the importer does.
+
+    `comicvine_id` is `None` for every GCD result and for any Metron
+    result without a cross-reference, so a score map keyed on it put all
+    of them in one `None` bucket and handed each the last one's score.
+    Every non-ComicVine candidate in the postmortem carried a number
+    belonging to some other volume.
+    """
+    external_id = result.get('external_id')
+    if external_id is None:
+        external_id = result['comicvine_id']
+    return (result.get('provider_id') or 'comicvine', external_id)
+
+
 def _candidate_snapshot(
     result: VolumeMetadata,
     score: Optional[int] = None
 ) -> Dict[str, Any]:
-    """Keep useful ComicVine metadata while excluding covers/issue payloads."""
+    """Keep useful provider metadata while excluding covers/issue payloads."""
     snapshot: Dict[str, Any] = {
         'comicvine_id': result['comicvine_id'],
+        # Which database actually returned this row. Without it a reader
+        # cannot tell a ComicVine miss from a fallback that was never
+        # consulted, and both look like "nobody had it".
+        'provider_id': result.get('provider_id') or 'comicvine',
+        'external_id': result.get('external_id'),
         'title': result['title'],
         'year': result['year'],
         'volume_number': result['volume_number'],
@@ -62,6 +90,50 @@ def _candidate_snapshot(
     if score is not None:
         snapshot['score'] = score
     return snapshot
+
+
+def _capture_per_provider(
+    results: List[VolumeMetadata]
+) -> List[VolumeMetadata]:
+    """Take up to the capture limit from each provider that answered."""
+    seen: Dict[str, int] = {}
+    captured: List[VolumeMetadata] = []
+    for result in results:
+        provider_id = result.get('provider_id') or 'comicvine'
+        taken = seen.get(provider_id, 0)
+        if taken >= RAW_SEARCH_CAPTURE_LIMIT:
+            continue
+        seen[provider_id] = taken + 1
+        captured.append(result)
+    return captured
+
+
+def _provider_breakdown(
+    search_results: List[VolumeMetadata],
+    ranked_results: List[Any]
+) -> List[Dict[str, Any]]:
+    """Say what each provider returned, over the whole response.
+
+    The point of the fan-out is that ComicVine is thinnest exactly where
+    a personal library runs deepest. Reading a hold, the first question
+    is which databases were asked and what each said -- and a record
+    that lists only candidates cannot answer it, because a provider that
+    returned nothing leaves no candidates to list. Counted over the full
+    response, not the captured sample, so truncation cannot turn a
+    fallback that answered into one that appears never to have run.
+    """
+    viable = {_candidate_identity(result) for result, _ in ranked_results}
+    breakdown: Dict[str, Dict[str, Any]] = {}
+    for result in search_results:
+        provider_id = result.get('provider_id') or 'comicvine'
+        entry = breakdown.setdefault(
+            provider_id,
+            {'provider_id': provider_id, 'result_count': 0, 'viable_count': 0}
+        )
+        entry['result_count'] += 1
+        if _candidate_identity(result) in viable:
+            entry['viable_count'] += 1
+    return sorted(breakdown.values(), key=lambda entry: entry['provider_id'])
 
 
 def build_review_diagnostics(
@@ -98,11 +170,11 @@ def build_review_diagnostics(
         reverse=True
     )
     viable_scores = {
-        result['comicvine_id']: score
+        _candidate_identity(result): score
         for result, score in ranked_results
     }
     policy_scores = {
-        result['comicvine_id']: policy
+        _candidate_identity(result): policy
         for result, _, policy in policy_ranked
     }
 
@@ -134,6 +206,9 @@ def build_review_diagnostics(
             # the policy score the decision used.
             'best_base_score': best_base_score
         },
+        # Which databases answered, and whether any of them offered
+        # something the ranker could use.
+        'providers': _provider_breakdown(search_results, ranked_results),
         'files': [
             {
                 'filepath': filepath,
@@ -148,10 +223,10 @@ def build_review_diagnostics(
         'raw_search_results': [
             {
                 **_candidate_snapshot(result),
-                'viable_score': viable_scores.get(result['comicvine_id']),
-                'policy_score': policy_scores.get(result['comicvine_id'])
+                'viable_score': viable_scores.get(_candidate_identity(result)),
+                'policy_score': policy_scores.get(_candidate_identity(result))
             }
-            for result in search_results[:RAW_SEARCH_CAPTURE_LIMIT]
+            for result in _capture_per_provider(search_results)
         ]
     }
 

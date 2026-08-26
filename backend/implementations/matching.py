@@ -8,6 +8,7 @@ issues and volumes.
 from __future__ import annotations
 
 from itertools import chain
+from difflib import SequenceMatcher
 from math import floor
 from re import compile
 from typing import TYPE_CHECKING, Dict, List, Mapping, Tuple, Union
@@ -58,20 +59,126 @@ def match_title(
     Returns:
         bool: Whether the titles match.
     """
-    clean_reference_title = clean_title_regex.sub(
-        '',
-        normalise_query_string(title1).lower()
-    ).replace(' ', '')
-
-    clean_title = clean_title_regex.sub(
-        '',
-        normalise_query_string(title2).lower()
-    ).replace(' ', '')
+    clean_reference_title = _clean_for_comparison(title1)
+    clean_title = _clean_for_comparison(title2)
 
     if allow_contains:
         return clean_title in clean_reference_title
     else:
         return clean_reference_title == clean_title
+
+
+# A near-title candidate is only ever considered when strict matching found
+# nothing at all, so a folder that matches today is unaffected. These bound
+# how far "nothing at all" is allowed to reach.
+NEAR_TITLE_MIN_LENGTH = 3
+NEAR_TITLE_MIN_SHARED_RATIO = 0.5
+NEAR_TITLE_MAX_SHORT_REMAINDER = 2
+NEAR_TITLE_MIN_SIMILARITY = 0.9
+
+_parenthetical_regex = compile(r'\s*\([^()]*\)\s*')
+
+
+_word_split_regex = compile(r'[^a-z0-9]+')
+
+
+def _clean_for_comparison(title: str) -> str:
+    """Reduce a title to the form `match_title` compares."""
+    return clean_title_regex.sub(
+        '',
+        normalise_query_string(title).lower()
+    ).replace(' ', '')
+
+
+def match_title_nearly(title1: str, title2: str) -> bool:
+    """Whether two titles are close enough to be worth scoring.
+
+    `match_title` is exact equality after cleaning, and it is the first
+    filter every candidate passes through. That is right when the parsed
+    series is the series -- and a real library is full of folders where
+    it is not. ComicVine files subtitles the folder does not have
+    ("Burn the Orphanage" against "Burn the Orphanage: Reign of Terror"),
+    the parser keeps a trailing issue number in the series
+    ("Detective Comics 074"), a scene release carries a phase or edition
+    the database does not, and both sides disagree about a plural. In
+    every one of those cases the correct volume was in the response and
+    was discarded before anything could weigh it, so the folder was held
+    as `no-candidate` -- "no database has this" -- on every pass forever.
+
+    This does not decide a match. It decides whether the ranker is
+    allowed to look at one, and it is consulted only when strict matching
+    admitted nobody. The score, margin and tie rules then apply
+    unchanged, so an ambiguous near-title folder is still held for a
+    human -- which is the right answer for "Future State" against a shelf
+    of `Future State: <somewhere>` volumes.
+
+    Deliberately not symmetric with `allow_contains`: a title that merely
+    appears somewhere inside the other matches "Sex Cells" to "Cells" and
+    "Junji Ito's Frankenstein" to "Frankenstein". Only a shared *start*
+    counts, and only when it covers enough of the longer title.
+    """
+    # ComicVine hangs editions and sub-editions off a title in
+    # parentheses -- "(DC Essential Edition)", "Ho!(liday)" -- which the
+    # folder never carries. Compare with them and without.
+    for candidate in (title2, _parenthetical_regex.sub(' ', title2)):
+        if _near_enough(title1, candidate):
+            return True
+    return False
+
+
+def _near_enough(title1: str, title2: str) -> bool:
+    first = _clean_for_comparison(title1)
+    second = _clean_for_comparison(title2)
+    if not first or not second:
+        return False
+
+    if first == second:
+        return True
+
+    if min(len(first), len(second)) < NEAR_TITLE_MIN_LENGTH:
+        return False
+
+    # Word counts have to come from the spaced form: the comparison form
+    # has the spaces removed, because "Gen 13" and "Gen13" are the same
+    # series.
+    word_counts = {
+        first: len(_words(title1)),
+        second: len(_words(title2))
+    }
+
+    shorter, longer = sorted((first, second), key=len)
+    if longer.startswith(shorter):
+        extra = longer[len(shorter):]
+        # A trailing issue number the parser kept in the series, or a
+        # one- or two-character ornament ("ODY" against "ODY-C"): the
+        # shared start is the whole of the shorter title.
+        if extra.isdigit() or len(extra) <= NEAR_TITLE_MAX_SHORT_REMAINDER:
+            return True
+
+        # Otherwise the shorter title has to be a real multi-word phrase
+        # before a shared start means anything. One word in common is how
+        # "The Lust of Us" reaches "Lust" and "Sleep Deprivation Ninja"
+        # reaches "Sleep" -- a different comic that happens to begin the
+        # same way.
+        if word_counts[shorter] < 2:
+            return False
+
+        return len(shorter) / len(longer) >= NEAR_TITLE_MIN_SHARED_RATIO
+
+    # Neither starts the other, but they may differ only in a plural or a
+    # stray character: "The Monsters Makers" against "The Monster Makers".
+    return SequenceMatcher(
+        None, first, second
+    ).ratio() >= NEAR_TITLE_MIN_SIMILARITY
+
+
+def _words(title: str) -> List[str]:
+    """Split a title into its meaningful words."""
+    cleaned = clean_title_regex.sub(
+        '',
+        normalise_query_string(title).lower()
+    )
+    return [word for word in _word_split_regex.split(cleaned) if word]
 
 
 def match_year(
@@ -595,73 +702,82 @@ def _rank_volume_results_for_file(
             floor(issue_range[1]) - floor(issue_range[0]) + 1
         )
 
-    filtered_results: List[VolumeMetadata] = []
-    for result in search_results:
-        # Filter series titles
-        title_matches = match_title(series, result['title'])
-        if not title_matches:
-            continue
+    def viable(title_matches_series) -> List[VolumeMetadata]:
+        filtered_results: List[VolumeMetadata] = []
+        for result in search_results:
+            # Filter series titles
+            if not title_matches_series(series, result['title']):
+                continue
 
-        # Filter non-english languages
-        language_allowed = not (only_english and result['translated'])
-        if not language_allowed:
-            continue
+            # Filter non-english languages
+            language_allowed = not (only_english and result['translated'])
+            if not language_allowed:
+                continue
 
-        # Filter based on SV
-        # - Skip impossible SVs (e.g. 'one-shot' title vs 'hard-cover' file).
-        regex_result = special_version_regex.search(result['title'])
-        result_special_version = None
-        if regex_result:
-            result_special_version = [
-                k for k, v in regex_result.groupdict().items()
-                if v is not None
-            ][0].replace('_', '-')
+            # Filter based on SV
+            # - Skip impossible SVs (e.g. 'one-shot' title vs 'hard-cover' file).
+            regex_result = special_version_regex.search(result['title'])
+            result_special_version = None
+            if regex_result:
+                result_special_version = [
+                    k for k, v in regex_result.groupdict().items()
+                    if v is not None
+                ][0].replace('_', '-')
 
-        special_version_possible = not (
-            special_version in ONE_ISSUE_MATCH
-            and result_special_version in ONE_ISSUE_MATCH
-            and special_version != result_special_version
-        )
-        if not special_version_possible:
-            continue
+            special_version_possible = not (
+                special_version in ONE_ISSUE_MATCH
+                and result_special_version in ONE_ISSUE_MATCH
+                and special_version != result_special_version
+            )
+            if not special_version_possible:
+                continue
 
-        # Filter based on issue count
-        # - If the file is for a one-issue SV while the result has more than one
-        #   issue, then it can't be a match.
-        # - If miminum amount of issues covered by group is already more than
-        #   result's issue count, then it can't be a match.
-        sv_issue_count_allowed = (
-            first_file['special_version'] not in ONE_ISSUE_MATCH
-            or result['issue_count'] == 1
-            # An omnibus collects a run instead of being one issue of it, so
-            # the series it collects is exactly what it should match. Without
-            # this, "Black Hammer Omnibus" could only ever match a one-issue
-            # namesake, and the real Black Hammer was filtered out before
-            # anything was scored.
-            or first_file['special_version'] in COLLECTED_EDITION_MATCH
-        )
-        if not sv_issue_count_allowed:
-            continue
+            # Filter based on issue count
+            # - If the file is for a one-issue SV while the result has more than one
+            #   issue, then it can't be a match.
+            # - If miminum amount of issues covered by group is already more than
+            #   result's issue count, then it can't be a match.
+            sv_issue_count_allowed = (
+                first_file['special_version'] not in ONE_ISSUE_MATCH
+                or result['issue_count'] == 1
+                # An omnibus collects a run instead of being one issue of it, so
+                # the series it collects is exactly what it should match. Without
+                # this, "Black Hammer Omnibus" could only ever match a one-issue
+                # namesake, and the real Black Hammer was filtered out before
+                # anything was scored.
+                or first_file['special_version'] in COLLECTED_EDITION_MATCH
+            )
+            if not sv_issue_count_allowed:
+                continue
 
-        # A volume the user already added is not a coincidental namesake:
-        # they have already decided it is the real series, and Kapowarr put
-        # its files on disk. Its provider issue count is a claim about the
-        # provider's records, and those records go stale -- ComicVine lists
-        # two issues of "Death of Power" while #3, #4 and #5 sit in the
-        # volume's own folder. Filtering the volume out on that count left
-        # its own files with no candidate at all, so the folder was held as
-        # 'no-candidate' forever with the answer already in the library.
-        #
-        # Scores still apply: an already-added volume that cannot hold the
-        # issues is dispreferred by `rate_search_result` below, it is simply
-        # no longer erased before anything can weigh it.
-        already_in_library = result.get('already_added') is not None
-        atleast_min_covered_issues = result['issue_count'] >= min_issue_count
-        if not (atleast_min_covered_issues or already_in_library):
-            continue
+            # A volume the user already added is not a coincidental namesake:
+            # they have already decided it is the real series, and Kapowarr put
+            # its files on disk. Its provider issue count is a claim about the
+            # provider's records, and those records go stale -- ComicVine lists
+            # two issues of "Death of Power" while #3, #4 and #5 sit in the
+            # volume's own folder. Filtering the volume out on that count left
+            # its own files with no candidate at all, so the folder was held as
+            # 'no-candidate' forever with the answer already in the library.
+            #
+            # Scores still apply: an already-added volume that cannot hold the
+            # issues is dispreferred by `rate_search_result` below, it is simply
+            # no longer erased before anything can weigh it.
+            already_in_library = result.get('already_added') is not None
+            atleast_min_covered_issues = result['issue_count'] >= min_issue_count
+            if not (atleast_min_covered_issues or already_in_library):
+                continue
 
-        # Search result passed the filters
-        filtered_results.append(result)
+            # Search result passed the filters
+            filtered_results.append(result)
+
+        return filtered_results
+
+    # Strict title equality first, exactly as before. Only when it admits
+    # nobody at all is the near-title rule consulted -- so no folder that
+    # matches today can have its candidate set changed by this, and the
+    # relaxation reaches only the folders that were being held as
+    # `no-candidate` with the right volume sitting in the response.
+    filtered_results = viable(match_title) or viable(match_title_nearly)
 
     def rate_search_result(search_result: VolumeMetadata) -> int:
         rating = 0

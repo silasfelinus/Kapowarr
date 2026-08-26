@@ -1,6 +1,6 @@
 (() => {
 	let matchedOnly = false;
-	let recheckInProgress = false;
+	let maintenanceInProgress = false;
 	let manualReviewScanInFlight = false;
 	let manualReviewScanDismissed = false;
 
@@ -26,6 +26,10 @@
 
 	const getRecheckButtons = () => [
 		...document.querySelectorAll('[data-recheck-review-holds]')
+	];
+
+	const getRescanButtons = () => [
+		...document.querySelectorAll('[data-rescan-untracked-library]')
 	];
 
 	function installStyles() {
@@ -94,15 +98,22 @@
 		document.head.appendChild(style);
 	};
 
-	function setRecheckButtonsState(disabled, label=null) {
+	function setMaintenanceButtonsState(disabled, activeCommand=null) {
 		getRecheckButtons().forEach(button => {
 			button.disabled = disabled;
-			if (label !== null)
-				button.innerText = label;
+			button.innerText = activeCommand === 'recheck_continuous_library_import'
+				? 'Re-evaluating...'
+				: 'Reset & Re-evaluate Holds';
+		});
+		getRescanButtons().forEach(button => {
+			button.disabled = disabled;
+			button.innerText = activeCommand === 'rescan_continuous_library_import'
+				? 'Rescanning...'
+				: 'Rescan Untracked Library';
 		});
 	};
 
-	function waitForTaskCompletion(apiKey, taskId) {
+	function waitForTaskCompletion(apiKey, taskId, fallbackMessage) {
 		return new Promise((resolve, reject) => {
 			const poll = () => fetchAPI('/system/tasks', apiKey)
 			.then(json => {
@@ -114,7 +125,7 @@
 
 				if (LIEls?.continuous?.status)
 					LIEls.continuous.status.innerText = task.message
-						|| 'Rebuilding the import snapshot from the current library...';
+						|| fallbackMessage;
 				setTimeout(poll, 500);
 			})
 			.catch(reject);
@@ -129,7 +140,7 @@
 		) || null);
 	};
 
-	function restartContinuousAfterReset(apiKey) {
+	function restartContinuousAfterMaintenance(apiKey) {
 		if (typeof originalStartContinuousImport !== 'function')
 			return Promise.reject(new Error(
 				'Continuous Library Import could not be restarted.'
@@ -151,7 +162,7 @@
 
 				if (Date.now() - startedAt >= timeoutMs) {
 					reject(new Error(
-						'Continuous Library Import did not restart after the reset.'
+						'Continuous Library Import did not restart after maintenance.'
 					));
 					return;
 				};
@@ -162,18 +173,15 @@
 		});
 	};
 
-	function resetAndRecheckContinuousReview() {
-		if (recheckInProgress || manualReviewScanInFlight)
+	function runContinuousMaintenance(config) {
+		if (maintenanceInProgress || manualReviewScanInFlight)
 			return;
 
-		const confirmed = window.confirm(
-			'Discard the current Review Holds and scan the library again with the latest matching logic? Already imported files will stay imported. Moved or renamed unimported folders will be rediscovered.'
-		);
-		if (!confirmed)
+		if (!window.confirm(config.confirmMessage))
 			return;
 
-		recheckInProgress = true;
-		setRecheckButtonsState(true, 'Resetting...');
+		maintenanceInProgress = true;
+		setMaintenanceButtonsState(true, config.command);
 
 		usingApiKey()
 		.then(apiKey => {
@@ -195,8 +203,7 @@
 				],
 				[LIEls.views.continuous]
 			);
-			LIEls.continuous.status.innerText =
-				'Rebuilding the import snapshot from the current library...';
+			LIEls.continuous.status.innerText = config.rebuildingMessage;
 			LIEls.buttons.continuous_stop.disabled = true;
 			LIEls.buttons.continuous_review.disabled = true;
 			LIEls.buttons.continuous_back.disabled = true;
@@ -205,8 +212,7 @@
 			.then(activeTask => {
 				if (activeTask !== null) {
 					continuousTaskId = activeTask.id;
-					LIEls.continuous.status.innerText =
-						'Stopping at the current folder boundary, then rebuilding the import snapshot...';
+					LIEls.continuous.status.innerText = config.stoppingMessage;
 					return sendAPI(
 						'DELETE',
 						`/system/tasks/${activeTask.id}`,
@@ -224,11 +230,15 @@
 					'/system/tasks',
 					apiKey,
 					{},
-					{cmd: 'recheck_continuous_library_import'}
+					{cmd: config.command}
 				);
 			})
 			.then(response => response.json())
-			.then(json => waitForTaskCompletion(apiKey, json.result.id))
+			.then(json => waitForTaskCompletion(
+				apiKey,
+				json.result.id,
+				config.rebuildingMessage
+			))
 			.then(() => {
 				continuousTaskId = null;
 				continuousWasRunning = false;
@@ -238,17 +248,36 @@
 				continuousLastSnapshotAt = 0;
 				LIEls.buttons.continuous_review.innerText = 'Review Holds (0)';
 				LIEls.buttons.continuous_review.disabled = true;
-				LIEls.continuous.status.innerText =
-					'Reset complete. Restarting Continuous Auto-Import...';
-				return restartContinuousAfterReset(apiKey);
+				LIEls.continuous.status.innerText = config.restartMessage;
+				return restartContinuousAfterMaintenance(apiKey);
 			});
 		})
 		.catch(error => showImportError(error))
 		.finally(() => {
-			recheckInProgress = false;
+			maintenanceInProgress = false;
 			LIEls.buttons.continuous_back.disabled = false;
-			setRecheckButtonsState(false, 'Reset & Re-evaluate All Holds');
+			setMaintenanceButtonsState(false);
 			updatePrimaryControls();
+		});
+	};
+
+	function resetAndRecheckContinuousReview() {
+		runContinuousMaintenance({
+			command: 'recheck_continuous_library_import',
+			confirmMessage: 'Retry only the folders currently in Review Holds with the latest matching logic? Other untracked folders will not be added to this pass. Already imported files stay imported.',
+			rebuildingMessage: 'Rebuilding the import snapshot from current Review Holds...',
+			stoppingMessage: 'Stopping at the current folder boundary, then rebuilding the Review Holds pass...',
+			restartMessage: 'Review Holds ready. Restarting Continuous Auto-Import...'
+		});
+	};
+
+	function rescanUntrackedLibrary() {
+		runContinuousMaintenance({
+			command: 'rescan_continuous_library_import',
+			confirmMessage: 'Rescan every configured root for currently unimported folders and rebuild Continuous Auto-Import from that full set? This can be much larger than the Review Holds backlog. Already imported files stay imported.',
+			rebuildingMessage: 'Scanning the library for all current unimported folders...',
+			stoppingMessage: 'Stopping at the current folder boundary, then scanning all current unimported folders...',
+			restartMessage: 'Full untracked-library rescan ready. Restarting Continuous Auto-Import...'
 		});
 	};
 
@@ -264,17 +293,28 @@
 			reset.type = 'button';
 			reset.id = 'recheck-review-holds-start-button';
 			reset.dataset.recheckReviewHolds = 'true';
-			reset.innerText = 'Reset & Re-evaluate All Holds';
-			reset.title = 'Discard stale review decisions, rescan current unimported paths, and restart Continuous Auto-Import with the latest matcher.';
+			reset.innerText = 'Reset & Re-evaluate Holds';
+			reset.title = 'Retry only the folders currently under Review Holds with the latest matcher. Other untracked folders are not added to this pass.';
 			reset.onclick = resetAndRecheckContinuousReview;
 			actions.appendChild(reset);
+		};
+
+		if (!document.querySelector('#rescan-untracked-library-start-button')) {
+			const rescan = document.createElement('button');
+			rescan.type = 'button';
+			rescan.id = 'rescan-untracked-library-start-button';
+			rescan.dataset.rescanUntrackedLibrary = 'true';
+			rescan.innerText = 'Rescan Untracked Library';
+			rescan.title = 'Build a fresh Continuous Auto-Import pass from every currently unimported folder in the configured roots.';
+			rescan.onclick = rescanUntrackedLibrary;
+			actions.appendChild(rescan);
 		};
 
 		if (!document.querySelector('#import-reset-note')) {
 			const note = document.createElement('p');
 			note.id = 'import-reset-note';
 			note.className = 'continuous-note';
-			note.innerText = 'Reset & Re-evaluate is for stale Review Holds after matcher improvements or filesystem moves. Imported comics stay imported.';
+			note.innerText = 'Reset & Re-evaluate Holds retries only the outstanding Review Holds. Rescan Untracked Library deliberately rebuilds the pass from every currently unimported folder. Imported comics stay imported.';
 			actions.after(note);
 		};
 
@@ -289,7 +329,8 @@
 					<button type="button" id="background-view-progress">View Progress</button>
 					<button type="button" id="background-review-holds">Review Holds</button>
 					<button type="button" id="background-stop-import">Stop Import</button>
-					<button type="button" data-recheck-review-holds>Reset & Re-evaluate All Holds</button>
+					<button type="button" data-recheck-review-holds>Reset & Re-evaluate Holds</button>
+					<button type="button" data-rescan-untracked-library>Rescan Untracked Library</button>
 				</div>
 			`;
 			start.appendChild(dock);
@@ -307,6 +348,8 @@
 			};
 			dock.querySelector('[data-recheck-review-holds]').onclick =
 				resetAndRecheckContinuousReview;
+			dock.querySelector('[data-rescan-untracked-library]').onclick =
+				rescanUntrackedLibrary;
 		};
 
 		const loading = document.querySelector('#loading-window');
@@ -329,7 +372,6 @@
 
 	function updatePrimaryControls() {
 		ensurePrimaryControls();
-		const startReset = document.querySelector('#recheck-review-holds-start-button');
 		const continuousStart = document.querySelector('#continuous-import-button');
 		const reviewStart = document.querySelector('#run-import-button');
 		const escape = document.querySelector('#review-scan-escape');
@@ -337,12 +379,13 @@
 		const dockStatus = document.querySelector('#import-background-status');
 
 		const continuousActive = continuousTaskId !== null;
-		if (startReset)
-			startReset.disabled = recheckInProgress || manualReviewScanInFlight;
+		const maintenanceBlocked = maintenanceInProgress || manualReviewScanInFlight;
+		getRecheckButtons().forEach(button => button.disabled = maintenanceBlocked);
+		getRescanButtons().forEach(button => button.disabled = maintenanceBlocked);
 		if (continuousStart)
-			continuousStart.disabled = continuousActive || manualReviewScanInFlight || recheckInProgress;
+			continuousStart.disabled = continuousActive || maintenanceBlocked;
 		if (reviewStart)
-			reviewStart.disabled = continuousActive || manualReviewScanInFlight || recheckInProgress;
+			reviewStart.disabled = continuousActive || maintenanceBlocked;
 		if (escape)
 			escape.hidden = !manualReviewScanInFlight;
 
@@ -376,7 +419,7 @@
 						Show matched only
 					</label>
 					<button type="button" id="recheck-review-holds-button" data-recheck-review-holds>
-						Reset & Re-evaluate All Holds
+						Reset & Re-evaluate Holds
 					</button>
 				</div>
 				<span id="review-volume-summary"></span>

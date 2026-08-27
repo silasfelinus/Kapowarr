@@ -21,7 +21,8 @@ from xml.etree.ElementTree import ParseError, fromstring
 from zipfile import BadZipFile, ZipFile
 
 from backend.base.definitions import FileConstants, FilenameData, SpecialVersion
-from backend.base.file_extraction import extract_filename_data
+from backend.base.file_extraction import (extract_filename_data,
+                                          is_reader_cache_file)
 from backend.base.files import list_files
 from backend.base.helpers import run_rar
 from backend.base.logging import LOGGER
@@ -508,6 +509,11 @@ def is_library_import_artifact(filepath: str) -> bool:
     extension = splitext(basename(filepath))[1]
     if extension not in FileConstants.IMAGE_EXTENSIONS:
         return False
+
+    # Another reader's thumbnail cache, written into the library beside
+    # the comic rather than into a dot-directory.
+    if is_reader_cache_file(filepath):
+        return True
 
     file_data = extract_filename_data(filepath, prefer_folder_year=True)
     return file_data['special_version'] == SpecialVersion.COVER

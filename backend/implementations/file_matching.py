@@ -12,6 +12,7 @@ from backend.base.definitions import (FileConstants, FileMatch, FilenameData,
                                       GeneralFileType, SpecialVersion,
                                       VolumeData)
 from backend.base.file_extraction import (extract_filename_data,
+                                          is_reader_cache_file,
                                           refine_special_version)
 from backend.base.files import (create_folder, delete_empty_child_folders,
                                 delete_empty_parent_folders,
@@ -156,6 +157,12 @@ def scan_files(
             manually_matched_general_files_found.add(
                 manually_matched_general_files.pop(file)
             )
+            continue
+
+        if is_reader_cache_file(file):
+            # Another application's thumbnail cache. Not content, not a
+            # refusal worth a line in the log on every volume that scans
+            # the folder it sits in.
             continue
 
         file_data = extract_filename_data(file)

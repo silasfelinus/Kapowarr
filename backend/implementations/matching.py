@@ -311,7 +311,22 @@ def match_special_version(
         and reference_version in (
             SpecialVersion.HARD_COVER,
             SpecialVersion.ONE_SHOT,
-            SpecialVersion.OMNIBUS
+            SpecialVersion.OMNIBUS,
+            # TPB belongs here for the same reason the other three do, and
+            # its absence was the single largest source of files the
+            # library scan silently refused.
+            #
+            # `determine_special_version` calls any volume with exactly one
+            # issue released over a month ago a TPB -- explicitly a guess
+            # ("we'll assume it's a TPB"), and the one every one-shot,
+            # special and graphic novel in a library falls into. Such a
+            # volume's own file is ordinarily named `<Series> 01 (year)`,
+            # which parses as issue 1 with no special version. Every other
+            # single-issue classification accepted that file through this
+            # branch. TPB alone dropped it, so the volume was created,
+            # its file was refused, nothing entered `files`, and the
+            # folder stayed untracked and came back on every rescan.
+            SpecialVersion.TPB
         )
     ):
         return True

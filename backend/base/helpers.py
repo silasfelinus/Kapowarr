@@ -9,6 +9,7 @@ from __future__ import annotations
 from asyncio import sleep
 from base64 import urlsafe_b64encode
 from collections import deque
+from datetime import datetime
 from functools import lru_cache
 from hashlib import pbkdf2_hmac
 from multiprocessing.pool import Pool
@@ -724,6 +725,53 @@ def extract_year_from_date(
             return default
     else:
         return default
+
+
+
+# Longest first: `strptime` fills the components a shorter format omits
+# with January the 1st, so `'2015'` must not be allowed to match before
+# `'2015-05-14'` has been tried.
+_ISSUE_DATE_FORMATS = ('%Y-%m-%d', '%Y-%m', '%Y')
+
+
+def parse_issue_date(date: Union[str, None]) -> Union[datetime, None]:
+    """Parse an issue date that may carry less precision than a full one.
+
+    Not every provider knows a full date for every issue, and the ones
+    that do not say so rather than guess. GCD records unknown month and
+    day components as `00` -- `"1959-00-00"` is a real returned value --
+    and Kapowarr's GCD provider truncates those to whatever precision is
+    real (`"1959"`, `"1959-05"`) instead of discarding the whole date
+    over one unknown component.
+
+    `extract_year_from_date` has always tolerated that shape. The two
+    places that parse a date rather than a year did not, and assumed
+    `%Y-%m-%d`: `determine_special_version`, which every volume added
+    goes through, and `set_file_date`. Neither could be reached with a
+    partial date while ComicVine was effectively the only provider ever
+    consulted, so the first GCD volume to reach `Library.add` raised
+    `ValueError` out through `import_library` and killed the entire
+    Continuous Library Import task -- on the same folder, on every
+    retry, all day.
+
+    Missing components resolve to January the 1st, which is what both
+    callers want: the earliest the date could mean.
+
+    Returns:
+        Union[datetime, None]: The date, or `None` if it cannot be read
+            at all.
+    """
+    if not date:
+        return None
+
+    text = str(date).strip()
+    for date_format in _ISSUE_DATE_FORMATS:
+        try:
+            return datetime.strptime(text, date_format)
+        except ValueError:
+            continue
+
+    return None
 
 
 # region Numbers

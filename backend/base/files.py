@@ -18,8 +18,8 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 from backend.base.definitions import (CharConstants, Constants,
                                       FileConstants, OSType)
-from backend.base.helpers import (check_filter, force_prefix,
-                                  force_suffix, get_os_type, run_rar)
+from backend.base.helpers import (check_filter, force_prefix, force_suffix,
+                                  get_os_type, parse_issue_date, run_rar)
 from backend.base.logging import LOGGER
 
 filepath_cleaner = compile(
@@ -643,9 +643,23 @@ def set_file_date(filepath: str, file_date: str) -> None:
 
     Args:
         filepath (str): The path to the file to set the date for.
-        file_date (str): The date to set, in `YYYY-MM-DD` format.
+        file_date (str): The date to set. `YYYY-MM-DD`, or the `YYYY-MM`
+            / `YYYY` a provider gives when it does not know the whole
+            date.
     """
-    timestamp = datetime.strptime(file_date, "%Y-%m-%d").timestamp()
+    # A provider that only knows the year says so rather than guessing,
+    # and this used to raise `ValueError` on the way through. Skipping
+    # one file's timestamp is the right cost for an unreadable date; the
+    # mass-edit run it sits inside is not.
+    parsed_date = parse_issue_date(file_date)
+    if parsed_date is None:
+        LOGGER.debug(
+            'Not setting the date of %s: %r is not a date that can be read',
+            filepath, file_date
+        )
+        return
+
+    timestamp = parsed_date.timestamp()
 
     os_type = get_os_type()
     if os_type == OSType.LINUX:

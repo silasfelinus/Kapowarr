@@ -33,7 +33,8 @@ from backend.base.files import (change_basefolder, create_folder,
                                 delete_file_folder, folder_is_inside_folder,
                                 rename_file)
 from backend.base.helpers import (PortablePool, extract_year_from_date,
-                                  first_of_subarrays, to_number_cv_id)
+                                  first_of_subarrays, parse_issue_date,
+                                  to_number_cv_id)
 from backend.base.logging import LOGGER
 from backend.features.metadata import (MetadataIdentityStore,
                                        get_metadata_provider)
@@ -1392,11 +1393,9 @@ def determine_special_version(volume_id: int) -> SpecialVersion:
         if hc_regex.search(first_sentence):
             return SpecialVersion.HARD_COVER
 
-    if one_issue and issues[0].date:
-        thirty_plus_days_ago = (
-            datetime.now() - datetime.strptime(issues[0].date, "%Y-%m-%d")
-            > THIRTY_DAYS
-        )
+    issue_date = parse_issue_date(issues[0].date) if one_issue else None
+    if issue_date:
+        thirty_plus_days_ago = datetime.now() - issue_date > THIRTY_DAYS
 
         # The volume only has one issue. If the issue was released in the last
         # month, then we'll assume it's just a new volume that has only released

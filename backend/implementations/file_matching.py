@@ -167,6 +167,28 @@ def scan_files(
             volume_issues,
             number_to_year
         ):
+            # Silent until now, and the silence is the problem. `add_file`
+            # is never reached, so the file never enters `files` -- and
+            # `files` is the table library import reads to decide whether a
+            # folder still has anything untracked in it. A folder whose
+            # files all land here is reported as imported, keeps every one
+            # of its files unrecorded, and comes back in full on the next
+            # Rescan Untracked Library, forever, with nothing anywhere
+            # saying why.
+            #
+            # Not filed against the volume: unlike a file that names an
+            # issue the volume does not have, this one has not been
+            # established as belonging to the volume at all, and may well
+            # belong to a different one. Only said out loud.
+            LOGGER.info(
+                'Not importing %s into volume %d: it does not match the '
+                'volume (parsed series %r, volume number %s, year %s, '
+                'special version %s against volume %r, year %s)',
+                file, volume_id, file_data['series'],
+                file_data['volume_number'], file_data['year'],
+                file_data['special_version'], volume_data.title,
+                volume_data.year
+            )
             continue
 
         file_data = refine_special_version(volume_data, file_data)

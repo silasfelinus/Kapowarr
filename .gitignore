@@ -141,3 +141,4 @@ temp_downloads/*
 
 # Project management files
 release*.sh
+sweep_loose_images.csv

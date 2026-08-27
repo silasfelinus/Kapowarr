@@ -2,15 +2,12 @@
 """sweep_loose_images.py — remove redundant page images from a comic library.
 
 A library that stores comics as archives still accumulates loose page images:
-`Moon Knight 26 (2009).jpg` and `Moon Knight 26 (2009)_thumb.jpg` sitting
-beside the `.cbz` they came out of, left behind by extractors and readers.
-Kapowarr counts `.jpg` as content (`FileConstants.CONTENT_EXTENSIONS`), so
-those files are untracked content forever, and the folder holding them comes
-back on every Rescan Untracked Library no matter how many times it imports.
-In the 2026-08-27 log they were 697 of the 2927 files the scan declined.
-
-Nothing in Kapowarr produces or reads `_thumb` files -- the name appears
-nowhere in the codebase.
+`Moon Knight 26 (2009).jpg` sitting beside the `.cbz` it came out of, left
+behind by an extractor. Kapowarr counts `.jpg` as content
+(`FileConstants.CONTENT_EXTENSIONS`), so those files are untracked content
+forever, and the folder holding them comes back on every Rescan Untracked
+Library no matter how many times it imports. In the 2026-08-27 log they were
+697 of the 2927 files the scan declined.
 
 WHAT IT WILL NOT TOUCH
 ----------------------
@@ -22,6 +19,12 @@ WHAT IT WILL NOT TOUCH
 - Cover artwork. `cover.jpg`, `folder.jpg` and anything else Kapowarr reads
   as `SpecialVersion.COVER` is library decoration it already skips, not part
   of the problem this solves.
+- Another application's thumbnail cache. YACReader Server writes
+  `<comic>_thumb.jpg` beside the comic, and those are its files to manage,
+  not ours -- it will simply make them again. Kapowarr now recognises them
+  as cache (`is_reader_cache_file`) and stops counting them as content,
+  which is what kept their folders untracked; there is nothing left for a
+  sweep to do about them.
 - Anything under a dot-directory (`.yacreaderlibrary/` and friends).
 - Any file Kapowarr has a database row for. Deleting a tracked file breaks
   the volume that owns it, so `--db` is required before anything is removed;
@@ -70,7 +73,8 @@ sys.path.insert(
 # sweep and the scan disagree about the same file.
 from backend.base.definitions import (  # noqa: E402
     FileConstants, SpecialVersion)
-from backend.base.file_extraction import extract_filename_data  # noqa: E402
+from backend.base.file_extraction import (  # noqa: E402
+    extract_filename_data, is_reader_cache_file)
 
 
 IMAGE_EXTENSIONS = tuple(
@@ -109,6 +113,7 @@ def classify(root: str) -> Tuple[List[str], Dict[str, int]]:
     skipped: Dict[str, int] = {
         'folder has no archive (page-image comic)': 0,
         'cover art': 0,
+        "another reader's thumbnail cache": 0,
         'inside a dot-directory': 0,
     }
 
@@ -137,6 +142,9 @@ def classify(root: str) -> Tuple[List[str], Dict[str, int]]:
 
         for name in images:
             full = os.path.join(dirpath, name)
+            if is_reader_cache_file(full):
+                skipped["another reader's thumbnail cache"] += 1
+                continue
             if is_cover_art(full):
                 skipped['cover art'] += 1
                 continue
@@ -170,10 +178,6 @@ def main() -> int:
     parser.add_argument(
         '--no-db-check', action='store_true',
         help='Remove without checking the database first. Do not.'
-    )
-    parser.add_argument(
-        '--thumbs-only', action='store_true',
-        help='Consider only `*_thumb.*`, leaving other loose images alone.'
     )
     parser.add_argument(
         '--apply', action='store_true',
@@ -216,14 +220,6 @@ def main() -> int:
 
     candidates, skipped = classify(args.root)
 
-    if args.thumbs_only:
-        before = len(candidates)
-        candidates = [
-            c for c in candidates
-            if '_thumb' in os.path.basename(c).lower()
-        ]
-        skipped['not a _thumb file (--thumbs-only)'] = before - len(candidates)
-
     tracked: Set[str] = set()
     if args.db:
         tracked = tracked_filepaths(args.db)
@@ -231,9 +227,6 @@ def main() -> int:
         candidates = [c for c in candidates if c not in tracked]
         skipped['tracked by Kapowarr'] = before - len(candidates)
 
-    thumbs = sum(
-        1 for c in candidates if '_thumb' in os.path.basename(c).lower()
-    )
     total_bytes = 0
     for c in candidates:
         try:
@@ -244,8 +237,8 @@ def main() -> int:
     print(f'Library root : {args.root}')
     print(f'Database     : {args.db or "NOT CHECKED"}')
     print()
-    print(f'Removable    : {len(candidates)} files '
-          f'({thumbs} of them _thumb), {total_bytes / 1e6:.1f} MB')
+    print(f'Removable    : {len(candidates)} files, '
+          f'{total_bytes / 1e6:.1f} MB')
     print(f'Folders       : '
           f'{len({os.path.dirname(c) for c in candidates})}')
     print()
@@ -256,15 +249,13 @@ def main() -> int:
 
     with open(args.manifest, 'w', newline='', encoding='utf-8') as handle:
         writer = csv.writer(handle)
-        writer.writerow(['filepath', 'bytes', 'is_thumb'])
+        writer.writerow(['filepath', 'bytes'])
         for c in candidates:
             try:
                 size = os.path.getsize(c)
             except OSError:
                 size = -1
-            writer.writerow(
-                [c, size, '_thumb' in os.path.basename(c).lower()]
-            )
+            writer.writerow([c, size])
     print()
     print(f'Manifest written to {args.manifest}')
 

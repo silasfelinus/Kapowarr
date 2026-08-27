@@ -82,17 +82,18 @@ class what_the_sweep_leaves_alone(unittest.TestCase):
                 ('.cbz', '.cbr', '.cb7', '.cbt', '.zip', '.rar')
             ))
 
+    def test_another_readers_thumbnail_is_never_a_candidate(self):
+        # YACReader Server's, and it will simply make them again.
+        candidates, _ = classify(self.root)
+        self.assertNotIn(self.redundant_thumb, candidates)
+
     def test_pages_beside_an_archive_are(self):
         candidates, _ = classify(self.root)
         self.assertIn(self.redundant, candidates)
-        self.assertIn(self.redundant_thumb, candidates)
 
-    def test_nothing_outside_those_two_is_picked_up(self):
+    def test_nothing_outside_that_one_is_picked_up(self):
         candidates, _ = classify(self.root)
-        self.assertEqual(
-            sorted(candidates),
-            sorted([self.redundant, self.redundant_thumb])
-        )
+        self.assertEqual(candidates, [self.redundant])
 
     def test_an_image_only_folder_stays_whole_even_beneath_one_with_an_archive(
         self

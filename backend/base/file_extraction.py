@@ -60,6 +60,38 @@ revision_regex = compile(r'[1-3]\.\d')
 # autopep8: on
 
 
+# Readers and servers that sit on the same library write their caches into
+# it. YACReader Server names its thumbnails `<comic>_thumb.<ext>` beside
+# the comic itself, rather than inside the `.yacreaderlibrary/` directory
+# that the dot-prefix rule already covers.
+#
+# They are image files, so Kapowarr counted them as content, which meant
+# their folder held something untracked no matter how many times it was
+# imported and came back on every Rescan Untracked Library. 164 of them
+# turned up in one day's scan log.
+#
+# Recognising them is the whole fix. They belong to another application
+# that will happily regenerate them; deleting them is not Kapowarr's
+# business, and neither is importing them.
+READER_CACHE_STEM_SUFFIXES = ('_thumb',)
+
+
+def is_reader_cache_file(filepath: str) -> bool:
+    """Whether a file is another application's thumbnail cache.
+
+    Deliberately narrow -- a suffix on the stem of an image file, from a
+    known list. A broader rule ("contains thumb") would take
+    `The Thumbscrew 01.cbz`, and a comic is not worth losing to tidiness.
+    """
+    stem, extension = splitext(basename(filepath))
+    if extension.lower() not in {
+        e.lower() for e in FileConstants.IMAGE_EXTENSIONS
+    }:
+        return False
+
+    return stem.lower().endswith(READER_CACHE_STEM_SUFFIXES)
+
+
 def _get_calculated_issue_number(issue_number: str) -> Union[float, None]:
     """Convert an issue number from string to a representive float.
     This "calculated issue number" can be used for sorting and comparisons.

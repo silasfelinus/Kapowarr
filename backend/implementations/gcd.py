@@ -44,6 +44,7 @@ Two more differences from Metron worth knowing before touching this file:
   documents for skipping a per-issue detail request.
 """
 
+from re import compile
 from typing import Any, Dict, List, Sequence, Union
 from urllib.parse import quote
 
@@ -62,6 +63,29 @@ from backend.internals.settings import Settings
 
 class GcdError(RuntimeError):
     """GCD was unavailable or rejected the request."""
+
+
+# GCD returns no `id` field on a series -- not on a search row and not on
+# the detail record either. The only place a series' identity appears is
+# inside its own `api_url`.
+_series_id_regex = compile(r'/series/(\d+)/?')
+_publisher_id_regex = compile(r'/publisher/(\d+)/?')
+
+
+def _series_id(data: Dict[str, Any]) -> Union[str, None]:
+    """The GCD id of a series row, however GCD chose to express it.
+
+    `id` first, so that a future GCD that starts returning one is believed
+    over a URL parse. Today it never does: `sorted(row)` on both
+    `/series/name/{q}/` and `/series/{id}/` is the same fifteen keys and
+    `id` is not among them.
+    """
+    identifier = data.get('id')
+    if identifier is not None:
+        return str(identifier)
+
+    match = _series_id_regex.search(str(data.get('api_url') or ''))
+    return match.group(1) if match else None
 
 
 @MetadataProviderRegistry.register
@@ -131,7 +155,7 @@ class Gcd(MetadataProvider):
             raise GcdError('Unable to read GCD metadata') from exc
 
     def _volume(self, data: Dict[str, Any]) -> VolumeMetadata:
-        gcd_id = str(data['id'])
+        gcd_id = _series_id(data) or ''
         issue_ids = data.get('active_issues') or []
         result: VolumeMetadata = {
             'provider_id': self.provider_id,
@@ -261,9 +285,15 @@ class Gcd(MetadataProvider):
         """
         if not publisher_url:
             return None
-        publisher_id = publisher_url.rstrip('/').rsplit('/', 1)[-1]
-        if not publisher_id.isdigit():
+        # By pattern, not by trailing path segment: GCD's URLs carry
+        # `?format=json`, so the last `/`-separated piece of
+        # `.../publisher/512/?format=json` is `?format=json`, which is not
+        # a number -- and every GCD volume has therefore reported no
+        # publisher at all.
+        match = _publisher_id_regex.search(publisher_url)
+        if not match:
             return None
+        publisher_id = match.group(1)
         if publisher_id in self._publisher_cache:
             return self._publisher_cache[publisher_id]
         try:
@@ -298,15 +328,28 @@ class Gcd(MetadataProvider):
         # twenty series returned nothing at all and looked like a total
         # failure. An entry with no id could not be added anyway: there is
         # nothing to link it to.
+        rows = page.get('results') or []
         results = []
-        for item in page.get('results') or []:
-            if not isinstance(item, dict) or item.get('id') is None:
+        for item in rows:
+            if not isinstance(item, dict) or _series_id(item) is None:
                 LOGGER.debug(
                     'Skipping unidentifiable GCD series in results for %r',
                     sanitised
                 )
                 continue
             results.append(self._volume(item))
+
+        if rows and not results:
+            # Every row of a non-empty page was unusable. One bad row is
+            # ordinary and belongs at DEBUG; a whole page of them is a
+            # change in the API's shape, and reporting it the same quiet
+            # way is how this provider spent its entire existence
+            # returning nothing to every caller without once saying so.
+            LOGGER.warning(
+                'GCD returned %d series for %r and none carried an '
+                'identity; the search response shape may have changed',
+                len(rows), sanitised
+            )
         for item in results:
             item['already_added'] = MetadataIdentityStore.resolve(
                 'volume', self.provider_id, item['external_id']

@@ -23,8 +23,10 @@ from backend.features.library_import import (
     ContinuousLibraryImport,
     _collect_unimported_files,
     _match_file_groups,
+    collect_content_less_folders,
     create_groups,
     import_library,
+    is_content_less_series_folder,
     match_identifies_a_volume,
 )
 from backend.features.library_import_context import apply_series_run_context
@@ -43,6 +45,7 @@ from backend.features.library_import_normalization import (
     normalize_import_filename_data,
 )
 from backend.features.library_import_policy import (
+    REVIEW_REASON_EMPTY_FOLDER,
     REVIEW_REASON_NO_CANDIDATE,
     REVIEW_REASON_TIE,
     REVIEW_REASON_WEAK_SCORE,
@@ -61,7 +64,10 @@ from backend.features.library_import_state import (
     mark_job_paused,
     mark_job_running,
 )
+from backend.base.file_extraction import extract_filename_data
 from backend.features.metadata import search_volumes_everywhere
+from backend.implementations.matching import (
+    select_best_volume_result_for_file)
 from backend.features.tasks import Task, task_library
 from backend.internals.server import TaskStatusEvent, WebSocket
 
@@ -296,7 +302,8 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
         review_labels = (
             (REVIEW_REASON_TIE, 'tied'),
             (REVIEW_REASON_WEAK_SCORE, 'weak'),
-            (REVIEW_REASON_NO_CANDIDATE, 'no candidate')
+            (REVIEW_REASON_NO_CANDIDATE, 'no candidate'),
+            (REVIEW_REASON_EMPTY_FOLDER, 'empty folder')
         )
         review_breakdown = ' · '.join(
             f"{summary['review_reasons'][reason]} {label}"
@@ -310,6 +317,68 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
             self.message += f' · {detail}'
         WebSocket().emit(TaskStatusEvent(self.message))
         return
+
+    def _review_content_less_folder(
+        self,
+        folder: str,
+        folder_position: int
+    ) -> List[Dict[str, Any]]:
+        """Search an empty series folder by name and hold the result.
+
+        Returns no rows for a folder that is merely empty -- a stale
+        directory, one whose comics were just imported, one holding only
+        artwork. Only a leaf whose name still reads as a series is worth
+        a search, and the answer is only ever a suggestion: an empty
+        folder never auto-imports, because the confidence policy weighs
+        file evidence and there are no files.
+        """
+        if not is_content_less_series_folder(folder):
+            return []
+
+        query = folder_search_query(folder)
+        if not query:
+            return []
+
+        if query in self.search_cache:
+            results = self.search_cache[query]
+        else:
+            if not self._wait_for_resource_slot('last_started'):
+                return []
+            self._emit_persistent_status(
+                f'{basename(folder)}: empty folder, searching its name'
+            )
+            results = asyncio_run(search_volumes_everywhere(query))
+            self.search_cache[query] = results
+
+        # The folder name is the only evidence there is, so it is what
+        # gets parsed: the same series/year the importer would have taken
+        # from a file, minus everything a file would have added.
+        folder_data = extract_filename_data(folder, prefer_folder_year=True)
+        best = select_best_volume_result_for_file(
+            {folder: folder_data}, results, only_english=True
+        )
+
+        review_candidate = {
+            'id': None, 'title': None, 'issue_count': None, 'link': None
+        }
+        if best is not None:
+            review_candidate = {
+                'id': best['comicvine_id'],
+                'title': f"{best['title']} ({best['year']})",
+                'issue_count': best['issue_count'],
+                'link': best['site_url']
+            }
+
+        return [{
+            'filepath': folder,
+            'file_title': basename(folder),
+            'cv': review_candidate,
+            'group_number': (
+                f'continuous-review-{self.job_id}-{folder_position}-empty'
+            ),
+            'folder': folder,
+            'review_reason': REVIEW_REASON_EMPTY_FOLDER
+        }]
 
     def _build_review_group(
         self,
@@ -401,7 +470,19 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
                 file_to_folder[filepath], {}
             )[filepath] = file_data
 
-        self.job_id = create_job(folder_to_files.keys())
+        # A folder with nothing in it produced no file and so was never in
+        # a pass at all. Its name is still a request for a series, so it
+        # joins the pass with no files; `run` recognises it when it gets
+        # there and searches the name.
+        folders = list(folder_to_files.keys())
+        seen = set(folders)
+        folders.extend(
+            folder
+            for folder in collect_content_less_folders(excluded_folders=seen)
+            if folder not in seen
+        )
+
+        self.job_id = create_job(folders)
         return folder_to_files, False
 
     @staticmethod
@@ -468,12 +549,18 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
                 # out to contain only artwork/cache files while a job is paused.
                 # Those are completed checkpoints, not errors or review holds.
                 if not folder_files:
+                    review_items = self._review_content_less_folder(
+                        folder, folder_position
+                    )
                     mark_folder_result(
                         self.job_id,
                         folder,
                         imported_volumes=0,
-                        review_reason=None,
-                        review_items=[]
+                        review_reason=(
+                            REVIEW_REASON_EMPTY_FOLDER if review_items
+                            else None
+                        ),
+                        review_items=review_items
                     )
                     self._emit_persistent_status()
                     current_folder = None

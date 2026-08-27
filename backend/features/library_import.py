@@ -3,7 +3,9 @@
 from asyncio import run, sleep as async_sleep
 from glob import glob
 from itertools import chain
-from os.path import abspath, basename, dirname, exists, isfile, join, splitext
+from os import listdir, walk
+from os.path import (abspath, basename, dirname, exists, isdir, isfile,
+                     join, splitext)
 from threading import Lock
 from time import monotonic, sleep
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
@@ -21,6 +23,10 @@ from backend.base.files import (change_basefolder, common_folder,
                                 list_files, rename_file)
 from backend.base.helpers import force_suffix
 from backend.base.logging import LOGGER
+from backend.features.library_import_metadata import (
+    is_library_import_artifact)
+from backend.features.library_import_normalization import (
+    folder_search_query)
 from backend.features.library_import_policy import (
     REVIEW_REASON_NO_CANDIDATE, REVIEW_REASON_TIE, REVIEW_REASON_WEAK_SCORE,
     select_auto_import_volume_result)
@@ -398,6 +404,101 @@ def match_identifies_a_volume(cv_match: Dict[str, Any]) -> bool:
         cv_match.get('id') is not None
         or cv_match.get('external_id') is not None
     )
+
+
+def collect_content_less_folders(
+    excluded_folders: Optional[Set[str]] = None
+) -> List[str]:
+    """Find series folders that hold no comics at all.
+
+    Library import has only ever seen a folder as the parent of a file it
+    found: `_collect_unimported_files` lists content files, and every
+    folder in a pass is `file_to_folder[filepath]` for one of them. A
+    folder with nothing in it therefore produces no entry, is never
+    grouped, never searched, and never becomes a volume -- even when its
+    name says plainly which series it is meant to hold.
+
+    That makes an empty `Blood Train (2025)` invisible rather than a
+    request. Treating it as a request is the point: add the volume and
+    let the normal monitoring and acquisition machinery fetch the issues.
+
+    Deliberately narrow, because a stale directory looks exactly like an
+    intentional one:
+
+    - Leaf directories only. A folder with subdirectories is an organizer
+      -- `/content/Batman` above `/content/Batman/Batman (2011)` -- and
+      the child is the thing that names a series.
+    - Nothing importable inside. Cover art and sidecar metadata do not
+      count as content, so a folder holding only `cover.jpg` still
+      qualifies; one holding a single `.cbz` does not, because the
+      ordinary path already has it.
+    - A name that survives `folder_search_query` and contains a letter.
+      `/content/2020/` is a shelf, not a series.
+
+    Nothing here decides a match. The caller searches the name and holds
+    the result for review; an empty folder never auto-imports, because
+    with no files there is no file evidence and the confidence policy has
+    nothing to weigh but the title.
+    """
+    root_folders = {abspath(r) for r in RootFolders().get_folder_list()}
+    excluded = excluded_folders or set()
+
+    candidates: List[str] = []
+    for root in sorted(root_folders):
+        for dirpath, dirnames, filenames in walk(root):
+            dirnames[:] = [d for d in dirnames if not d.startswith('.')]
+            if dirnames:
+                # An organizer, not a series folder.
+                continue
+
+            folder = abspath(dirpath)
+            if folder in excluded:
+                continue
+
+            if is_content_less_series_folder(folder, root_folders, filenames):
+                candidates.append(folder)
+
+    return sorted(candidates)
+
+
+def is_content_less_series_folder(
+    folder: str,
+    root_folders: Optional[Set[str]] = None,
+    filenames: Optional[List[str]] = None
+) -> bool:
+    """Whether one folder is an empty series folder worth searching for.
+
+    Split out of the walk so the importer can ask the same question again
+    when it reaches the folder. A paused pass resumes without the seeding
+    scan's state, and re-deciding from the folder itself is both cheaper
+    and harder to get out of step than carrying a set across a restart.
+    """
+    folder = abspath(folder)
+    if root_folders is None:
+        root_folders = {abspath(r) for r in RootFolders().get_folder_list()}
+    if folder in root_folders:
+        return False
+
+    if basename(folder).startswith('.'):
+        return False
+
+    if filenames is None:
+        if not isdir(folder):
+            return False
+        entries = listdir(folder)
+        if any(isdir(join(folder, e)) for e in entries):
+            return False
+        filenames = [e for e in entries if isfile(join(folder, e))]
+
+    if any(
+        f.endswith(FileConstants.CONTENT_EXTENSIONS)
+        and not is_library_import_artifact(join(folder, f))
+        for f in filenames
+    ):
+        return False
+
+    query = folder_search_query(folder)
+    return bool(query) and any(c.isalpha() for c in query)
 
 
 def count_library_import_folders(

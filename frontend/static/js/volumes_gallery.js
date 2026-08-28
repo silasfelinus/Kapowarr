@@ -1,11 +1,9 @@
 // Poster-gallery renderer for large libraries.
 //
-// The normal volumes.js renderer deliberately keeps only a bounded DOM runway;
-// that prevents a multi-thousand-volume library from freezing the main thread,
-// but it also means fast scrolling reaches the end of the currently materialized
-// cards and waits for another batch. Poster galleries have a nicer split:
-// establish cheap geometry/text for the whole result set, then hydrate expensive
-// images only around the viewport.
+// Both views now build their complete skeleton up front; what is different
+// here is that a poster card carries a cover and a table row does not. So
+// this establishes cheap geometry and text for the whole result set, then
+// hydrates the expensive part -- the images -- only around the viewport.
 window.installVolumesGalleryRenderer(() => {
 	const original_build_library_view = buildLibraryView;
 	const original_clear_library_view = clearLibraryView;
@@ -18,13 +16,25 @@ window.installVolumesGalleryRenderer(() => {
 		};
 	};
 
-	function loadCover(img) {
+	// `rect` comes from the IntersectionObserver entry, never from
+	// `getBoundingClientRect`. This used to measure each image itself,
+	// which forces a synchronous style and layout flush -- against a
+	// document holding a poster card for every volume in the library, all
+	// of them materialized up front by design. One observer callback
+	// carries every image that entered the 1800px overscan band during a
+	// fling, so a single scroll gesture could stall the main thread on
+	// dozens of full-document layouts in a row: the scroll visibly waited
+	// on the covers.
+	//
+	// The observer has already measured all of it. `entry.boundingClientRect`
+	// is that measurement, computed off the critical path, and it is the
+	// same rectangle this asked the DOM for.
+	function loadCover(img, rect, viewport_height) {
 		if (!img.dataset.src)
 			return;
 
-		const rect = img.getBoundingClientRect();
-		if ('fetchPriority' in img) {
-			img.fetchPriority = rect.bottom >= 0 && rect.top <= window.innerHeight
+		if (rect !== null && 'fetchPriority' in img) {
+			img.fetchPriority = rect.bottom >= 0 && rect.top <= viewport_height
 				? 'high'
 				: 'low';
 		};
@@ -37,17 +47,28 @@ window.installVolumesGalleryRenderer(() => {
 
 		if (typeof window.IntersectionObserver !== 'function') {
 			// Native loading=lazy is still a useful fallback on older WebViews.
-			images.forEach(loadCover);
+			// Everything is requested at once here, so a priority hint would
+			// have nothing to order.
+			images.forEach(img => loadCover(img, null, 0));
 			return;
 		};
 
 		cover_observer = new IntersectionObserver(
-			entries => entries.forEach(entry => {
-				if (!entry.isIntersecting)
-					return;
-				loadCover(entry.target);
-				cover_observer.unobserve(entry.target);
-			}),
+			entries => {
+				// Read once for the whole batch rather than once per image.
+				const viewport_height = window.innerHeight
+					|| document.documentElement.clientHeight;
+				entries.forEach(entry => {
+					if (!entry.isIntersecting)
+						return;
+					loadCover(
+						entry.target,
+						entry.boundingClientRect,
+						viewport_height
+					);
+					cover_observer.unobserve(entry.target);
+				});
+			},
 			{
 				// Several screens of overscan means a normal fling should encounter
 				// already-requested covers without downloading all 3,000 at once.
@@ -113,7 +134,6 @@ window.installVolumesGalleryRenderer(() => {
 				fragment,
 				library_els.views.list.querySelector('.space-taker')
 			);
-			library_render_offsets.list = library_volumes.length;
 			library_render_pending.list = false;
 			library_els.mass_edit.button.disabled = false;
 

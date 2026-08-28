@@ -32,10 +32,17 @@ VERDICTS
                     is the interesting one, and it splits in two:
                       * WRONG-VOLUME  the file names a different series
                         than the volume, so refusing it is correct and
-                        the folder is misfiled.
-                      * SAME-SERIES   the file names the volume's own
-                        series and was still refused. That is a matching
-                        bug, and this is how you find them.
+                        the folder is misfiled. Judged with the near-title
+                        rule, so a parsed series carrying a leftover issue
+                        number is not mistaken for a different comic.
+                      * SAME-SERIES   the file carries the volume's own
+                        series name and was still refused. Read the years
+                        on the line before calling it a bug: a title is
+                        not a volume, and a 1955 issue in the folder of a
+                        2018 relaunch is the same series, the wrong
+                        volume, and correctly refused. It is a matching
+                        bug when the years agree, or when the gate that
+                        said no was not the year.
 
 Usage:
   python scripts/diagnose_untracked.py --db /path/to/db.db
@@ -70,7 +77,7 @@ from backend.base.file_extraction import (  # noqa: E402
 from backend.base.helpers import extract_year_from_date  # noqa: E402
 from backend.implementations.matching import (  # noqa: E402
     file_importing_filter, match_special_version, match_title,
-    match_volume_number, match_year)
+    match_title_nearly, match_volume_number, match_year)
 
 
 IMAGES = tuple(e.lower() for e in FileConstants.IMAGE_EXTENSIONS)
@@ -104,7 +111,8 @@ def read_library(db_path: str) -> Tuple[set, List[Dict[str, Any]], List[str]]:
             ))
         volumes = []
         for row in connection.execute(
-            'SELECT id, title, year, volume_number, folder, special_version '
+            'SELECT id, title, year, volume_number, folder, '
+            'special_version, special_version_locked '
             'FROM volumes WHERE folder IS NOT NULL AND folder != "";'
         ):
             volumes.append({
@@ -115,6 +123,14 @@ def read_library(db_path: str) -> Tuple[set, List[Dict[str, Any]], List[str]]:
                     year=row['year'],
                     volume_number=row['volume_number'],
                     special_version=SpecialVersion(row['special_version']),
+                    # Read, not assumed: an inferred single-issue
+                    # classification no longer refuses its own series'
+                    # files while a locked one still does, so guessing
+                    # this would make the verdicts disagree with the
+                    # importer on exactly the volumes in question.
+                    special_version_locked=bool(
+                        row['special_version_locked']
+                    ),
                     folder=row['folder']
                 ),
                 'issues': sorted(
@@ -151,8 +167,15 @@ def why_refused(
         for i in issues
     }
 
-    same_series = match_title(
-        str(file_data['series'] or ''), volume_data.title
+    # The near rule as well as the strict one. A parser that leaves the
+    # issue number in the series -- "Hell Her Way 001", "Flesh Eating
+    # Cheerleaders Spring Break 001" -- makes strict equality call a file
+    # a different series from the volume it plainly belongs to, and this
+    # verdict exists precisely to tell those two apart.
+    series = str(file_data['series'] or '')
+    same_series = (
+        match_title(series, volume_data.title)
+        or match_title_nearly(series, volume_data.title)
     )
 
     issue_number = file_data['issue_number']
@@ -176,7 +199,20 @@ def why_refused(
         gates.append('year')
 
     kind = 'SAME-SERIES' if same_series else 'WRONG-VOLUME'
-    return kind, '+'.join(gates) or 'unknown'
+    detail = '+'.join(gates) or 'unknown'
+
+    # Carry the years when the year gate is what said no. A shared title
+    # is not a shared volume: seventy years of MAD Magazine in the folder
+    # of the 2018 relaunch is the same series and still the wrong volume,
+    # and refusing those files is correct. Without the two years on the
+    # line, that reads identically to a volume refusing a file that
+    # really is its own -- which is the case actually worth fixing.
+    if 'year' in gates:
+        detail += (
+            f" [file {file_data['year']} vs volume {volume_data.year}]"
+        )
+
+    return kind, detail
 
 
 def diagnose(root: str, tracked: set, volumes: List[Dict[str, Any]]):
@@ -207,7 +243,18 @@ def diagnose(root: str, tracked: set, volumes: List[Dict[str, Any]]):
         for name in untracked:
             full = os.path.join(dirpath, name)
             extension = os.path.splitext(name)[1].lower()
-            file_data = extract_filename_data(full, prefer_folder_year=True)
+            # Exactly as `scan_files` parses it, which means without
+            # `prefer_folder_year`. Library import uses that option and
+            # this tool copied it, but the question here is why a file
+            # has no row in `files`, and `scan_files` is what decides
+            # that. The two parses disagree wherever a folder's year is
+            # not the file's: `MAD Magazine 024 (1955).cbr` in
+            # `/content/MAD Magazine (2018)` reads as 1955 to the
+            # scanner and 2018 to library import, and only one of those
+            # matches the volume the folder belongs to. Parsing the
+            # other way made this report 540 files as accepted that the
+            # scanner had in fact refused.
+            file_data = extract_filename_data(full)
 
             if is_reader_cache_file(full):
                 verdict, detail = 'reader-cache', ''

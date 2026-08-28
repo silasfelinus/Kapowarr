@@ -9,28 +9,53 @@ const volumes = fs.readFileSync(
 	'utf8'
 );
 
-test('large libraries render a bounded runway instead of draining every volume', () => {
-	assert.match(volumes, /const LIBRARY_RENDER_BATCH_SIZE = 16;/);
-	assert.match(volumes, /const LIBRARY_RENDER_AHEAD_PX = 1200;/);
-	assert.match(volumes, /function maybeRenderLibraryMore\(api_key\)/);
-	assert.match(
-		volumes,
-		/library_els\.stats\.footer\.getBoundingClientRect\(\)\.top[\s\S]*LIBRARY_RENDER_AHEAD_PX/
+// Both views build their complete skeleton in one pass. The library used
+// to render 16 entries and wait for a scroll event before asking for 16
+// more, which bought nothing -- a table row is text -- and made the view
+// reachable only as far as a scroll listener happened to fire. When that
+// listener was attached to an element that never scrolls, a
+// 5480-volume library stopped in the A's.
+//
+// What is still deferred is the genuinely expensive part, and only the
+// poster view has any: covers, hydrated around the viewport by
+// volumes_gallery.js.
+test('the library builds its whole skeleton rather than gating on scroll', () => {
+	for (const gone of [
+		'LIBRARY_RENDER_BATCH_SIZE',
+		'LIBRARY_RENDER_AHEAD_PX',
+		'maybeRenderLibraryMore',
+		'scheduleLibraryRenderCheck',
+		'scheduleNextLibraryBatch',
+		'viewHasMoreToRender',
+		'library_render_offsets'
+	]) {
+		assert.ok(
+			!volumes.includes(gone),
+			`${gone} gates the view on a scroll event; the skeleton is the whole set`
+		);
+	};
+
+	// Nothing may re-introduce a partial view by listening for scrolls.
+	assert.ok(
+		!volumes.includes("'scroll'"),
+		'a complete skeleton has nothing to top up on scroll'
 	);
-	assert.match(volumes, /window\.addEventListener\(\s*'scroll'/);
-	assert.match(volumes, /window\.addEventListener\(\s*'resize'/);
 
 	const build = volumes
 		.split('function buildLibraryView')[1]
 		.split('function ensureLibraryViewBuilt')[0];
-	assert.ok(
-		!build.includes('offset < volumes.length'),
-		'building a view must not recursively queue batches until the whole library exists in the DOM'
+	assert.match(
+		build,
+		/renderLibraryEntries\(view, library_volumes, api_key\)/,
+		'the build must lay down every volume, not a slice of them'
 	);
 	assert.ok(
 		!build.includes('scheduleLibraryRender(renderBatch)'),
 		'the old eager background-drain loop would keep mobile browsers busy after first paint'
 	);
+
+	// Still yielded once, so the loading state paints before the DOM work.
+	assert.match(build, /scheduleLibraryPaint/);
 });
 
 test('filtering or sorting bulk-clears the old gallery DOM', () => {

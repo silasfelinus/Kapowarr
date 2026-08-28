@@ -34,6 +34,10 @@ AUTO_IMPORT_ISSUE_CAPACITY_PENALTY = 2
 REVIEW_REASON_NO_CANDIDATE = 'no-candidate'
 REVIEW_REASON_WEAK_SCORE = 'weak-score'
 REVIEW_REASON_TIE = 'tie'
+# A folder that names a series and holds no comics. Never auto-imported:
+# with no files there is no file evidence, and the score/margin rules have
+# nothing to weigh but the title.
+REVIEW_REASON_EMPTY_FOLDER = 'empty-folder'
 
 
 def _highest_issue_number(group: Dict[str, FilenameData]) -> Optional[float]:

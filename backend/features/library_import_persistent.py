@@ -23,6 +23,7 @@ from backend.features.library_import import (
     ContinuousLibraryImport,
     _collect_unimported_files,
     _match_file_groups,
+    _volume_owned_folders,
     collect_content_less_folders,
     create_groups,
     import_library,
@@ -333,6 +334,16 @@ class PersistentContinuousLibraryImport(ContinuousLibraryImport):
         file evidence and there are no files.
         """
         if not is_content_less_series_folder(folder):
+            return []
+
+        # Re-asked here as well as at seeding: a volume can be added for
+        # this folder while the pass is paused, and an empty folder the
+        # library already owns is that series waiting for its issues, not
+        # a question about which series it is.
+        if any(
+            folder == owned or folder_is_inside_folder(owned, folder)
+            for owned in _volume_owned_folders()
+        ):
             return []
 
         query = folder_search_query(folder)

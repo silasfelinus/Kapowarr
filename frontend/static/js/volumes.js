@@ -147,10 +147,24 @@ class LibraryEntry {
 			const monitored_button =
 				this.table_entry.querySelector('.table-monitored');
 			monitored_button.onclick = e => this.setMonitored(!this.monitored);
-			if (this.monitored)
-				setIcon(monitored_button, icons.monitored, 'Monitored');
-			else
-				setIcon(monitored_button, icons.unmonitored, 'Unmonitored');
+
+			// An attribute, not `setIcon`. `setIcon` assigns `innerHTML`, so
+			// every row parsed its own copy of a bookmark SVG and kept the
+			// resulting element tree: on a 5,000-volume library that is 5,000
+			// HTML-fragment parses during the build and ~20,000 live SVG nodes
+			// afterwards, each with its own layout and paint objects. It is by
+			// far the most expensive thing in a row that is otherwise text,
+			// and it is what put mobile Chrome over the edge -- the table
+			// scrolled a little way and then died.
+			//
+			// `.table-monitored` in volumes.css draws the same two shapes as a
+			// CSS mask keyed off this attribute. No SVG nodes, no per-row
+			// parse, and the toggle is one attribute write.
+			const label = this.monitored ? 'Monitored' : 'Unmonitored';
+			monitored_button.dataset.monitored =
+				this.monitored ? 'true' : 'false';
+			monitored_button.title = label;
+			monitored_button.ariaLabel = label;
 		};
 	};
 
@@ -234,7 +248,6 @@ function buildListEntry(entry, volume, api_key, fragment) {
 
 	list_entry.ariaLabel =
 		`View the volume ${volume.title} (${volume.year}) Volume ${volume.volume_number}`;
-	list_entry.classList.add(`vol-${volume.id}`);
 	list_entry.href = `${url_base}/volumes/${volume.id}`;
 	list_entry.querySelector('.list-img').src =
 		`${url_base}/api/volumes/${volume.id}/cover?api_key=${api_key}`;
@@ -255,7 +268,6 @@ function buildTableEntry(entry, volume, api_key, fragment) {
 
 	table_entry.ariaLabel =
 		`View the volume ${volume.title} (${volume.year}) Volume ${volume.volume_number}`;
-	table_entry.classList.add(`vol-${volume.id}`);
 	table_entry.dataset.id = volume.id;
 	// Selection lives in data, not in the presence of a DOM row. A lazy row
 	// therefore appears with the same state it would have had if every table row

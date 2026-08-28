@@ -34,7 +34,7 @@ test('poster shells reserve image geometry without requesting every cover', () =
 	assert.match(gallery, /img\.removeAttribute\('src'\)/);
 	assert.match(gallery, /img\.dataset\.src =/);
 	assert.match(gallery, /new IntersectionObserver/);
-	assert.match(gallery, /rootMargin: '1800px 0px 1800px 0px'/);
+	assert.match(gallery, /rootMargin: `\$\{COVER_OVERSCAN_PX\}px 0px \$\{COVER_OVERSCAN_PX\}px 0px`/);
 	assert.match(gallery, /img\.src = img\.dataset\.src/);
 	assert.match(css, /\.list-img:not\(\[src\]\)/);
 	assert.match(css, /aspect-ratio: 2\/3/);

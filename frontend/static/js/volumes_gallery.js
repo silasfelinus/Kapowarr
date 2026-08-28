@@ -1,11 +1,9 @@
 // Poster-gallery renderer for large libraries.
 //
-// The normal volumes.js renderer deliberately keeps only a bounded DOM runway;
-// that prevents a multi-thousand-volume library from freezing the main thread,
-// but it also means fast scrolling reaches the end of the currently materialized
-// cards and waits for another batch. Poster galleries have a nicer split:
-// establish cheap geometry/text for the whole result set, then hydrate expensive
-// images only around the viewport.
+// Both views now build their complete skeleton up front; what is different
+// here is that a poster card carries a cover and a table row does not. So
+// this establishes cheap geometry and text for the whole result set, then
+// hydrates the expensive part -- the images -- only around the viewport.
 window.installVolumesGalleryRenderer(() => {
 	const original_build_library_view = buildLibraryView;
 	const original_clear_library_view = clearLibraryView;
@@ -136,7 +134,6 @@ window.installVolumesGalleryRenderer(() => {
 				fragment,
 				library_els.views.list.querySelector('.space-taker')
 			);
-			library_render_offsets.list = library_volumes.length;
 			library_render_pending.list = false;
 			library_els.mass_edit.button.disabled = false;
 

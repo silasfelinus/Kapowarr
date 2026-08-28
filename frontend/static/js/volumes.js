@@ -52,10 +52,7 @@ const pre_build_els = {
 // render only a viewport-sized runway and extend it as the user approaches the
 // footer. A 2,000-volume library should not become a 2,000-card DOM just because
 // the page was opened.
-const LIBRARY_RENDER_BATCH_SIZE = 16;
-const LIBRARY_RENDER_AHEAD_PX = 1200;
 let library_render_generation = 0;
-let library_render_check_scheduled = false;
 let library_fetching = false;
 
 // Volume ID -> LibraryEntry, covering every volume in the current listing.
@@ -67,11 +64,10 @@ const library_entries = new Map();
 // other view without going back to the server.
 let library_volumes = [];
 
-// Only the visible view is built. `library_render_offsets` is how much of each
+// Only the visible view is built.
 // view currently exists in the DOM; it advances only while the footer is near the
 // viewport rather than racing to library_volumes.length in the background.
 const library_built_views = {list: false, table: false};
-const library_render_offsets = {list: 0, table: 0};
 const library_render_pending = {list: false, table: false};
 const selected_volume_ids = new Set();
 
@@ -307,18 +303,18 @@ function createLibraryEntry(volume, api_key) {
 };
 
 // Build `view` for `volumes[offset:end]` and paint the results in one insert.
-function renderLibraryBatch(view, volumes, api_key, offset, end) {
+// Every volume in one pass. A table row is a link, a year, a volume
+// number and a checkbox -- text -- so there is nothing in it worth
+// deferring, and building the complete set means the view is never
+// waiting on an event to become whole.
+function renderLibraryEntries(view, volumes, api_key) {
 	const fragment = document.createDocumentFragment();
 
-	for (let i = offset; i < end; i++) {
-		const volume = volumes[i];
+	for (const volume of volumes) {
 		let entry = library_entries.get(volume.id);
 		if (entry === undefined)
 			entry = createLibraryEntry(volume, api_key);
 
-		// Queue state may have changed while this volume was still off-screen.
-		// Recompute only when a card/row actually materialises, rather than doing
-		// an O(library * queue) sweep up front.
 		entry.download_status = getVolumeDownloadStatus(volume.id);
 		view_builders[view](entry, volume, api_key, fragment);
 
@@ -347,7 +343,6 @@ function clearLibraryView(view) {
 	};
 
 	library_built_views[view] = false;
-	library_render_offsets[view] = 0;
 	library_render_pending[view] = false;
 	library_entries.forEach(entry => {
 		if (view === 'list')
@@ -357,100 +352,37 @@ function clearLibraryView(view) {
 	});
 };
 
-function viewHasMoreToRender(view) {
-	return library_built_views[view]
-		&& library_render_offsets[view] < library_volumes.length;
-};
-
-function renderNextLibraryBatch(view, api_key, generation, on_first_batch=null) {
-	if (
-		generation !== library_render_generation
-		|| !library_built_views[view]
-	)
-		return;
-
-	const offset = library_render_offsets[view];
-	if (offset >= library_volumes.length)
-		return;
-
-	const end = Math.min(
-		offset + LIBRARY_RENDER_BATCH_SIZE,
-		library_volumes.length
-	);
-	renderLibraryBatch(view, library_volumes, api_key, offset, end);
-	library_render_offsets[view] = end;
-
-	if (offset === 0 && on_first_batch !== null)
-		on_first_batch();
-};
-
-function scheduleNextLibraryBatch(view, api_key, generation) {
-	if (
-		library_render_pending[view]
-		|| !viewHasMoreToRender(view)
-	)
-		return;
-
-	library_render_pending[view] = true;
-	scheduleLibraryRender(() => {
-		if (generation !== library_render_generation)
-			return;
-		library_render_pending[view] = false;
-
-		renderNextLibraryBatch(view, api_key, generation);
-		// One batch may still leave the footer close to the viewport. Re-check on
-		// the next paint, but stop completely once the runway is long enough.
-		scheduleLibraryRenderCheck(api_key);
-	});
-};
-
-function maybeRenderLibraryMore(api_key) {
-	if (library_fetching || library_volumes.length === 0)
-		return;
-
-	const view = activeLibraryView();
-	if (!viewHasMoreToRender(view) || library_render_pending[view])
-		return;
-
-	const viewport_height = window.innerHeight
-		|| document.documentElement.clientHeight;
-	if (
-		library_els.stats.footer.getBoundingClientRect().top
-		> viewport_height + LIBRARY_RENDER_AHEAD_PX
-	)
-		return;
-
-	scheduleNextLibraryBatch(view, api_key, library_render_generation);
-};
-
-function scheduleLibraryRenderCheck(api_key) {
-	if (library_render_check_scheduled)
-		return;
-
-	library_render_check_scheduled = true;
-	scheduleLibraryPaint(() => {
-		library_render_check_scheduled = false;
-		maybeRenderLibraryMore(api_key);
-	});
-};
-
-// Build only the first small batch now. Further batches are demand-driven by
-// scroll/resize checks against the footer, not queued all the way to the end.
+// Build the whole view at once, the way the poster gallery already does.
+//
+// This used to render 16 entries and then wait for a scroll event before
+// asking for 16 more. That pattern bought nothing here: a table row is
+// text, so there is no expensive work to defer, and the gating was the
+// only reason a view could be incomplete. It made the library reachable
+// only as far as a scroll listener happened to fire -- and while that
+// listener was attached to an element that never scrolls, a
+// 5480-volume library simply stopped in the A's.
+//
+// The skeleton is the whole set. The one genuinely expensive thing is a
+// cover, and only the poster view has those; `volumes_gallery.js` builds
+// its complete shell and then hydrates images around the viewport, which
+// is the shape both views now share.
 function buildLibraryView(view, api_key, generation, on_first_batch=null) {
 	clearLibraryView(view);
 	library_built_views[view] = true;
 	library_render_pending[view] = true;
 
-	// Yield once even for the first batch. JSON parsing and a network callback can
-	// otherwise run straight into DOM construction before the browser gets a paint.
+	// Yield once so the loading state gets a paint before DOM construction:
+	// JSON parsing and a network callback would otherwise run straight into it.
 	scheduleLibraryPaint(() => {
 		if (generation !== library_render_generation)
 			return;
 		library_render_pending[view] = false;
 
-		renderNextLibraryBatch(view, api_key, generation, on_first_batch);
+		renderLibraryEntries(view, library_volumes, api_key);
 		library_els.mass_edit.button.disabled = false;
-		scheduleLibraryRenderCheck(api_key);
+
+		if (on_first_batch !== null)
+			on_first_batch();
 	});
 };
 
@@ -463,8 +395,6 @@ function ensureLibraryViewBuilt(api_key) {
 	const view = activeLibraryView();
 	if (!library_built_views[view])
 		buildLibraryView(view, api_key, library_render_generation);
-	else
-		scheduleLibraryRenderCheck(api_key);
 };
 
 function populateLibrary(volumes, api_key, generation, on_first_batch) {
@@ -703,36 +633,6 @@ usingApiKey()
 	document.addEventListener(
 		'kapowarr:download-queue-changed',
 		e => updateLibraryDownloadStatuses(e.detail || [])
-	);
-
-	// On the document, capturing -- not on the window.
-	//
-	// The library does not scroll the window. `body` is `height: 100dvh`
-	// with `overflow-y: auto` and `main > *:not(.tool-bar-container)`
-	// carries `overflow-y: auto` too, so the element that actually
-	// scrolls is an ancestor of the list and the document never grows
-	// past the viewport. A `window` scroll listener therefore never
-	// fires, and `scroll` does not bubble, so nothing reached this
-	// handler once the initial runway was laid down.
-	//
-	// The list then stopped at whatever the first ~2000px of rows
-	// covered and never advanced: on a 5480-volume library sorted by
-	// title, everything after the A's was unreachable.
-	//
-	// A non-bubbling event still travels the capture phase, so a
-	// capturing listener on the document sees the scroll whichever
-	// element performs it. `maybeRenderLibraryMore` already measures
-	// with `getBoundingClientRect`, which is viewport-relative and so
-	// was right all along -- only the wiring was wrong.
-	document.addEventListener(
-		'scroll',
-		() => scheduleLibraryRenderCheck(api_key),
-		{passive: true, capture: true}
-	);
-	window.addEventListener(
-		'resize',
-		() => scheduleLibraryRenderCheck(api_key),
-		{passive: true}
 	);
 
 	socket.on(

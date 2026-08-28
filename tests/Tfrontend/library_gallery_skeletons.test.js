@@ -23,7 +23,6 @@ test('the gallery renderer is installed before the Volumes API continuation can 
 
 test('poster view materializes the complete metadata index instead of a scroll runway', () => {
 	assert.match(gallery, /for \(const volume of library_volumes\)/);
-	assert.match(gallery, /library_render_offsets\.list = library_volumes\.length/);
 	assert.match(gallery, /buildCompletePosterIndex/);
 	assert.ok(
 		!gallery.includes('LIBRARY_RENDER_BATCH_SIZE'),

@@ -83,20 +83,20 @@ class scan_files_reports_what_it_declines(unittest.TestCase):
 
     def test_a_file_of_another_series_is_named(self):
         add, output = self._scan(
-            f'{self.FOLDER}/Totally Unrelated Manga v02 (1998).cbz'
+            f'{self.FOLDER}/Totally Unrelated Manga v02 005 (1998).cbz'
         )
         add.assert_not_called()
-        self.assertIn('Totally Unrelated Manga v02 (1998).cbz', output)
+        self.assertIn('Totally Unrelated Manga v02 005 (1998).cbz', output)
         self.assertIn('does not match the volume', output)
 
     def test_a_file_of_this_series_the_volume_will_not_take_is_named(self):
-        # The realistic case, and the one worth reading in a log: the
-        # series is right and the volume still declines it.
+        # The series is right and the volume still declines it: a
+        # one-shot offered to a normal volume.
         add, output = self._scan(
-            f'{self.FOLDER}/Death of Power Special Edition (1998) v9.cbz'
+            f'{self.FOLDER}/Death of Power One-Shot (2023).cbz'
         )
         add.assert_not_called()
-        self.assertIn('Death of Power Special Edition', output)
+        self.assertIn('Death of Power One-Shot', output)
         self.assertIn('does not match the volume', output)
 
     def test_a_one_shot_against_a_normal_volume_is_named(self):

@@ -106,7 +106,8 @@ def read_library(db_path: str) -> Tuple[set, List[Dict[str, Any]], List[str]]:
             ))
         volumes = []
         for row in connection.execute(
-            'SELECT id, title, year, volume_number, folder, special_version '
+            'SELECT id, title, year, volume_number, folder, '
+            'special_version, special_version_locked '
             'FROM volumes WHERE folder IS NOT NULL AND folder != "";'
         ):
             volumes.append({
@@ -117,6 +118,14 @@ def read_library(db_path: str) -> Tuple[set, List[Dict[str, Any]], List[str]]:
                     year=row['year'],
                     volume_number=row['volume_number'],
                     special_version=SpecialVersion(row['special_version']),
+                    # Read, not assumed: an inferred single-issue
+                    # classification no longer refuses its own series'
+                    # files while a locked one still does, so guessing
+                    # this would make the verdicts disagree with the
+                    # importer on exactly the volumes in question.
+                    special_version_locked=bool(
+                        row['special_version_locked']
+                    ),
                     folder=row['folder']
                 ),
                 'issues': sorted(

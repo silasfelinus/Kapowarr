@@ -41,6 +41,15 @@ clean_title_regex = compile(
 # score is already this penalty, instead of charging for it a second time.
 ISSUE_CAPACITY_RATING_PENALTY = 1
 
+# The classifications `determine_special_version` can reach on its own,
+# every one of them meaning "this volume is a single issue".
+SINGLE_ISSUE_VERSIONS = (
+    SpecialVersion.TPB,
+    SpecialVersion.ONE_SHOT,
+    SpecialVersion.HARD_COVER,
+    SpecialVersion.OMNIBUS
+)
+
 
 def match_title(
     title1: str,
@@ -429,6 +438,37 @@ def folder_extraction_filter(
     )
 
 
+def collected_edition_of_volume(
+    file_data: FilenameData,
+    volume_data: VolumeData
+) -> bool:
+    """Whether the file is a collected edition belonging to a normal volume.
+
+    An omnibus in the series' own folder is not one issue of that series, so
+    it must not be bound to issue one -- the rest would read as missing and
+    Kapowarr would go download comics that are already on disk inside this
+    very file.
+
+    It is not bound to every issue either, tempting as that is. Plenty of
+    collections cover only part of a run, and nothing in a folder name
+    reliably says which: "Black Science Omnibus - The Beginner's Guide to
+    Entropy" collects roughly a third of Black Science and announces none of
+    that. Marking the whole run as had on that evidence would quietly strand
+    every issue the book does not contain.
+
+    So it is filed as a volume file instead. It sits in the folder and is
+    visible in the Files window, while the individual issues stay wanted and
+    are fetched normally. That means a large collected file alongside the
+    issues it duplicates, which is the deliberate trade: redundant bytes over
+    a silently incomplete series.
+    """
+    return (
+        volume_data.special_version == SpecialVersion.NORMAL
+        and file_data['special_version'] in COLLECTED_EDITION_MATCH
+        and file_data['issue_number'] is None
+    )
+
+
 def file_importing_filter(
     file_data: FilenameData,
     volume_data: VolumeData,
@@ -476,11 +516,42 @@ def file_importing_filter(
         number_to_year.get(force_range(issue_number)[-1])
     )
 
+    # `determine_special_version` calls any volume with one issue released
+    # over a month ago a TPB -- its own comment says "we'll assume" -- and
+    # that assumption then refuses the volume's own files. #153 opened it
+    # for issue 1; the live library shows the rest of the shape: five
+    # volumes whose single issue is numbered `00` rather than `01`,
+    # `Doctor Strange 450` against a volume that has since grown well past
+    # one issue, `Witch Hammer` 2 and 3 of a series that outran its
+    # catalogue entry.
+    #
+    # A guess must not outrank the files it was guessing about, so a
+    # single-issue classification the app inferred does not get to refuse
+    # one. A classification the user set (`special_version_locked`) still
+    # does -- that is an assertion, not an assumption.
+    #
+    # Nothing is claimed by letting the file through: `scan_files` files a
+    # file naming an issue the volume does not have against the volume
+    # rather than an issue, so the issues it does know about stay wanted.
+    inferred_single_issue = (
+        not getattr(volume_data, 'special_version_locked', False)
+        and volume_data.special_version in SINGLE_ISSUE_VERSIONS
+    )
+
+    # A collected edition's `v02` is the collection's number and its year
+    # is the collection's year; neither is the series'. Requiring them to
+    # equal the volume's was a category error that refused
+    # "Black Hammer Omnibus v02" from the Black Hammer folder it sits in,
+    # and `scan_files` has had a branch waiting for exactly these files
+    # that this gate never let it reach.
+    collected = collected_edition_of_volume(file_data, volume_data)
+
     is_match = (
-        matching_special_version
+        (matching_special_version or inferred_single_issue)
         and (
             matching_volume_number
             or matching_year
+            or collected
         )
     )
 

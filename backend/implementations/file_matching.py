@@ -21,6 +21,7 @@ from backend.base.helpers import (extract_year_from_date,
                                   filtered_iter, force_range)
 from backend.base.logging import LOGGER
 from backend.implementations.matching import (COLLECTED_EDITION_MATCH,
+                                              collected_edition_of_volume,
                                               file_importing_filter)
 from backend.implementations.root_folders import RootFolders
 from backend.internals.db import commit, get_db
@@ -30,37 +31,6 @@ from backend.internals.settings import Settings
 
 
 # region Automatic Match
-def collected_edition_of_volume(
-    file_data: FilenameData,
-    volume_data: VolumeData
-) -> bool:
-    """Whether the file is a collected edition belonging to a normal volume.
-
-    An omnibus in the series' own folder is not one issue of that series, so
-    it must not be bound to issue one -- the rest would read as missing and
-    Kapowarr would go download comics that are already on disk inside this
-    very file.
-
-    It is not bound to every issue either, tempting as that is. Plenty of
-    collections cover only part of a run, and nothing in a folder name
-    reliably says which: "Black Science Omnibus - The Beginner's Guide to
-    Entropy" collects roughly a third of Black Science and announces none of
-    that. Marking the whole run as had on that evidence would quietly strand
-    every issue the book does not contain.
-
-    So it is filed as a volume file instead. It sits in the folder and is
-    visible in the Files window, while the individual issues stay wanted and
-    are fetched normally. That means a large collected file alongside the
-    issues it duplicates, which is the deliberate trade: redundant bytes over
-    a silently incomplete series.
-    """
-    return (
-        volume_data.special_version == SpecialVersion.NORMAL
-        and file_data['special_version'] in COLLECTED_EDITION_MATCH
-        and file_data['issue_number'] is None
-    )
-
-
 def scan_files(
     volume_id: int,
     filepath_filter: List[str] = [],

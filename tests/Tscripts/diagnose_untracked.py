@@ -38,7 +38,11 @@ class a_library_with_one_of_everything(unittest.TestCase):
                 open(os.path.join(path, name), 'w').close()
             return path
 
-        # A volume classified TPB by assumption, holding its own issue 2.
+        # A volume the user has locked as a TPB, holding an issue 2 that
+        # it therefore still refuses. Locked rather than inferred on
+        # purpose: an inferred single-issue classification no longer
+        # refuses its own series' files, so only a locked one still
+        # exercises this verdict.
         self.witch = make(
             'Witch Hammer (2018)',
             'Witch Hammer 01 (2018).cbz', 'Witch Hammer 02 (2023).cbz'
@@ -61,7 +65,8 @@ class a_library_with_one_of_everything(unittest.TestCase):
                                 size INT);
             CREATE TABLE volumes (id INTEGER PRIMARY KEY, title TEXT,
                 year INT, volume_number INT, folder TEXT,
-                special_version TEXT);
+                special_version TEXT, special_version_locked BOOL
+                NOT NULL DEFAULT 0);
             CREATE TABLE issues (id INTEGER PRIMARY KEY, volume_id INT,
                 calculated_issue_number FLOAT, date TEXT, title TEXT);
         ''')
@@ -69,14 +74,16 @@ class a_library_with_one_of_everything(unittest.TestCase):
             'INSERT INTO root_folders (folder) VALUES (?);', (self.root,)
         )
         connection.execute(
-            "INSERT INTO volumes VALUES (1,'Witch Hammer',2018,1,?,'tpb');",
+            "INSERT INTO volumes VALUES "
+            "(1,'Witch Hammer',2018,1,?,'tpb',1);",
             (self.witch,)
         )
         connection.execute(
             'INSERT INTO issues VALUES (1,1,1.0,?,NULL);', ('2018-05-01',)
         )
         connection.execute(
-            "INSERT INTO volumes VALUES (2,'Moon Knight',2006,1,?,NULL);",
+            "INSERT INTO volumes VALUES "
+            "(2,'Moon Knight',2006,1,?,NULL,0);",
             (self.moon,)
         )
         connection.execute(

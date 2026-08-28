@@ -32,7 +32,9 @@ VERDICTS
                     is the interesting one, and it splits in two:
                       * WRONG-VOLUME  the file names a different series
                         than the volume, so refusing it is correct and
-                        the folder is misfiled.
+                        the folder is misfiled. Judged with the near-title
+                        rule, so a parsed series carrying a leftover issue
+                        number is not mistaken for a different comic.
                       * SAME-SERIES   the file names the volume's own
                         series and was still refused. That is a matching
                         bug, and this is how you find them.
@@ -70,7 +72,7 @@ from backend.base.file_extraction import (  # noqa: E402
 from backend.base.helpers import extract_year_from_date  # noqa: E402
 from backend.implementations.matching import (  # noqa: E402
     file_importing_filter, match_special_version, match_title,
-    match_volume_number, match_year)
+    match_title_nearly, match_volume_number, match_year)
 
 
 IMAGES = tuple(e.lower() for e in FileConstants.IMAGE_EXTENSIONS)
@@ -151,8 +153,15 @@ def why_refused(
         for i in issues
     }
 
-    same_series = match_title(
-        str(file_data['series'] or ''), volume_data.title
+    # The near rule as well as the strict one. A parser that leaves the
+    # issue number in the series -- "Hell Her Way 001", "Flesh Eating
+    # Cheerleaders Spring Break 001" -- makes strict equality call a file
+    # a different series from the volume it plainly belongs to, and this
+    # verdict exists precisely to tell those two apart.
+    series = str(file_data['series'] or '')
+    same_series = (
+        match_title(series, volume_data.title)
+        or match_title_nearly(series, volume_data.title)
     )
 
     issue_number = file_data['issue_number']

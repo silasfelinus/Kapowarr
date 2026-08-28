@@ -114,6 +114,53 @@ class a_library_with_one_of_everything(unittest.TestCase):
         self.assertIn('SAME-SERIES', row['detail'])
         self.assertIn('special-version', row['detail'])
 
+    def test_a_leftover_issue_number_is_not_a_different_series(self):
+        """`match_title` alone calls this a different comic.
+
+        The parser leaves an issue number in the series often enough --
+        "Hell Her Way 001" against the volume "Hell Her Way" -- that
+        strict equality would report a folder as misfiled when the file
+        plainly belongs to the volume sitting on it.
+        """
+        from diagnose_untracked import why_refused
+        from backend.base.file_extraction import extract_filename_data
+        from types import SimpleNamespace
+        from backend.base.definitions import SpecialVersion
+
+        file_data = extract_filename_data(
+            '/content/Hell Her Way/Hell Her Way 001 (2023) (One Shot).cbz',
+            prefer_folder_year=True
+        )
+        volume = {
+            'data': SimpleNamespace(
+                title='Hell Her Way', year=2024, volume_number=1,
+                special_version=SpecialVersion.NORMAL, folder='/x'
+            ),
+            'issues': []
+        }
+        kind, _gates = why_refused(file_data, volume)
+        self.assertEqual(kind, 'SAME-SERIES')
+
+    def test_a_genuinely_different_series_is_still_called_out(self):
+        from diagnose_untracked import why_refused
+        from backend.base.file_extraction import extract_filename_data
+        from types import SimpleNamespace
+        from backend.base.definitions import SpecialVersion
+
+        file_data = extract_filename_data(
+            '/content/ElfQuest/Rogues Curse 01 (1999).cbz',
+            prefer_folder_year=True
+        )
+        volume = {
+            'data': SimpleNamespace(
+                title='Detective Comics', year=1937, volume_number=1,
+                special_version=SpecialVersion.NORMAL, folder='/x'
+            ),
+            'issues': []
+        }
+        kind, _gates = why_refused(file_data, volume)
+        self.assertEqual(kind, 'WRONG-VOLUME')
+
     def test_a_readers_thumbnail_is_not_reported_as_a_problem(self):
         self.assertEqual(
             self._rows()['Moon Knight 26 (2009)_thumb.jpg']['verdict'],

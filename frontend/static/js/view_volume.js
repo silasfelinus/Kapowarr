@@ -747,6 +747,20 @@ function toggleAllManages() {
 	).forEach(e => e.checked = checked);
 };
 
+function adoptUnmatchedFiles(api_key, button) {
+	// Every file in the folder that nothing is matched to is kept where it
+	// is and recorded against the volume, so the library import stops
+	// offering the folder. Files already matched to an issue are untouched,
+	// and no issue is claimed, so the volume's missing issues stay wanted.
+	button.disabled = true;
+	sendAPI('POST', `/volumes/${volume_id}/adoptunmatched`, api_key)
+	.then(response => window.location.reload())
+	.catch(e => {
+		button.disabled = false;
+		console.log(e);
+	});
+};
+
 function submitManagedIssues(api_key) {
 	sendAPI('PUT', `/volumes/${volume_id}/manualmatch`, api_key, {},
 		Object.values(managed_issues_changes)
@@ -1042,6 +1056,9 @@ usingApiKey()
 
 	document.querySelector('#submit-manage-issues').onclick =
 	e => submitManagedIssues(api_key);
+
+	document.querySelector('#adopt-unmatched-files').onclick =
+	e => adoptUnmatchedFiles(api_key, e.target);
 
 	socket.on(
 		'downloaded_status',

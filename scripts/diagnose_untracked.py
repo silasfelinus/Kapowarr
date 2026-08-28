@@ -35,9 +35,14 @@ VERDICTS
                         the folder is misfiled. Judged with the near-title
                         rule, so a parsed series carrying a leftover issue
                         number is not mistaken for a different comic.
-                      * SAME-SERIES   the file names the volume's own
-                        series and was still refused. That is a matching
-                        bug, and this is how you find them.
+                      * SAME-SERIES   the file carries the volume's own
+                        series name and was still refused. Read the years
+                        on the line before calling it a bug: a title is
+                        not a volume, and a 1955 issue in the folder of a
+                        2018 relaunch is the same series, the wrong
+                        volume, and correctly refused. It is a matching
+                        bug when the years agree, or when the gate that
+                        said no was not the year.
 
 Usage:
   python scripts/diagnose_untracked.py --db /path/to/db.db
@@ -194,7 +199,20 @@ def why_refused(
         gates.append('year')
 
     kind = 'SAME-SERIES' if same_series else 'WRONG-VOLUME'
-    return kind, '+'.join(gates) or 'unknown'
+    detail = '+'.join(gates) or 'unknown'
+
+    # Carry the years when the year gate is what said no. A shared title
+    # is not a shared volume: seventy years of MAD Magazine in the folder
+    # of the 2018 relaunch is the same series and still the wrong volume,
+    # and refusing those files is correct. Without the two years on the
+    # line, that reads identically to a volume refusing a file that
+    # really is its own -- which is the case actually worth fixing.
+    if 'year' in gates:
+        detail += (
+            f" [file {file_data['year']} vs volume {volume_data.year}]"
+        )
+
+    return kind, detail
 
 
 def diagnose(root: str, tracked: set, volumes: List[Dict[str, Any]]):
@@ -225,7 +243,18 @@ def diagnose(root: str, tracked: set, volumes: List[Dict[str, Any]]):
         for name in untracked:
             full = os.path.join(dirpath, name)
             extension = os.path.splitext(name)[1].lower()
-            file_data = extract_filename_data(full, prefer_folder_year=True)
+            # Exactly as `scan_files` parses it, which means without
+            # `prefer_folder_year`. Library import uses that option and
+            # this tool copied it, but the question here is why a file
+            # has no row in `files`, and `scan_files` is what decides
+            # that. The two parses disagree wherever a folder's year is
+            # not the file's: `MAD Magazine 024 (1955).cbr` in
+            # `/content/MAD Magazine (2018)` reads as 1955 to the
+            # scanner and 2018 to library import, and only one of those
+            # matches the volume the folder belongs to. Parsing the
+            # other way made this report 540 files as accepted that the
+            # scanner had in fact refused.
+            file_data = extract_filename_data(full)
 
             if is_reader_cache_file(full):
                 verdict, detail = 'reader-cache', ''

@@ -121,6 +121,67 @@ class a_library_with_one_of_everything(unittest.TestCase):
         self.assertIn('SAME-SERIES', row['detail'])
         self.assertIn('special-version', row['detail'])
 
+    def test_it_parses_a_filename_the_way_the_scanner_does(self):
+        """`scan_files` is what decides whether a file gets a row.
+
+        Library import parses with `prefer_folder_year=True` and this
+        tool copied that, but the question it answers is why a file is
+        absent from `files`, and the scanner parses without it. The two
+        disagree wherever a folder's year is not the file's, which is
+        exactly the case worth diagnosing: `MAD Magazine 024 (1955).cbr`
+        in `/content/MAD Magazine (2018)` reads as 1955 to the scanner
+        and 2018 to library import, and only one of those matches the
+        volume the folder belongs to.
+        """
+        import re
+        source = open(
+            os.path.join(
+                os.path.dirname(os.path.dirname(
+                    os.path.dirname(os.path.abspath(__file__)))),
+                'scripts', 'diagnose_untracked.py'
+            ),
+            encoding='utf-8'
+        ).read()
+        calls = re.findall(
+            r'extract_filename_data\([^)]*\)', source
+        )
+        self.assertTrue(calls, 'no parse found')
+        for call in calls:
+            with self.subTest(call=call):
+                self.assertNotIn('prefer_folder_year', call)
+
+    def test_a_shared_title_is_not_a_shared_volume(self):
+        # The real MAD Magazine case: seventy years of a magazine in the
+        # folder of a volume that covers fifty-one issues of it.
+        from diagnose_untracked import why_refused
+        from backend.base.file_extraction import extract_filename_data
+        from types import SimpleNamespace
+        from backend.base.definitions import SpecialVersion
+
+        file_data = extract_filename_data(
+            '/content/MAD Magazine (2018)/MAD Magazine 024 (1955).cbr'
+        )
+        self.assertEqual(file_data['year'], 1955)
+
+        volume = {
+            'data': SimpleNamespace(
+                title='MAD Magazine', year=2018, volume_number=2,
+                special_version=SpecialVersion.NORMAL,
+                special_version_locked=False, folder='/x'
+            ),
+            'issues': [SimpleNamespace(
+                id=24, calculated_issue_number=24.0,
+                date='2021-06-01', title=None
+            )]
+        }
+        kind, detail = why_refused(file_data, volume)
+        # Same series name, and still the wrong volume: refusing it is
+        # correct. The years on the line are what says so.
+        self.assertEqual(kind, 'SAME-SERIES')
+        self.assertIn('year', detail)
+        self.assertIn('file 1955', detail)
+        self.assertIn('volume 2018', detail)
+
     def test_a_leftover_issue_number_is_not_a_different_series(self):
         """`match_title` alone calls this a different comic.
 

@@ -705,10 +705,29 @@ usingApiKey()
 		e => updateLibraryDownloadStatuses(e.detail || [])
 	);
 
-	window.addEventListener(
+	// On the document, capturing -- not on the window.
+	//
+	// The library does not scroll the window. `body` is `height: 100dvh`
+	// with `overflow-y: auto` and `main > *:not(.tool-bar-container)`
+	// carries `overflow-y: auto` too, so the element that actually
+	// scrolls is an ancestor of the list and the document never grows
+	// past the viewport. A `window` scroll listener therefore never
+	// fires, and `scroll` does not bubble, so nothing reached this
+	// handler once the initial runway was laid down.
+	//
+	// The list then stopped at whatever the first ~2000px of rows
+	// covered and never advanced: on a 5480-volume library sorted by
+	// title, everything after the A's was unreachable.
+	//
+	// A non-bubbling event still travels the capture phase, so a
+	// capturing listener on the document sees the scroll whichever
+	// element performs it. `maybeRenderLibraryMore` already measures
+	// with `getBoundingClientRect`, which is viewport-relative and so
+	// was right all along -- only the wiring was wrong.
+	document.addEventListener(
 		'scroll',
 		() => scheduleLibraryRenderCheck(api_key),
-		{passive: true}
+		{passive: true, capture: true}
 	);
 	window.addEventListener(
 		'resize',

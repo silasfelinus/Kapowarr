@@ -17,7 +17,12 @@ test('large libraries render a bounded runway instead of draining every volume',
 		volumes,
 		/library_els\.stats\.footer\.getBoundingClientRect\(\)\.top[\s\S]*LIBRARY_RENDER_AHEAD_PX/
 	);
-	assert.match(volumes, /window\.addEventListener\(\s*'scroll'/);
+	// That a scroll check exists at all, not what it is attached to:
+	// the library scrolls an inner container rather than the window, so
+	// the target is the document, capturing. That is asserted on its own
+	// in library_scroll_reaches_the_loader.test.js, which also pins the
+	// CSS the choice depends on.
+	assert.match(volumes, /addEventListener\(\s*'scroll'/);
 	assert.match(volumes, /window\.addEventListener\(\s*'resize'/);
 
 	const build = volumes

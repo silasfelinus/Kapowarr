@@ -433,6 +433,22 @@ class GeneralFileType(BaseEnum):
     real issues stay wanted until the provider catches up.
     """
 
+    ADOPTED = "adopted"
+    """
+    A file the user decided belongs in this volume's folder even though the
+    matcher would not take it: a different era of the same series kept
+    together for browsing (every MAD Magazine issue from 1955 on, in the
+    2018 volume's folder), an annual filed with its parent run, an
+    unofficial variant. The matcher is right to refuse it -- it is not an
+    issue of this volume -- but refusing it left the file untracked, so
+    every library import pass reconsidered the same folder forever.
+
+    Adopting it records the user's decision: the file stays exactly where it
+    is, gains a `files` row so the importer stops offering it, and is bound
+    to no issue, so the issues this volume really is missing stay wanted and
+    searchable. Setting the file back to automatic matching undoes it.
+    """
+
 
 class SpecialVersion(BaseEnum):
     "The type of volume"

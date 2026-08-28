@@ -482,6 +482,29 @@ def get_file_matching(volume_id: int) -> List[FileMatch]:
     return list(current_matches.values())
 
 
+def _general_file_type_for(filepath: str) -> str:
+    """Pick the general-file type to record for a file the user is binding
+    to a volume by hand.
+
+    Every non-metadata file used to be recorded as `COVER`, which was only
+    ever right for an actual image. A comic archive kept in the folder on
+    purpose -- a different era of the series, an annual, a variant -- was
+    filed as cover art, so the volume page listed it among the covers and
+    nothing downstream could tell a real cover from an adopted issue. Those
+    get `ADOPTED` instead: same effect on scanning and issue coverage,
+    honest about what the file is.
+    """
+    name = basename(filepath).lower()
+
+    if name in FileConstants.METADATA_FILES:
+        return GeneralFileType.METADATA.value
+
+    if name.endswith(FileConstants.IMAGE_EXTENSIONS):
+        return GeneralFileType.COVER.value
+
+    return GeneralFileType.ADOPTED.value
+
+
 def set_file_matching(volume_id: int, matches: List[FileMatch]) -> None:
     """Set the matchings of files in a volume's folder so that they match to one
     or more issues, become a general file or are allowed to match automatically.
@@ -538,14 +561,7 @@ def set_file_matching(volume_id: int, matches: List[FileMatch]) -> None:
 
             # Insert or update match in appropriate table
             if file_match["general_file"]:
-                is_metadata_file = (
-                    basename(file_match["filepath"].lower())
-                    in FileConstants.METADATA_FILES
-                )
-                if is_metadata_file:
-                    file_type = GeneralFileType.METADATA.value
-                else:
-                    file_type = GeneralFileType.COVER.value
+                file_type = _general_file_type_for(file_match["filepath"])
 
                 cursor.execute("""
                     INSERT INTO volume_files(
@@ -584,3 +600,59 @@ def set_file_matching(volume_id: int, matches: List[FileMatch]) -> None:
     scan_files(volume_id, update_websocket=True)
 
     return
+
+
+def adopt_unmatched_files(volume_id: int) -> List[str]:
+    """Keep every file in a volume's folder that nothing currently claims.
+
+    The matcher refuses files that are genuinely not issues of the volume,
+    and it is right to: `MAD Magazine 024 (1955).cbr` sitting in the 2018
+    volume's folder is a different era of the series. But a refused file
+    never enters `files`, so `_collect_unimported_files` offers the same
+    folder on every Rescan Untracked Library, forever, and the only way out
+    was to move the files somewhere the importer could not see -- which is
+    exactly where the user does not want them.
+
+    Adopting them records the decision instead. Each file stays where it is,
+    gains a `files` row (so the importer stops offering it) and a forced
+    volume binding (so every later `scan_files` skips it), and is bound to
+    no issue -- so the issues the volume really is missing stay wanted and
+    stay searchable.
+
+    Only files nothing else claims are touched: a file already matched to an
+    issue keeps that match, so running this can never unbind a run.
+
+    Args:
+        volume_id (int): The ID of the volume.
+
+    Returns:
+        List[str]: The filepaths that were adopted, in folder order.
+    """
+    unclaimed = [
+        match["filepath"]
+        for match in get_file_matching(volume_id)
+        if not match["issue_ids"]
+        and not match["general_file"]
+        and not is_reader_cache_file(match["filepath"])
+    ]
+
+    if not unclaimed:
+        return []
+
+    LOGGER.info(
+        'Adopting %d unmatched file(s) into volume %d: they stay in the '
+        'folder and stop being offered for import',
+        len(unclaimed), volume_id
+    )
+
+    set_file_matching(volume_id, [
+        {
+            "filepath": filepath,
+            "issue_ids": [],
+            "general_file": True,
+            "forced_match": True
+        }
+        for filepath in unclaimed
+    ])
+
+    return unclaimed

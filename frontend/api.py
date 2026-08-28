@@ -42,7 +42,8 @@ from backend.implementations.conversion import preview_mass_convert
 from backend.implementations.converters import ConvertersManager
 from backend.implementations.credentials import Credentials
 from backend.implementations.external_clients import ExternalClients
-from backend.implementations.file_matching import (get_file_matching,
+from backend.implementations.file_matching import (adopt_unmatched_files,
+                                                   get_file_matching,
                                                    set_file_matching)
 from backend.implementations.indexers import Indexers
 from backend.implementations.naming import (generate_volume_folder_name,
@@ -1014,6 +1015,17 @@ def api_manual_match(id: int):
         set_file_matching(id, file_matching_changes)
 
         return return_api({})
+
+
+@api.route('/volumes/<int:id>/adoptunmatched', methods=['POST'])
+@error_handler
+@auth
+def api_adopt_unmatched(id: int):
+    Library.get_volume(id)
+
+    adopted = adopt_unmatched_files(id)
+
+    return return_api({'adopted': adopted}, code=200)
 
 
 # =====================

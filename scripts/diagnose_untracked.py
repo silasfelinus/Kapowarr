@@ -43,6 +43,12 @@ VERDICTS
                         volume, and correctly refused. It is a matching
                         bug when the years agree, or when the gate that
                         said no was not the year.
+                      A correct refusal is not a problem to fix, but it
+                      does keep the folder untracked forever. If the file
+                      is where you want it, open the volume, choose Manage
+                      Issues and press Keep Unmatched: it stays put, stops
+                      being offered, and claims no issue, so the volume's
+                      genuinely missing issues stay wanted.
 
 Usage:
   python scripts/diagnose_untracked.py --db /path/to/db.db

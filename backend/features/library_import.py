@@ -406,6 +406,24 @@ def match_identifies_a_volume(cv_match: Dict[str, Any]) -> bool:
     )
 
 
+def _volume_owned_folders() -> Set[str]:
+    """Every folder a volume in the library already claims.
+
+    Imported lazily so the pure-filesystem helpers below stay testable
+    without a database, the same reasoning
+    `library_import_policy._library_volume_folders` documents.
+    """
+    from backend.internals.db import get_db
+
+    return {
+        abspath(str(row['folder']))
+        for row in get_db().execute(
+            "SELECT folder FROM volumes WHERE folder IS NOT NULL "
+            "AND folder != '';"
+        ).fetchall()
+        if row['folder']
+    }
+
 def collect_content_less_folders(
     excluded_folders: Optional[Set[str]] = None
 ) -> List[str]:
@@ -441,7 +459,20 @@ def collect_content_less_folders(
     nothing to weigh but the title.
     """
     root_folders = {abspath(r) for r in RootFolders().get_folder_list()}
-    excluded = excluded_folders or set()
+    excluded = set(excluded_folders or set())
+
+    # An empty folder a volume already owns is not a request for that
+    # series -- it is that series, waiting for its issues. Kapowarr makes
+    # these itself: `create_empty_volume_folders` gives every volume added
+    # a folder whether or not anything has been downloaded into it yet, so
+    # a library monitoring a thousand volumes it has not filled has a
+    # thousand empty folders that all name a series already in it.
+    #
+    # Without this the first pass would search every one of them and hold
+    # every one for review, asking which series a folder means when the
+    # library already knows -- a thousand paced provider requests to
+    # produce a thousand holds for volumes nobody needed to be told about.
+    excluded.update(_volume_owned_folders())
 
     candidates: List[str] = []
     for root in sorted(root_folders):
@@ -452,7 +483,10 @@ def collect_content_less_folders(
                 continue
 
             folder = abspath(dirpath)
-            if folder in excluded:
+            if folder in excluded or any(
+                folder_is_inside_folder(owned, folder)
+                for owned in excluded
+            ):
                 continue
 
             if is_content_less_series_folder(folder, root_folders, filenames):

@@ -55,10 +55,13 @@ class finding_the_folders_that_are_asking(unittest.TestCase):
         import shutil
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def _found(self):
+    def _found(self, owned=()):
         roots = MagicMock()
         roots.return_value.get_folder_list.return_value = [self.root]
-        with patch.object(LI, 'RootFolders', roots):
+        with patch.object(LI, 'RootFolders', roots), \
+                patch.object(
+                    LI, '_volume_owned_folders', return_value=set(owned)
+                ):
             return set(collect_content_less_folders())
 
     def test_an_empty_series_folder_is_found(self):
@@ -92,6 +95,29 @@ class finding_the_folders_that_are_asking(unittest.TestCase):
 
     def test_the_root_itself_is_never_offered(self):
         self.assertNotIn(self.root, self._found())
+
+    def test_a_folder_a_volume_already_owns_is_never_offered(self):
+        """Kapowarr makes these itself.
+
+        `create_empty_volume_folders` gives every volume added a folder
+        whether or not anything has been downloaded into it, so a library
+        monitoring volumes it has not filled has an empty folder for each
+        one -- every one of them naming a series already in the library.
+        Asking which series they mean is a paced provider request and a
+        review hold to answer a question nobody had.
+        """
+        self.assertNotIn(self.empty, self._found(owned=[self.empty]))
+        self.assertIn(self.empty, self._found())
+
+    def test_a_folder_beneath_one_a_volume_owns_is_never_offered(self):
+        self.assertNotIn(
+            self.empty_child, self._found(owned=[self.organizer])
+        )
+
+    def test_owning_one_folder_does_not_hide_the_others(self):
+        found = self._found(owned=[self.empty])
+        self.assertIn(self.cover_only, found)
+        self.assertIn(self.sidecar_only, found)
 
 
 class asking_about_one_folder_on_its_own(unittest.TestCase):
@@ -146,7 +172,7 @@ class what_the_importer_does_when_it_gets_there(unittest.TestCase):
         import shutil
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def _review(self, results):
+    def _review(self, results, owned=frozenset()):
         from backend.features import library_import_persistent as P
 
         task = P.PersistentContinuousLibraryImport.__new__(
@@ -160,6 +186,7 @@ class what_the_importer_does_when_it_gets_there(unittest.TestCase):
         roots = MagicMock()
         roots.return_value.get_folder_list.return_value = [self.root]
         with patch.object(LI, 'RootFolders', roots), \
+                patch.object(P, '_volume_owned_folders', return_value=owned), \
                 patch.object(P, 'asyncio_run', return_value=results), \
                 patch.object(P, 'search_volumes_everywhere', lambda q: q):
             return task._review_content_less_folder(self.empty, 3)
@@ -197,6 +224,12 @@ class what_the_importer_does_when_it_gets_there(unittest.TestCase):
     def test_a_folder_that_gained_a_comic_produces_no_hold(self):
         open(os.path.join(self.empty, 'Blood Train 01.cbz'), 'w').close()
         self.assertEqual(self._review([]), [])
+
+    def test_a_folder_a_volume_gained_while_paused_produces_no_hold(self):
+        # The pass can be paused for hours; the library moves on.
+        self.assertEqual(
+            self._review([], owned={self.empty}), []
+        )
 
 
 if __name__ == '__main__':

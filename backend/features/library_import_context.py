@@ -143,8 +143,26 @@ def _select_series_run_winner(
 def _format_context_match(result: VolumeMetadata) -> Dict[str, Any]:
     year = result.get('year')
     title = result['title']
+    external_id = result.get('external_id')
+    if external_id is None:
+        external_id = result['comicvine_id']
     return {
         'id': result['comicvine_id'],
+        # The third place this identity has had to be carried, and the
+        # only one that rebuilds a match dict from scratch after the
+        # matcher has already made one. #140 taught `Library.add` to take
+        # a provider's own ID and #150 taught the review gate to accept
+        # one, but a run-context winner *replaces* the match those
+        # produced -- so a GCD volume promoted here arrived with `id`
+        # None and no identity beside it, failed the gate, and was held
+        # as `no-candidate`: "no database in the world has this", about a
+        # volume GCD had just named and the policy had just scored 4.
+        #
+        # It only bites a folder whose files split into two or more
+        # groups, which is why it survived the earlier fixes: the
+        # single-group folders they were found on never reach this code.
+        'provider_id': result.get('provider_id', 'comicvine'),
+        'external_id': external_id,
         'title': f'{title} ({year})' if year is not None else title,
         'issue_count': result['issue_count'],
         'link': result['site_url'],

@@ -7,11 +7,12 @@ import keeps its decision threshold here so live-library calibration can evolve
 without changing the more conservative generic confident-match helper.
 """
 
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from backend.base.definitions import FilenameData, VolumeMetadata
 from backend.base.files import common_folder, folder_is_inside_folder
 from backend.base.logging import LOGGER
+from backend.features.metadata import DEFAULT_METADATA_PROVIDER_ID
 from backend.implementations.matching import (
     ISSUE_CAPACITY_RATING_PENALTY, _rank_volume_results_for_file)
 
@@ -191,6 +192,70 @@ def _folder_owning_candidate(
     return owners[0]
 
 
+def _series_identity(result: VolumeMetadata) -> Tuple[str, Any, Any]:
+    """How the importer already decides two rows describe the same series."""
+    title = ''.join(
+        c.lower() for c in (result['title'] or '') if c.isalnum()
+    )
+    return (title, result['year'], result['volume_number'])
+
+
+def _one_series_reported_twice(
+    tied: List[VolumeMetadata]
+) -> Optional[VolumeMetadata]:
+    """Break a tie in which several databases named the same series.
+
+    Continuous import searches every configured provider and ranks the
+    combined pool, which is the point of having fallbacks. It also means a
+    series more than one of them knows about arrives more than once, and
+    each copy becomes a rival to the others.
+    `/content/Fight Club 2 (2015)` was held for human review across five
+    candidates that were all "Fight Club 2", 2015, volume 1 -- two from
+    ComicVine, two from GCD, one from Metron. Three databases agreeing is
+    the strongest corroboration available anywhere in this pipeline, and it
+    was being read as ambiguity.
+
+    Title, year and volume number are how Kapowarr identifies a series
+    everywhere else, so candidates agreeing on all three are one answer
+    rather than a choice. Two conditions keep this narrow:
+
+    - Every tied candidate must carry that same identity. A top group
+      naming two different volumes is a real tie and still goes to a human.
+    - More than one provider must be represented. Two rows inside a single
+      database with the same title, year and volume number are two rows
+      that database chose to keep apart, and this does not presume to
+      merge them; that stays a tie.
+
+    Among the copies, prefer the default provider -- the library is keyed
+    on it -- and then the fullest record, since they describe the same
+    series and the difference is only how much of it each row knows.
+    """
+    if len(tied) < 2:
+        return None
+
+    if len({_series_identity(candidate) for candidate in tied}) != 1:
+        return None
+
+    providers = [
+        candidate.get('provider_id') or DEFAULT_METADATA_PROVIDER_ID
+        for candidate in tied
+    ]
+    if len(set(providers)) < 2:
+        return None
+
+    def rank(candidate: VolumeMetadata) -> Tuple[int, int, str, str]:
+        provider = candidate.get('provider_id') or DEFAULT_METADATA_PROVIDER_ID
+        return (
+            0 if provider == DEFAULT_METADATA_PROVIDER_ID else 1,
+            -(candidate['issue_count'] or 0),
+            # Stable across passes when provider and count also agree.
+            provider,
+            str(candidate.get('external_id') or candidate['comicvine_id'] or '')
+        )
+
+    return min(tied, key=rank)
+
+
 def select_auto_import_volume_result(
     group: Dict[str, FilenameData],
     search_results: List[VolumeMetadata],
@@ -226,16 +291,31 @@ def select_auto_import_volume_result(
     if len(policy_ranked) > 1:
         runner_up_score = policy_ranked[1][1]
         if best_score - runner_up_score < AUTO_IMPORT_MIN_SCORE_MARGIN:
-            owner = _folder_owning_candidate(
-                group,
-                [
-                    result
-                    for result, score in policy_ranked
-                    if score == best_score
-                ]
-            )
+            tied = [
+                result
+                for result, score in policy_ranked
+                if score == best_score
+            ]
+
+            owner = _folder_owning_candidate(group, tied)
             if owner is not None:
                 return owner, None
+
+            one_series = _one_series_reported_twice(tied)
+            if one_series is not None:
+                LOGGER.info(
+                    'Tie between %d copies of one series (%s %s volume %s) '
+                    'reported by %s; taking %s',
+                    len(tied), one_series['title'], one_series['year'],
+                    one_series['volume_number'],
+                    ', '.join(sorted({
+                        c.get('provider_id') or DEFAULT_METADATA_PROVIDER_ID
+                        for c in tied
+                    })),
+                    one_series.get('provider_id')
+                    or DEFAULT_METADATA_PROVIDER_ID
+                )
+                return one_series, None
 
             return None, REVIEW_REASON_TIE
 

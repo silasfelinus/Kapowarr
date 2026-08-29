@@ -9,17 +9,23 @@ const volumes = fs.readFileSync(
 	'utf8'
 );
 
-// Both views build their complete skeleton in one pass. The library used
-// to render 16 entries and wait for a scroll event before asking for 16
-// more, which bought nothing -- a table row is text -- and made the view
-// reachable only as far as a scroll listener happened to fire. When that
-// listener was attached to an element that never scrolls, a
-// 5480-volume library stopped in the A's.
+// The library is a window over the whole result set: the spacers above and
+// below it carry the height of everything outside, so the scrollbar always
+// measures the real library and the last volume is one drag away.
 //
-// What is still deferred is the genuinely expensive part, and only the
-// poster view has any: covers, hydrated around the viewport by
-// volumes_gallery.js.
-test('the library builds its whole skeleton rather than gating on scroll', () => {
+// Two earlier shapes are both ruled out here. The first rendered 16 entries
+// and waited for a scroll event before asking for 16 more, which made the
+// view reachable only as far as that listener happened to fire -- and it was
+// attached to an element that never scrolls, so a 5,480-volume library
+// stopped in the A's with a scrollbar claiming otherwise. The second built
+// every entry up front, which fixed reachability and cost 2.7 seconds of
+// build and layout for the table on a desktop; on a phone that read as
+// freeze, a chunk of table, freeze.
+//
+// `the_whole_library_is_always_reachable.test.js` exercises the arithmetic
+// against a fake layout. What is checked here is that the page still wires
+// it up, and that neither old shape has crept back.
+test('the library renders a window, not a runway and not everything', () => {
 	for (const gone of [
 		'LIBRARY_RENDER_BATCH_SIZE',
 		'LIBRARY_RENDER_AHEAD_PX',
@@ -31,37 +37,69 @@ test('the library builds its whole skeleton rather than gating on scroll', () =>
 	]) {
 		assert.ok(
 			!volumes.includes(gone),
-			`${gone} gates the view on a scroll event; the skeleton is the whole set`
+			`${gone} grew a runway from the top; the window moves with the scroll`
 		);
 	};
-
-	// Nothing may re-introduce a partial view by listening for scrolls.
-	assert.ok(
-		!volumes.includes("'scroll'"),
-		'a complete skeleton has nothing to top up on scroll'
-	);
 
 	const build = volumes
 		.split('function buildLibraryView')[1]
 		.split('function ensureLibraryViewBuilt')[0];
-	assert.match(
-		build,
-		/renderLibraryEntries\(view, library_volumes, api_key\)/,
-		'the build must lay down every volume, not a slice of them'
-	);
+
 	assert.ok(
-		!build.includes('scheduleLibraryRender(renderBatch)'),
-		'the old eager background-drain loop would keep mobile browsers busy after first paint'
+		!build.includes('renderLibraryEntries(view, library_volumes, api_key)'),
+		'building every entry up front is what made the table freeze'
 	);
+	assert.match(build, /virtualiseLibraryView\(\{/);
+	assert.match(build, /total: library_volumes\.length/,
+		'the window must know the size of the whole library');
+	assert.match(build, /library_volumes\.slice\(start, end\)/);
+	assert.match(build, /setSpacers/);
 
 	// Still yielded once, so the loading state paints before the DOM work.
 	assert.match(build, /scheduleLibraryPaint/);
 });
 
+test('a scroll listener is allowed, but only one that can hear the scroll', () => {
+	// The original defect was not the listener; it was a listener on an
+	// element that never scrolls. `general.css` gives
+	// `main > *:not(.tool-bar-container)` its own overflow, and mass edit
+	// moves the scrolling from `#library-container` to `#table-container`,
+	// so there is no single element to attach to. Captured at the document,
+	// every scroll is heard whatever is doing it.
+	const virtualiser = volumes
+		.split('function virtualiseLibraryView')[1]
+		.split('let library_view_window')[0];
+
+	assert.match(
+		virtualiser,
+		/document\.addEventListener\('scroll', on_scroll, \{\s*capture: true/,
+		'a listener on one named element misses the other scroller'
+	);
+	assert.ok(
+		!virtualiser.includes("scroller.addEventListener('scroll'"),
+		'that is the attachment that left the library stopping in the A\'s'
+	);
+	// And the position is read from the content, not from one scroller.
+	assert.match(virtualiser, /anchor\.getBoundingClientRect\(\)\.top/);
+	assert.ok(
+		!virtualiser.includes('scroller.scrollTop'),
+		'reading one element\'s scrollTop assumes it is the one scrolling'
+	);
+});
+
+test('the window is torn down when the view it belongs to is', () => {
+	const clear = volumes
+		.split('function clearLibraryView')[1]
+		.split('// Geometry differs between the two views')[0];
+
+	assert.match(clear, /destroyLibraryWindow\(\)/,
+		'a stale window would keep painting into a container that is gone');
+});
+
 test('filtering or sorting bulk-clears the old gallery DOM', () => {
 	const clear = volumes
 		.split('function clearLibraryView')[1]
-		.split('function viewHasMoreToRender')[0];
+		.split('// Geometry differs between the two views')[0];
 
 	assert.match(clear, /replaceChildren\(space_taker\)/);
 	assert.match(clear, /library_els\.views\.table\.replaceChildren\(\)/);

@@ -21,23 +21,46 @@ test('the gallery renderer is installed before the Volumes API continuation can 
 	assert.match(gate, /resolve_volumes_gallery_ready\(\)/);
 });
 
-test('poster view materializes the complete metadata index instead of a scroll runway', () => {
-	assert.match(gallery, /for \(const volume of library_volumes\)/);
-	assert.match(gallery, /buildCompletePosterIndex/);
+// Covers used to be hydrated by an IntersectionObserver: every card in the
+// library existed, and the observer chose which of thousands of images to
+// actually request. Windowing removes the choice -- only the cards near the
+// viewport exist at all, which is the same band the observer was picking
+// out -- so a card that exists is one whose cover is wanted, and asking for
+// it directly is both simpler and earlier than waiting for a callback to
+// confirm what the window already decided.
+test('a poster card asks for its cover, because it is in the window', () => {
+	assert.match(gallery, /img\.src = `\$\{url_base\}\/api\/volumes\/\$\{volume\.id\}\/cover/);
+	assert.match(gallery, /img\.loading = 'lazy'/);
+	assert.match(gallery, /img\.decoding = 'async'/);
+
 	assert.ok(
-		!gallery.includes('LIBRARY_RENDER_BATCH_SIZE'),
-		'poster shells should not stop at the old incremental append boundary'
+		// The construction, not the paragraph explaining why there is not one.
+		!gallery.includes('new IntersectionObserver'),
+		'the window already limits which covers exist to request'
+	);
+	assert.ok(
+		!gallery.includes('buildCompletePosterIndex'),
+		'the gallery no longer owns a second rendering path'
 	);
 });
 
-test('poster shells reserve image geometry without requesting every cover', () => {
-	assert.match(gallery, /img\.removeAttribute\('src'\)/);
-	assert.match(gallery, /img\.dataset\.src =/);
-	assert.match(gallery, /new IntersectionObserver/);
-	assert.match(gallery, /rootMargin: `\$\{COVER_OVERSCAN_PX\}px 0px \$\{COVER_OVERSCAN_PX\}px 0px`/);
-	assert.match(gallery, /img\.src = img\.dataset\.src/);
-	assert.match(css, /\.list-img:not\(\[src\]\)/);
+test('the gallery only supplies the card, not the rendering', () => {
+	// It used to replace `buildLibraryView` wholesale, which meant two
+	// renderers to keep in step. Now it contributes the one thing a poster
+	// card has that a table row does not: an image.
+	assert.match(gallery, /view_builders\.list = function/);
+	assert.ok(
+		!gallery.includes('buildLibraryView = function'),
+		'one renderer, two item builders'
+	);
+});
+
+test('a card reserves its space before the cover arrives', () => {
+	// Otherwise every cover that loads reflows the grid under the reader's
+	// thumb, and the window\'s row height -- which the spacers are computed
+	// from -- would move with it.
 	assert.match(css, /aspect-ratio: 2\/3/);
+	assert.match(css, /\.list-img \{[^}]*width: 100%/);
 });
 
 test('off-screen poster shells opt into browser rendering containment', () => {

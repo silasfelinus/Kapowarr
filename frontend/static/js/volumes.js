@@ -314,11 +314,7 @@ function createLibraryEntry(volume, api_key) {
 	return entry;
 };
 
-// Build `view` for `volumes[offset:end]` and paint the results in one insert.
-// Every volume in one pass. A table row is a link, a year, a volume
-// number and a checkbox -- text -- so there is nothing in it worth
-// deferring, and building the complete set means the view is never
-// waiting on an event to become whole.
+// Build `view` for `volumes` and paint the results in one insert.
 function renderLibraryEntries(view, volumes, api_key) {
 	const fragment = document.createDocumentFragment();
 
@@ -337,16 +333,211 @@ function renderLibraryEntries(view, volumes, api_key) {
 		entry.renderDownloadStatus();
 	};
 
-	if (view === 'list')
-		library_els.views.list.insertBefore(
-			fragment,
-			library_els.views.list.querySelector('.space-taker')
+	// The caller places the fragment: a windowed view inserts it between its
+	// spacers, and the poster grid before its space-taker.
+	return fragment;
+};
+
+// How much to render beyond the visible band, in pixels of scroll.
+// Enough that an ordinary fling lands on rows that already exist.
+const LIBRARY_OVERSCAN_PX = 1500;
+
+// How many entries to build before measuring one. Enough to fill any phone.
+const LIBRARY_WINDOW_SAMPLE = 40;
+
+// How many times one paint may re-measure and try again before settling for
+// what it has.
+const MAX_GEOMETRY_CORRECTIONS = 3;
+
+// Kept with the spacer rows that have to span the table.
+const TABLE_COLUMN_COUNT = 6;
+
+// Render a window of a long list instead of all of it, while keeping the
+// scroll height the whole list would have.
+//
+// This is not the batching that used to be here. That grew a runway from the
+// top and only extended it when a scroll event fired, so the library was
+// reachable exactly as far as the listener happened to run -- and the
+// listener was attached to an element that never scrolls, which is why a
+// 5,480-volume library stopped in the A's. The scrollbar was a lie about a
+// list that did not exist yet.
+//
+// Here the whole list always exists as scroll height: two spacers stand in
+// for everything outside the window, so the scrollbar is honest, the end of
+// the alphabet is one drag away, and jumping to it renders what is there.
+// What changes is only how many elements are alive at once. Building all
+// 5,480 rows up front cost 2.7 seconds of layout on a desktop, and on a
+// phone it read as freeze, a chunk of table, freeze.
+//
+// Entry state does not live in the DOM -- `library_entries` holds every
+// volume whether or not it is rendered -- so a row that scrolls into view
+// arrives with the monitored state, progress and download status it would
+// have had all along.
+function virtualiseLibraryView(config) {
+	const {anchor, total, setSpacers, renderRange, itemsPerRow} = config;
+	let row_height = 0;
+	let per_row = 1;
+	let resize_timer = null;
+	// Bounded so a geometry that will not settle cannot loop forever.
+	let corrections = 0;
+	let rendered = null;
+	let frame = null;
+
+	// Measured against the viewport rather than against any one scroller's
+	// `scrollTop`. Which element actually scrolls is not fixed here: outside
+	// mass edit it is `#library-container`, and mass edit hands the job to
+	// `#table-container` by giving it a height while hiding the outer
+	// overflow. Reading the anchor's own position on screen is true under
+	// both, and under a page that scrolls for some third reason.
+	function visibleRange() {
+		const anchor_top = anchor.getBoundingClientRect().top;
+		const viewport = window.innerHeight
+			|| document.documentElement.clientHeight;
+
+		const top = -anchor_top - LIBRARY_OVERSCAN_PX;
+		const bottom = -anchor_top + viewport + LIBRARY_OVERSCAN_PX;
+
+		const first_row = Math.max(0, Math.floor(top / row_height));
+		const last_row = Math.max(first_row + 1, Math.ceil(bottom / row_height));
+
+		return [
+			Math.min(total, first_row * per_row),
+			Math.min(total, last_row * per_row)
+		];
+	}
+
+	function paint(start, end) {
+		if (rendered && rendered[0] === start && rendered[1] === end)
+			return;
+
+		const rows_before = Math.floor(start / per_row);
+		const rows_after = Math.max(
+			0, Math.ceil(total / per_row) - Math.ceil(end / per_row)
 		);
-	else
-		library_els.views.table.appendChild(fragment);
+		setSpacers(rows_before * row_height, rows_after * row_height);
+		renderRange(start, end);
+		rendered = [start, end];
+	}
+
+	function update() {
+		frame = null;
+		if (row_height <= 0)
+			return;
+
+		const was = [per_row, row_height];
+		const [start, end] = visibleRange();
+		paint(start, end);
+
+		// Re-measure from what is actually on screen. A resize, a late web
+		// font or a zoom changes both numbers, and the spacers are only
+		// honest while they agree with the rows between them.
+		adopt(itemsPerRow());
+		if (
+			corrections < MAX_GEOMETRY_CORRECTIONS
+			&& (per_row !== was[0] || Math.abs(row_height - was[1]) > 0.5)
+		) {
+			corrections += 1;
+			rendered = null;
+			schedule();
+		} else {
+			corrections = 0;
+		};
+	}
+
+	function schedule() {
+		if (frame !== null)
+			return;
+
+		// Claimed before scheduling, not after. `scheduleLibraryPaint` falls
+		// back to `setTimeout` where there is no rAF, and a scheduler that
+		// ran the callback synchronously would have `update` clear the flag
+		// and this line set it again straight afterwards -- leaving it
+		// permanently set and every later scroll ignored.
+		frame = true;
+		scheduleLibraryPaint(update);
+	}
+
+	function adopt(geometry) {
+		if (geometry.row_height > 0)
+			row_height = geometry.row_height;
+		// A measurement that cannot tell a full row from a partial one says
+		// so with zero rather than guessing; the last good count stands.
+		if (geometry.per_row > 0)
+			per_row = geometry.per_row;
+	}
+
+	// Bootstrap: render enough to measure with, then take over from the
+	// measurement. Nothing can be computed before something exists.
+	function measureFrom(sample_end) {
+		setSpacers(0, 0);
+		renderRange(0, sample_end);
+		rendered = [0, sample_end];
+
+		adopt(itemsPerRow());
+		return row_height > 0;
+	}
+
+	const on_scroll = () => schedule();
+	const debounced_resize = () => {
+		if (resize_timer !== null)
+			clearTimeout(resize_timer);
+		resize_timer = setTimeout(() => {
+			resize_timer = null;
+			on_resize();
+		}, 150);
+	};
+	// A width change moves both numbers -- a narrower grid fits fewer cards
+	// across, so the same library needs more rows. Dropping the cached range
+	// forces a repaint, and `update` re-measures from it.
+	const on_resize = () => {
+		rendered = null;
+		schedule();
+	};
+
+	return {
+		start(sample_end) {
+			if (!measureFrom(Math.min(total, sample_end))) {
+				// Could not measure -- a hidden container, a zero-height row.
+				// Render everything rather than render nothing.
+				setSpacers(0, 0);
+				renderRange(0, total);
+				rendered = [0, total];
+				return;
+			};
+			// Captured at the document, so whichever element is scrolling
+			// is heard from without having to know which one it is.
+			document.addEventListener('scroll', on_scroll, {
+				capture: true, passive: true
+			});
+			// A phone rotating, or a browser bar sliding away, should not
+			// repaint once per pixel.
+			window.addEventListener('resize', debounced_resize);
+			schedule();
+		},
+		destroy() {
+			document.removeEventListener('scroll', on_scroll, {capture: true});
+			window.removeEventListener('resize', debounced_resize);
+			if (resize_timer !== null)
+				clearTimeout(resize_timer);
+			rendered = null;
+		}
+	};
+};
+
+// The live window for whichever view is built, so switching views or
+// refetching tears the old one down.
+let library_view_window = null;
+
+function destroyLibraryWindow() {
+	if (library_view_window !== null) {
+		library_view_window.destroy();
+		library_view_window = null;
+	};
 };
 
 function clearLibraryView(view) {
+	destroyLibraryWindow();
+
 	if (view === 'list') {
 		const space_taker = library_els.views.list.querySelector('.space-taker');
 		library_els.views.list.replaceChildren(space_taker);
@@ -364,24 +555,98 @@ function clearLibraryView(view) {
 	});
 };
 
-// Build the whole view at once, the way the poster gallery already does.
+// Geometry differs between the two views; the windowing does not. A table
+// row spans the table and there is one per row; a poster card is one of
+// however many fit across the grid at the current width.
+const library_view_geometry = {
+	table: {
+		container: () => library_els.views.table,
+		entry_selector: '.table-entry',
+		makeSpacer: () => {
+			const spacer = document.createElement('tr');
+			spacer.className = 'library-spacer';
+			spacer.setAttribute('aria-hidden', 'true');
+			const cell = document.createElement('td');
+			cell.colSpan = TABLE_COLUMN_COUNT;
+			spacer.appendChild(cell);
+			return spacer;
+		},
+		setSpacerHeight: (spacer, px) => spacer.firstChild.style.height = `${px}px`,
+		measure: entries => ({
+			per_row: 1,
+			row_height: entries.length
+				? entries[0].getBoundingClientRect().height
+				: 0
+		}),
+	},
+	list: {
+		container: () => library_els.views.list,
+		entry_selector: '.list-entry',
+		makeSpacer: () => {
+			const spacer = document.createElement('div');
+			spacer.className = 'library-spacer';
+			spacer.setAttribute('aria-hidden', 'true');
+			return spacer;
+		},
+		setSpacerHeight: (spacer, px) => spacer.style.height = `${px}px`,
+		measure: entries => {
+			if (!entries.length)
+				return {per_row: 0, row_height: 0};
+
+			// Cards wrap, so how many fit across is a fact about the rendered
+			// grid rather than something to compute from the stylesheet.
+			// Count the ones sharing the first card's top edge.
+			const first_top = entries[0].offsetTop;
+			let per_row = 0;
+			for (const entry of entries) {
+				if (entry.offsetTop !== first_top)
+					break;
+				per_row += 1;
+			};
+
+			const next = entries[per_row];
+			if (next === undefined) {
+				// Only one row is rendered, so there is no way to tell a full
+				// row from a partial one. Measuring here would be actively
+				// wrong at the end of the library, where the last row holds
+				// whatever is left: reading 12 cards as the width of the grid
+				// would inflate every row count that follows and the scroll
+				// height with them. Report the height and decline the count.
+				return {
+					per_row: 0,
+					row_height: entries[0].getBoundingClientRect().height
+				};
+			};
+
+			return {
+				per_row: per_row,
+				// Card plus the grid gap, taken from the row below.
+				row_height: next.offsetTop - first_top
+			};
+		}
+	}
+};
+
+// Build a view as a window over the whole library.
 //
-// This used to render 16 entries and then wait for a scroll event before
-// asking for 16 more. That pattern bought nothing here: a table row is
-// text, so there is no expensive work to defer, and the gating was the
-// only reason a view could be incomplete. It made the library reachable
-// only as far as a scroll listener happened to fire -- and while that
-// listener was attached to an element that never scrolls, a
-// 5480-volume library simply stopped in the A's.
+// The list is complete as scroll height from the first paint: two spacers
+// stand in for everything outside the window, so the scrollbar measures the
+// real library and the end of the alphabet is one drag away. Only what is
+// near the viewport is an element.
 //
-// The skeleton is the whole set. The one genuinely expensive thing is a
-// cover, and only the poster view has those; `volumes_gallery.js` builds
-// its complete shell and then hydrates images around the viewport, which
-// is the shape both views now share.
+// Building all of them was the previous attempt at "the skeleton is the
+// whole set". It was right about the scrollbar and wrong about the cost:
+// 5,480 table rows measured at 2.7 seconds of build and layout on a
+// desktop, which on a phone reads as freeze, a chunk of table, freeze.
 function buildLibraryView(view, api_key, generation, on_first_batch=null) {
 	clearLibraryView(view);
 	library_built_views[view] = true;
 	library_render_pending[view] = true;
+
+	const geometry = library_view_geometry[view];
+	const container = geometry.container();
+	const spacer_before = geometry.makeSpacer();
+	const spacer_after = geometry.makeSpacer();
 
 	// Yield once so the loading state gets a paint before DOM construction:
 	// JSON parsing and a network callback would otherwise run straight into it.
@@ -390,7 +655,37 @@ function buildLibraryView(view, api_key, generation, on_first_batch=null) {
 			return;
 		library_render_pending[view] = false;
 
-		renderLibraryEntries(view, library_volumes, api_key);
+		// The poster grid keeps its trailing space-taker, which stops a short
+		// final row from stretching across the whole width.
+		const space_taker = container.querySelector('.space-taker');
+		container.replaceChildren(
+			...[spacer_before, spacer_after, space_taker].filter(Boolean)
+		);
+
+		library_view_window = virtualiseLibraryView({
+			anchor: container,
+			total: library_volumes.length,
+			itemsPerRow: () => geometry.measure(
+				[...container.querySelectorAll(geometry.entry_selector)]
+			),
+			setSpacers: (before, after) => {
+				geometry.setSpacerHeight(spacer_before, before);
+				geometry.setSpacerHeight(spacer_after, after);
+			},
+			renderRange: (start, end) => {
+				while (spacer_before.nextSibling !== spacer_after)
+					spacer_before.nextSibling.remove();
+
+				container.insertBefore(
+					renderLibraryEntries(
+						view, library_volumes.slice(start, end), api_key
+					),
+					spacer_after
+				);
+			}
+		});
+
+		library_view_window.start(LIBRARY_WINDOW_SAMPLE);
 		library_els.mass_edit.button.disabled = false;
 
 		if (on_first_batch !== null)

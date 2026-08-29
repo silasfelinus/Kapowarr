@@ -153,7 +153,7 @@ def _provider_breakdown(
     search_results: List[VolumeMetadata],
     ranked_results: List[Any]
 ) -> List[Dict[str, Any]]:
-    """Say what each provider returned, over the whole response.
+    """Say what each provider was asked and what each said.
 
     The point of the fan-out is that ComicVine is thinnest exactly where
     a personal library runs deepest. Reading a hold, the first question
@@ -162,18 +162,47 @@ def _provider_breakdown(
     returned nothing leaves no candidates to list. Counted over the full
     response, not the captured sample, so truncation cannot turn a
     fallback that answered into one that appears never to have run.
+
+    Counting results was still only half the answer. A provider absent
+    from the counts either answered with nothing or was never reached --
+    the search stops at the first provider whose results contain an exact
+    title match, and the ones after it are not asked. Both look identical
+    from the results alone, and only one of them means the fallbacks have
+    been exhausted. `search_volumes_everywhere` now carries its own record
+    of who it asked, so `asked` says which happened.
     """
     viable = {_candidate_identity(result) for result, _ in ranked_results}
     breakdown: Dict[str, Dict[str, Any]] = {}
+
+    # Seed from the search's own account of itself, so a provider that
+    # answered with nothing, failed, or was never reached still appears.
+    for entry in getattr(search_results, 'consulted', None) or []:
+        breakdown[entry['provider_id']] = {
+            'provider_id': entry['provider_id'],
+            'asked': entry.get('asked', True),
+            'failed': entry.get('failed', False),
+            'recognised_title': entry.get('recognised', False),
+            'result_count': 0,
+            'viable_count': 0
+        }
+
     for result in search_results:
         provider_id = result.get('provider_id') or 'comicvine'
         entry = breakdown.setdefault(
             provider_id,
-            {'provider_id': provider_id, 'result_count': 0, 'viable_count': 0}
+            {
+                'provider_id': provider_id,
+                'asked': True,
+                'failed': False,
+                'recognised_title': None,
+                'result_count': 0,
+                'viable_count': 0
+            }
         )
         entry['result_count'] += 1
         if _candidate_identity(result) in viable:
             entry['viable_count'] += 1
+
     return sorted(breakdown.values(), key=lambda entry: entry['provider_id'])
 
 

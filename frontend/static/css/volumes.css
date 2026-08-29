@@ -197,6 +197,13 @@ main:has(#massedit-toggle:checked) #library-container {
 	white-space: nowrap;
 }
 
+/* A full-width flex item, so it forces a line break and stands in for
+   whole rows of cards rather than sitting beside one. */
+#list-library > .library-spacer {
+	width: 100%;
+	flex: 0 0 100%;
+}
+
 .space-taker {
 	height: 1rem;
 	max-width: 100%;
@@ -219,8 +226,51 @@ main:has(#massedit-toggle:checked) #table-container {
 }
 
 #table-container > table {
-	width: max(100%, 25rem);
+	width: max(100%, 32rem);
 	border-collapse: collapse;
+
+	/* Auto layout sizes columns by measuring every cell in the table. At
+	   5,480 rows that is a full pass over 33,000 cells on every relayout,
+	   and it measured at 2.7s of build-and-layout on a desktop against
+	   0.8s fixed -- the difference between "slow" and "the tab is gone".
+	   It is also what makes windowing possible at all: with auto layout
+	   the columns would resize every time rows swapped in and out under
+	   the scroll. */
+	table-layout: fixed;
+}
+
+/* Fixed layout takes its columns from the first row, so they are stated
+   once here. The title column is whatever is left. */
+#table-container :where(th, td):nth-child(1) { width: 3rem; }
+#table-container :where(th, td):nth-child(3) { width: 4.5rem; }
+#table-container :where(th, td):nth-child(4) { width: 7rem; }
+#table-container :where(th, td):nth-child(5) { width: 8.5rem; }
+#table-container :where(th, td):nth-child(6) { width: 4.5rem; }
+
+/* Every row the same height, which is what lets the spacers above and
+   below the window stand in for the rest of the library at an exact
+   size. A title too long for its column gets an ellipsis and keeps its
+   full text in the tooltip, rather than wrapping onto a second line and
+   making that row taller than the ones the scrollbar was measured from. */
+.table-entry > td:nth-child(2) {
+	overflow: hidden;
+}
+
+.table-link {
+	display: block;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+/* Stands in for the rows outside the window. Nothing but height. */
+.library-spacer {
+	padding: 0;
+	border: 0;
+}
+
+#table-library > .library-spacer > td {
+	padding: 0;
 }
 
 .table-volume {
@@ -315,7 +365,13 @@ main:has(#massedit-toggle:checked) #table-container {
 /*  */
 /* Mass Editor */
 /*  */
-main:not(:has(#massedit-toggle:checked)) #table-container :where(td, th):first-child {
+/* `tr:not(.library-spacer)` matters: a spacer row holds exactly one cell,
+   which is therefore always `:first-child`. Hiding it collapsed the spacer
+   to nothing, so the table claimed the height of its window instead of the
+   height of the library and the scrollbar never reached past the first
+   screen of rows. */
+main:not(:has(#massedit-toggle:checked)) #table-container
+	tr:not(.library-spacer) > :where(td, th):first-child {
 	display: none;
 }
 

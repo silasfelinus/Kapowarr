@@ -678,7 +678,7 @@ function convertVolume(api_key, issue_id=null) {
 };
 
 //
-// Manage Issues
+// Manage Files
 //
 const manageIdToFilepath = {};
 let managed_issues = [];
@@ -708,6 +708,36 @@ function _issuesCoveredByMapping(mapping, no_match_is_tbd=false) {
 	return mapping_value;
 }
 
+// How many files in the folder nothing claims, and what "Keep Unmatched"
+// would therefore do. A count on the button is the difference between an
+// action you can reason about and one you have to try.
+function showUnmatchedSummary(unmatched, total) {
+	const summary = document.querySelector('#manage-unmatched-summary');
+	const adopt = document.querySelector('#adopt-unmatched-files');
+
+	adopt.disabled = unmatched === 0;
+	adopt.innerText = unmatched === 0
+		? 'Keep Unmatched'
+		: `Keep ${unmatched} Unmatched`;
+
+	if (unmatched === 0) {
+		summary.classList.add('hidden');
+		summary.innerText = '';
+		adopt.title = 'Every file in this folder is already accounted for.';
+		return;
+	};
+
+	summary.classList.remove('hidden');
+	summary.innerText =
+		`${unmatched} of ${total} files here are matched to nothing. `
+		+ 'Keep Unmatched records them against this volume so library import '
+		+ 'stops offering them, without moving them or claiming any issue -- '
+		+ 'the issues this volume is actually missing stay wanted.';
+	adopt.title =
+		`Keep the ${unmatched} unmatched file(s) where they are and stop `
+		+ 'offering them for import.';
+};
+
 function showManageIssues(api_key) {
 	managed_issues_changes = {};
 	managed_issues = [];
@@ -718,6 +748,15 @@ function showManageIssues(api_key) {
 
 	fetchAPI(`/volumes/${volume_id}/manualmatch`, api_key)
 	.then(json => {
+		// Say what is here before offering to act on it. "Keep Unmatched"
+		// sits in this window's footer, and a bulk action whose scope you
+		// cannot see is one nobody presses: Silas went looking for it on
+		// the volume page and did not find it at all.
+		const unmatched = json.result.filter(
+			mapping => !mapping.issue_ids.length && !mapping.general_file
+		).length;
+		showUnmatchedSummary(unmatched, json.result.length);
+
 		json.result.forEach((mapping, idx) => {
 			const entry = ViewEls.pre_build.manage.cloneNode(true);
 			entry.dataset.manage_id = idx;

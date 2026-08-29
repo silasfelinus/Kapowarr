@@ -332,7 +332,7 @@ tbody .issue-title:hover {
 }
 
 /*  */
-/* Manage Issues window */
+/* Manage Files window */
 /*  */
 #manage-issues-table {
 	min-width: 40rem;
@@ -354,10 +354,22 @@ tbody .issue-title:hover {
 	text-wrap: nowrap;
 }
 
-#show-issue-match {
+/* `.window-footer button` sets `color: var(--light-color)`, which is right
+   for the two buttons that carry a solid background -- Cancel is red, Save
+   is green -- and wrong for every other button in a footer, which has no
+   background at all. White on the window's own background is an invisible
+   label. "Keep Unmatched" shipped that way and could not be found at all;
+   "Set Match" had the same text and was legible only by its border. */
+#show-issue-match,
+#adopt-unmatched-files {
 	border: 1px solid var(--border-color);
+	color: var(--text-color);
 	transition: background-color 100ms linear,
 		color 100ms linear;
+}
+
+#adopt-unmatched-files:not(:disabled):hover {
+	background-color: var(--hover-color);
 }
 
 #manage-window:has(input[type="checkbox"]:checked) #show-issue-match {
@@ -484,4 +496,18 @@ tbody .issue-title:hover {
 	.volume-info > img {
 		display: none;
 	}
+}
+
+/* The scope of the window's bulk action, said before it is offered. */
+#manage-unmatched-summary {
+	margin-bottom: .75rem;
+	font-size: .85rem;
+	line-height: 1.4;
+	color: var(--dimmed-text-color);
+}
+
+#adopt-unmatched-files:disabled {
+	color: var(--dimmed-text-color);
+	opacity: .6;
+	cursor: default;
 }

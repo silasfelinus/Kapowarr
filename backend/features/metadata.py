@@ -13,7 +13,7 @@ from enum import Enum
 from functools import wraps
 from importlib import import_module
 from time import time
-from typing import Dict, List, Sequence, Tuple, Union
+from typing import Any, Dict, List, Sequence, Tuple, Union
 
 from backend.base.definitions import IssueMetadata, VolumeMetadata
 from backend.base.logging import LOGGER
@@ -294,6 +294,29 @@ class MetadataIdentityStore:
         return row[0] if row else None
 
 
+class ProviderSearchResults(list):
+    """The combined search results, plus which providers produced them.
+
+    A provider that answers with nothing leaves nothing behind, so a
+    breakdown computed from the results alone cannot tell "GCD had nothing
+    either" from "GCD was never asked" -- the fan-out returns as soon as one
+    provider recognises the title. Both read as "no database in the world
+    has this", and only one of them is a reason to stop looking. Working out
+    which had happened for a given hold meant re-deriving the stop condition
+    by hand against the captured sample.
+
+    A list subclass rather than a new return type: every caller treats this
+    as the list of results it always was, and a test that patches the search
+    with a plain list simply carries no consultation.
+    """
+
+    consulted: List[Dict[str, Any]]
+
+    def __init__(self, results=(), consulted=()):
+        super().__init__(results)
+        self.consulted = list(consulted)
+
+
 async def search_volumes_everywhere(title: str) -> List[VolumeMetadata]:
     """Ask each configured provider for `title` until one recognises it.
 
@@ -328,6 +351,10 @@ async def search_volumes_everywhere(title: str) -> List[VolumeMetadata]:
     ) or [DEFAULT_METADATA_PROVIDER_ID]
 
     everything: List[VolumeMetadata] = []
+    # Every provider asked, in order, and what it gave back -- including the
+    # ones that gave back nothing, and the ones never reached because an
+    # earlier provider recognised the title.
+    consultation: List[Dict[str, Any]] = []
     # A provider that returns nothing leaves no candidate behind, so a
     # review record built from candidates alone cannot distinguish "the
     # fallbacks had nothing either" from "the fallbacks were never
@@ -348,17 +375,44 @@ async def search_volumes_everywhere(title: str) -> List[VolumeMetadata]:
                 provider_id, title, error
             )
             consulted.append(f'{provider_id}=failed')
+            consultation.append({
+                'provider_id': provider_id,
+                'asked': True,
+                'result_count': 0,
+                'failed': True,
+                'recognised': False
+            })
             continue
 
         consulted.append(f'{provider_id}={len(results)}')
+        recognised = any(
+            match_title(title, result['title']) for result in results
+        )
+        consultation.append({
+            'provider_id': provider_id,
+            'asked': True,
+            'result_count': len(results),
+            'failed': False,
+            'recognised': recognised
+        })
 
-        if any(match_title(title, result['title']) for result in results):
+        if recognised:
             if everything:
                 LOGGER.info(
                     'Found %r through %s, which the earlier provider(s) '
                     'did not recognise', title, provider_id
                 )
-            return results
+            # The providers after this one are deliberately not asked. Say so
+            # rather than leaving them absent, which is indistinguishable
+            # from having asked and got nothing.
+            consultation.extend({
+                'provider_id': later,
+                'asked': False,
+                'result_count': 0,
+                'failed': False,
+                'recognised': False
+            } for later in provider_ids[provider_ids.index(provider_id) + 1:])
+            return ProviderSearchResults(results, consultation)
 
         everything.extend(results)
 
@@ -366,7 +420,7 @@ async def search_volumes_everywhere(title: str) -> List[VolumeMetadata]:
         'No configured provider recognised %r; asked %s',
         title, ', '.join(consulted) or 'nobody'
     )
-    return everything
+    return ProviderSearchResults(everything, consultation)
 
 
 def get_metadata_provider(

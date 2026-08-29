@@ -172,6 +172,12 @@ def create_groups(
     return groups
 
 
+# How many page images a folder must hold before it is treated as an unpacked
+# comic rather than as a folder that happens to contain an image. One is a
+# banner, a poster, or a leftover page; a comic has pages.
+MIN_UNPACKED_COMIC_IMAGES = 3
+
+
 def _collect_unimported_files(
     folder_filter: Union[str, None] = None,
     limit_parent_folder: bool = False
@@ -215,6 +221,44 @@ def _collect_unimported_files(
         for f in FilesDB.fetch()
     }
 
+    # Which folders hold an archive, imported or not. An unpacked comic is a
+    # folder of pages; a folder that also contains the .cbz those pages came
+    # out of is a folder with leftovers in it, not an unpacked comic.
+    archive_folders: Set[str] = {
+        abspath(dirname(f))
+        for f in all_files
+        if f.endswith(FileConstants.CONTAINER_EXTENSIONS)
+    }
+
+    # Parse once, and count the images in each folder that could actually be
+    # pages -- not cover art, not another reader's thumbnail cache, not
+    # anything under a dot-directory.
+    parsed_files: Dict[str, FilenameData] = {}
+    page_image_counts: Dict[str, int] = {}
+    for original_file in all_files:
+        if original_file in imported_files:
+            continue
+
+        d = abspath(dirname(original_file))
+        if d in root_folders:
+            continue
+
+        file_data = extract_filename_data(original_file, prefer_folder_year=True)
+        parsed_files[original_file] = file_data
+
+        if (
+            original_file.endswith(FileConstants.IMAGE_EXTENSIONS)
+            and file_data["special_version"] != SpecialVersion.COVER
+            and not is_library_import_artifact(original_file)
+        ):
+            page_image_counts[d] = page_image_counts.get(d, 0) + 1
+
+    def is_unpacked_comic_folder(folder: str) -> bool:
+        return (
+            folder not in archive_folders
+            and page_image_counts.get(folder, 0) >= MIN_UNPACKED_COMIC_IMAGES
+        )
+
     image_folders: Set[str] = set()
     unimported_files: Dict[str, FilenameData] = {}
     file_to_folder: Dict[str, str] = {}
@@ -229,12 +273,35 @@ def _collect_unimported_files(
             # File directly in root folder is not allowed
             continue
 
-        file_data = extract_filename_data(f, prefer_folder_year=True)
+        file_data = parsed_files[f]
 
         if (
             f.endswith(FileConstants.IMAGE_EXTENSIONS)
             and file_data["special_version"] != SpecialVersion.COVER
         ):
+            if not is_unpacked_comic_folder(d):
+                # Decoration, not pages. This used to promote the folder to a
+                # work item on the strength of the first loose image in it,
+                # whatever that image was -- a series banner in a folder of
+                # subfolders, a poster, a reader's `_thumb.jpg`, one page left
+                # behind beside its archive. The folder was then searched as
+                # though it were a single comic, which is how
+                # `/content/Creepy`, `/content/Doctor Who`,
+                # `/content/Invincible` and `/content/Future State` -- folders
+                # whose actual volumes live in subfolders and were imported
+                # long ago -- came back every pass as ties across every
+                # same-titled volume the provider has.
+                #
+                # Nor is the image worth offering on its own: a search for one
+                # stray jpg's filename has nothing to match.
+                LOGGER.debug(
+                    'Ignoring %s: %s holds %d page image(s)%s, which is not an '
+                    'unpacked comic',
+                    original_file, d, page_image_counts.get(d, 0),
+                    ' beside an archive' if d in archive_folders else ''
+                )
+                continue
+
             if d in image_folders:
                 continue
             image_folders.add(d)

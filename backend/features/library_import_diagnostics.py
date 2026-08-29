@@ -12,12 +12,16 @@ from __future__ import annotations
 
 from enum import Enum
 from json import dumps
-from os.path import dirname, join
+from os import listdir
+from os.path import dirname, isdir, isfile, join
 from time import time
 from typing import Any, Dict, List, Optional
 
-from backend.base.definitions import FilenameData, VolumeMetadata
+from backend.base.definitions import (FileConstants, FilenameData,
+                                      VolumeMetadata)
 from backend.base.logging import LOGGER
+from backend.features.library_import_metadata import (
+    is_library_import_artifact)
 from backend.features.library_import_policy import (
     AUTO_IMPORT_MIN_MATCH_SCORE,
     AUTO_IMPORT_MIN_SCORE_MARGIN,
@@ -48,6 +52,43 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, (list, tuple, set)):
         return [_json_safe(item) for item in value]
     return value
+
+
+def _unpacked_comic_snapshot(filepath: str) -> Optional[Dict[str, Any]]:
+    """For a work item that is a directory, say what made it one.
+
+    An unpacked page-image comic is represented by its own directory, so a
+    record's only "file" is a folder path. Nothing said so, and nothing said
+    how many images were behind the decision -- which is how a single stray
+    banner sitting in a folder of subfolders could promote that folder to a
+    volume search and produce a tie across every same-titled volume a
+    provider has, on pass after pass, while the record looked exactly like a
+    record for a real comic. Eight of job 18's nine ties were this, and
+    telling them apart meant noticing that `files[0].filepath` equalled
+    `folder`.
+    """
+    if not isdir(filepath):
+        return None
+
+    images = 0
+    archives = 0
+    try:
+        for name in listdir(filepath):
+            if not isfile(join(filepath, name)):
+                continue
+            if name.lower().endswith(FileConstants.IMAGE_EXTENSIONS):
+                if not is_library_import_artifact(join(filepath, name)):
+                    images += 1
+            elif name.lower().endswith(FileConstants.CONTAINER_EXTENSIONS):
+                archives += 1
+    except OSError:
+        return None
+
+    return {
+        'is_directory': True,
+        'page_images': images,
+        'archives': archives
+    }
 
 
 def _candidate_identity(result: VolumeMetadata) -> Any:
@@ -212,9 +253,14 @@ def build_review_diagnostics(
         'files': [
             {
                 'filepath': filepath,
-                'parsed': _json_safe(file_data)
+                'parsed': _json_safe(file_data),
+                # Present only when the work item is a folder standing in for
+                # an unpacked comic, which is not otherwise distinguishable
+                # from a record about a real file.
+                **({'folder': snapshot} if snapshot else {})
             }
             for filepath, file_data in group.items()
+            for snapshot in (_unpacked_comic_snapshot(filepath),)
         ],
         'viable_candidates': [
             _candidate_snapshot(result, score)

@@ -275,6 +275,7 @@
 	{{ window(True, "convert-window", "Convert volume files", convert_content, convert_submit) }}
 
 	{% set manage_issues_content %}
+		<p id="manage-unmatched-summary" class="hidden"></p>
 		<table id="manage-issues-table">
 			<thead>
 				<tr>
@@ -293,11 +294,11 @@
 		</table>
 	{% endset %}
 	{% set manage_issues_submit %}
-		<button id="adopt-unmatched-files" type="button" title="Keep every file in this folder that nothing is matched to, so the library import stops offering them. Missing issues stay wanted.">Keep Unmatched</button>
+		<button id="adopt-unmatched-files" type="button" disabled title="Keep every file in this folder that nothing is matched to, so the library import stops offering them. Missing issues stay wanted.">Keep Unmatched</button>
 		<button id="show-issue-match" type="button">Set Match</button>
 		<button id="submit-manage-issues" type="submit">Save</button>
 	{% endset %}
-	{{ window(True, "manage-window", "Manage Issues", manage_issues_content, manage_issues_submit) }}
+	{{ window(True, "manage-window", "Manage Files", manage_issues_content, manage_issues_submit) }}
 
 	{% set issue_match_content %}
 		<table id="issue-match-table">
@@ -398,9 +399,9 @@
 				) }}
 				{{ icon_button(
 					"manage-button",
-					"Change the mapping of files to issues or the volume",
+					"See every file in the volume folder, what it is matched to, and keep the ones nothing claims",
 					"manage_files.svg",
-					"Manage Issues"
+					"Manage Files"
 				) }}
 				{{ icon_button(
 					"files-button",

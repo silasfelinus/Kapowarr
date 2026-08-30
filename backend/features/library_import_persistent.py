@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from backend.base.custom_exceptions import CVRateLimitReached
 from backend.base.definitions import CVFileMapping, FilenameData
+from backend.base.files import folder_is_inside_folder
 from backend.features.library_import import (
     CONTINUOUS_IMPORT_RATE_LIMIT_BACKOFF,
     CV_REQUEST_DELAY,

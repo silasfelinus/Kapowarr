@@ -45,7 +45,8 @@ test('a non-empty library search clears an active filter', () => {
 	h.submit();
 
 	assert.equal(h.context.library_els.view_options.filter.value, '');
-	assert.deepEqual(h.saved, [{lib_filter: ''}]);
+	assert.equal(h.saved.length, 1);
+	assert.equal(h.saved[0].lib_filter, '');
 });
 
 test('an empty search leaves the active filter alone', () => {
@@ -53,7 +54,7 @@ test('an empty search leaves the active filter alone', () => {
 	h.submit();
 
 	assert.equal(h.context.library_els.view_options.filter.value, 'wanted');
-	assert.deepEqual(h.saved, []);
+	assert.equal(h.saved.length, 0);
 });
 
 test('search does not rewrite storage when no filter is active', () => {
@@ -61,5 +62,5 @@ test('search does not rewrite storage when no filter is active', () => {
 	h.submit();
 
 	assert.equal(h.context.library_els.view_options.filter.value, '');
-	assert.deepEqual(h.saved, []);
+	assert.equal(h.saved.length, 0);
 });

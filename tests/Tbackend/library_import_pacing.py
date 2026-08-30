@@ -58,7 +58,13 @@ class continuous_import_pacing(unittest.IsolatedAsyncioTestCase):
             )
 
         sleep_mock.assert_awaited_once_with(8.0)
-        comicvine.search_volumes.assert_awaited_once_with('batman')
+        # The title positionally, plus the predicate that says what the
+        # fan-out should keep looking for -- see `usable` in
+        # `_match_file_groups`.
+        comicvine.search_volumes.assert_awaited_once()
+        args, kwargs = comicvine.search_volumes.await_args
+        self.assertEqual(args, ('batman',))
+        self.assertTrue(callable(kwargs['accepts']))
         self.assertEqual(clock['last_started'], 120.0)
 
     async def test_first_search_does_not_sleep(self):
@@ -84,7 +90,13 @@ class continuous_import_pacing(unittest.IsolatedAsyncioTestCase):
             )
 
         sleep_mock.assert_not_awaited()
-        comicvine.search_volumes.assert_awaited_once_with('batman')
+        # The title positionally, plus the predicate that says what the
+        # fan-out should keep looking for -- see `usable` in
+        # `_match_file_groups`.
+        comicvine.search_volumes.assert_awaited_once()
+        args, kwargs = comicvine.search_volumes.await_args
+        self.assertEqual(args, ('batman',))
+        self.assertTrue(callable(kwargs['accepts']))
         self.assertEqual(clock['last_started'], 50.0)
 
     def test_metadata_fetch_clock_paces_cvinfo_fast_path_in_short_slices(self):

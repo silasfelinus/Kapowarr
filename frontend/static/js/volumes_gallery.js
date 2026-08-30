@@ -44,3 +44,17 @@ window.installVolumesGalleryRenderer(() => {
 		fragment.appendChild(list_entry);
 	};
 });
+
+// The header search reads as a library-wide lookup. Do not silently narrow it
+// with a saved Wanted/Monitored filter: that made an already-added, complete
+// volume appear absent while Add Volume correctly showed it as present.
+library_els.search.container.addEventListener('submit', () => {
+	if (
+		library_els.search.input.value.trim() === ''
+		|| library_els.view_options.filter.value === ''
+	)
+		return;
+
+	library_els.view_options.filter.value = '';
+	setLocalStorage({'lib_filter': ''});
+});

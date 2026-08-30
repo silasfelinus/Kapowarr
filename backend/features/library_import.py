@@ -33,7 +33,8 @@ from backend.features.library_import_policy import (
 from backend.features.metadata import search_volumes_everywhere
 from backend.features.tasks import Task, task_library
 from backend.implementations.file_matching import scan_files
-from backend.implementations.matching import select_best_volume_result_for_file
+from backend.implementations.matching import (
+    _rank_volume_results_for_file, select_best_volume_result_for_file)
 from backend.implementations.naming import mass_rename
 from backend.implementations.root_folders import RootFolders
 from backend.implementations.volumes import Library
@@ -377,7 +378,23 @@ async def _match_file_groups(
             )
             await async_sleep(request_delay)
 
-        cache[title] = await search_volumes_everywhere(title)
+        # What the fan-out should keep looking for. Title matching is what
+        # it used to stop on, and it is a weaker test than the one applied
+        # a few lines below: ComicVine answers almost anything with fifty
+        # rows, and a row whose title is exactly right can still be refused
+        # on language, type or issue coverage. The search stopped there
+        # regardless, so the folder was held having never asked the
+        # databases that might have had it. Ask the same question the
+        # decision will ask.
+        groups = [file_groups[number] for number in titles_to_groups[title]]
+
+        def usable(results: List[Any], groups=groups) -> bool:
+            return any(
+                _rank_volume_results_for_file(group, results, only_english)
+                for group in groups
+            )
+
+        cache[title] = await search_volumes_everywhere(title, accepts=usable)
         searches_made += 1
 
     matches: Dict[int, Dict[str, Any]] = {}

@@ -13,7 +13,8 @@ from enum import Enum
 from functools import wraps
 from importlib import import_module
 from time import time
-from typing import Any, Dict, List, Sequence, Tuple, Union
+from typing import (Any, Callable, Dict, List, Optional, Sequence, Tuple,
+                    Union)
 
 from backend.base.definitions import IssueMetadata, VolumeMetadata
 from backend.base.logging import LOGGER
@@ -317,7 +318,10 @@ class ProviderSearchResults(list):
         self.consulted = list(consulted)
 
 
-async def search_volumes_everywhere(title: str) -> List[VolumeMetadata]:
+async def search_volumes_everywhere(
+    title: str,
+    accepts: Optional[Callable[[List[VolumeMetadata]], bool]] = None
+) -> List[VolumeMetadata]:
     """Ask each configured provider for `title` until one recognises it.
 
     ComicVine is a huge database but far from a complete one, and it is
@@ -343,6 +347,18 @@ async def search_volumes_everywhere(title: str) -> List[VolumeMetadata]:
 
     Returns every result gathered when nobody recognises the title, so
     the review queue records what was actually considered.
+
+    `accepts` decides what "recognises" means. Title matching is the
+    default and is the cheapest question worth asking, but it is a
+    weaker test than the one applied moments later: a provider can
+    return a row whose title is exactly right and which the ranker then
+    refuses on language, type or issue coverage. The search stopped
+    there anyway, so the folder was held for review having never asked
+    the databases that might have had it -- four of job 21's
+    thirty-eight, among them `/content/Doonesbury`, where ComicVine
+    offered a "Doonesbury" the ranker would not take and neither GCD nor
+    Metron was consulted. A caller that knows what it will accept can
+    say so, and the fan-out keeps going until somebody offers it.
     """
     from backend.implementations.matching import match_title
 
@@ -385,8 +401,9 @@ async def search_volumes_everywhere(title: str) -> List[VolumeMetadata]:
             continue
 
         consulted.append(f'{provider_id}={len(results)}')
-        recognised = any(
-            match_title(title, result['title']) for result in results
+        recognised = (
+            accepts(results) if accepts is not None else
+            any(match_title(title, result['title']) for result in results)
         )
         consultation.append({
             'provider_id': provider_id,

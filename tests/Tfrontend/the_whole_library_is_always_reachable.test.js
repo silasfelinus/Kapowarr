@@ -29,18 +29,27 @@ const OVERSCAN = Number(source.match(/LIBRARY_OVERSCAN_PX = (\d+)/)[1]);
 const CORRECTIONS = Number(
 	source.match(/MAX_GEOMETRY_CORRECTIONS = (\d+)/)[1]
 );
+const MEASURE_ATTEMPTS = Number(
+	source.match(/MEASURE_ATTEMPTS = (\d+)/)[1]
+);
 
 // A list of `total` items, `per_row` across, each row `row_height` tall,
 // scrolled inside a `viewport`-tall window.
-function harness({total, per_row = 1, row_height = 40, viewport = 800}) {
+function harness({
+	total, per_row = 1, row_height = 40, viewport = 800,
+	// Frames for which every element measures zero, as it does inside a
+	// `display: none` subtree.
+	hidden_frames = 0
+}) {
 	const state = {
 		scroll: 0, before: 0, after: 0, range: null, renders: 0,
-		listeners: {}
+		measures: 0, listeners: {}
 	};
 
 	const context = {
 		LIBRARY_OVERSCAN_PX: OVERSCAN,
 		MAX_GEOMETRY_CORRECTIONS: CORRECTIONS,
+		MEASURE_ATTEMPTS,
 		LIBRARY_WINDOW_SAMPLE: 40,
 		console,
 		setTimeout, clearTimeout,
@@ -68,7 +77,11 @@ function harness({total, per_row = 1, row_height = 40, viewport = 800}) {
 	const window_ = context.virtualiseLibraryView({
 		anchor,
 		total,
-		itemsPerRow: () => ({per_row, row_height}),
+		itemsPerRow: () => {
+			if (state.measures++ < hidden_frames)
+				return {per_row: 0, row_height: 0};
+			return {per_row, row_height};
+		},
 		setSpacers: (before, after) => {
 			state.before = before;
 			state.after = after;
@@ -201,5 +214,70 @@ test('scrolling back and forth does not rebuild what is already there', () => {
 	assert.equal(
 		h.state.renders, after_start,
 		'a few pixels of scroll must not repaint the window'
+	);
+});
+
+// Silas, on the shipped build: poster scrolling "shows me about six posters,
+// half filled, that then fill, then I can repeat", and table view "shows a
+// bit more and then a whitespace and I have to restart the browser tab".
+//
+// `buildLibraryView` called `window.start()` before `on_first_batch()`, and
+// `on_first_batch` is what removes `hidden` from the container. Every
+// `getBoundingClientRect` inside a `display: none` subtree is zero, so the
+// measurement failed on every device, every time -- and the fallback for a
+// failed measurement was to render the whole library, which is the exact
+// behaviour windowing exists to replace.
+//
+// Measured in Chromium, mounting while hidden: the shipped code renders
+// 5,480 entries and takes 513ms to build the table. The bench that signed
+// this off never caught it, because its container was visible from the
+// first frame.
+
+test('a view that cannot measure yet does not render the whole library', () => {
+	const h = harness({total: 5480, hidden_frames: 1});
+	h.start();
+
+	// It retries and succeeds on the next frame, so what is rendered is a
+	// real window. What must never happen is the whole library: that was
+	// the old fallback, and it is 5,480 rows and 513ms of table build.
+	const [start, end] = h.state.range;
+	const windowful = Math.ceil((800 + 2 * OVERSCAN) / 40) + 2;
+
+	assert.ok(
+		end - start <= windowful,
+		`rendered ${end - start} entries, expected at most ${windowful}`
+	);
+	assert.notEqual(end - start, 5480);
+});
+
+test('and picks the measurement up once it can', () => {
+	const h = harness({total: 5480, hidden_frames: 1});
+	h.start();
+
+	assert.equal(h.claimedHeight(), h.expectedHeight);
+	h.scrollTo(h.expectedHeight / 2);
+	assert.ok(h.state.range[0] > 0, 'the window must follow the scroll');
+});
+
+test('a measurement that stays impossible still shows something', () => {
+	// Nothing on screen at all is worse than a short list.
+	const h = harness({total: 5480, hidden_frames: 999});
+	h.start();
+
+	assert.ok(h.state.range[1] > 0, 'the sample must still be rendered');
+	assert.ok(
+		h.state.range[1] <= 40,
+		'and it must still not be the whole library'
+	);
+});
+
+test('a scroll is another chance to measure', () => {
+	const h = harness({total: 5480, hidden_frames: MEASURE_ATTEMPTS + 1});
+	h.start();
+	h.scrollTo(1000);
+
+	assert.equal(
+		h.claimedHeight(), h.expectedHeight,
+		'the first successful measurement must be adopted whenever it lands'
 	);
 });

@@ -511,13 +511,39 @@ class SearchAll(Task):
                 )
                 continue
 
-            if results:
-                downloads += [
-                    (result['link'], volume_id, None)
-                    for result in results
-                ]
+            if not results:
+                continue
 
-        return downloads
+            # Queued as they are found, not at the end of the sweep.
+            #
+            # This used to accumulate every result and hand the whole list
+            # back for the runner to enqueue after `run()` returned. Over a
+            # library of thousands that means nothing downloads until the
+            # last volume has been searched -- Silas, watching a sweep that
+            # had been running twenty minutes: "it's kinda weird that
+            # nothing has been added to the queue yet."
+            #
+            # And the runner only enqueues `if not task.stop`, so pressing
+            # Stop threw away everything the sweep had found. Hours of
+            # searching, discarded because the user asked it to finish
+            # early.
+            downloads += [
+                (result['link'], volume_id, None)
+                for result in results
+            ]
+            self._queue(
+                (result['link'], volume_id, None, False)
+                for result in results
+            )
+
+        # Already queued. Returned for the caller that wants to know what a
+        # sweep found; the runner skips an empty list.
+        return []
+
+    @staticmethod
+    def _queue(entries) -> None:
+        from backend.features.download_queue import DownloadHandler
+        DownloadHandler().add_multiple(entries)
 
 
 class WeeklyPullListCheck(Task):

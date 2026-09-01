@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 from asyncio import gather, run
+from time import monotonic
 from typing import (Callable, Dict, List, Mapping, NamedTuple, Optional,
                     Sequence, Tuple, Type, Union)
 
@@ -471,6 +472,7 @@ def manual_search(
         volume_data.title, volume_data.year,
         f'#{issue_number}' if issue_number else ''
     )
+    started = monotonic()
 
     for title in (volume_data.title, volume_data.alt_title):
         if not title:
@@ -533,9 +535,36 @@ def manual_search(
         ))
 
         LOGGER.debug('Manual search results: %s', results)
+        _log_search_cost(volume_data, issue_number, started, len(results))
         return results
 
+    _log_search_cost(volume_data, issue_number, started, 0)
     return []
+
+
+def _log_search_cost(volume_data, issue_number, started, found: int) -> None:
+    """Say what a search cost, because nothing did.
+
+    A sweep over thousands of volumes is only as good as the time one
+    search takes, and that number appeared nowhere: the log said a search
+    started and then said the next one started, and the difference had to
+    be worked out by subtracting timestamps by hand. Silas's 2026-09-01
+    sweep was spending 110 seconds per search -- which at that library size
+    is months for one pass -- and the only way to see it was to notice the
+    gaps.
+
+    Configured indexer delays are the usual reason. A protocol's delay is
+    charged per request, and one search sends up to one request per query
+    phrasing per indexer, so the delay multiplies by however many
+    phrasings a fruitless search works through.
+    """
+    elapsed = monotonic() - started
+    LOGGER.info(
+        'Search finished in %.1fs: %s (%s) %s -- %d result(s)',
+        elapsed, volume_data.title, volume_data.year,
+        f'#{issue_number}' if issue_number else '',
+        found
+    )
 
 
 def auto_search(

@@ -10,7 +10,7 @@ cannot promote unrelated comics above a better match.
 from json import dumps, loads
 from sqlite3 import OperationalError
 from re import IGNORECASE, compile
-from typing import Any, Dict, List, Mapping, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from flask import has_app_context
 
@@ -40,6 +40,22 @@ DEFAULT_SOURCE_PREFERENCE = SOURCE_PREFERENCE_OPTIONS
 # everything."
 SEARCH_STRATEGY_OPTIONS = ('ranking', 'first_match')
 DEFAULT_SEARCH_STRATEGY = 'ranking'
+
+# Minimum seconds between two requests to the same indexer.
+#
+# Query builders produce several phrasings and the coordinator runs sources
+# concurrently, so without a gate one endpoint receives a burst. Prowlarr
+# relays that burst into the indexer's own limiter, which answers 429 -- and
+# a 429 is a quota, so the burst costs more than it buys.
+#
+# One second was hardcoded for Torznab and nothing paced Newznab. Both are
+# now settings, at those same defaults, because how fast an indexer wants to
+# be asked is a property of the indexer and not of Kapowarr. A public
+# tracker behind Prowlarr may want fifteen or thirty seconds; three pro
+# Usenet accounts want no delay at all.
+DEFAULT_TORRENT_SEARCH_DELAY = 1.0
+DEFAULT_USENET_SEARCH_DELAY = 0.0
+MAX_SEARCH_DELAY = 300.0
 QUALITY_PREFERENCE_OPTIONS = ('any', 'hd', 'sd')
 PACK_PREFERENCE_OPTIONS = ('neutral', 'prefer', 'avoid')
 DEFAULT_INDEXER_PRIORITY = 50
@@ -51,7 +67,9 @@ _DEFAULTS = {
     'pack_preference': 'neutral',
     'indexer_priorities': dumps({}),
     'client_priorities': dumps({}),
-    'acquisition_search_strategy': DEFAULT_SEARCH_STRATEGY
+    'acquisition_search_strategy': DEFAULT_SEARCH_STRATEGY,
+    'torrent_search_delay_seconds': DEFAULT_TORRENT_SEARCH_DELAY,
+    'usenet_search_delay_seconds': DEFAULT_USENET_SEARCH_DELAY
 }
 
 _DOWNLOAD_TYPE_NAMES = {
@@ -137,6 +155,8 @@ def get_acquisition_preferences() -> Dict[str, Any]:
             WHERE key IN (
                 'acquisition_source_preference',
                 'acquisition_search_strategy',
+                'torrent_search_delay_seconds',
+                'usenet_search_delay_seconds',
                 'getcomics_quality_preference',
                 'pack_preference',
                 'indexer_priorities',
@@ -147,6 +167,33 @@ def get_acquisition_preferences() -> Dict[str, Any]:
         rows = {}
 
     return _preferences_from(rows)
+
+
+def _as_delay(value: Any) -> Optional[float]:
+    """A usable delay, or None. Never raises: this runs on every read."""
+    if isinstance(value, bool):
+        return None
+    try:
+        delay = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not 0 <= delay <= MAX_SEARCH_DELAY:
+        return None
+    return delay
+
+
+def _validated_delay(key: str, value: Any) -> float:
+    delay = _as_delay(value)
+    if delay is None:
+        # Constructed only when a caller really did send something wrong;
+        # `InvalidKeyValue` logs, and a missing config row is not a warning.
+        raise InvalidKeyValue(key, value)
+    return delay
+
+
+def _delay_or_default(value: Any, default: float) -> float:
+    delay = _as_delay(value)
+    return default if delay is None else delay
 
 
 def _preferences_from(rows: Mapping[str, Any]) -> Dict[str, Any]:
@@ -190,6 +237,14 @@ def _preferences_from(rows: Mapping[str, Any]) -> Dict[str, Any]:
     return {
         'acquisition_source_preference': source_preference,
         'acquisition_search_strategy': strategy,
+        'torrent_search_delay_seconds': _delay_or_default(
+            rows.get('torrent_search_delay_seconds'),
+            DEFAULT_TORRENT_SEARCH_DELAY
+        ),
+        'usenet_search_delay_seconds': _delay_or_default(
+            rows.get('usenet_search_delay_seconds'),
+            DEFAULT_USENET_SEARCH_DELAY
+        ),
         'getcomics_quality_preference': quality,
         'pack_preference': pack,
         'indexer_priorities': indexer_priorities,
@@ -215,6 +270,10 @@ def update_acquisition_preferences(data: Mapping[str, Any]) -> Dict[str, Any]:
         if value not in SEARCH_STRATEGY_OPTIONS:
             raise InvalidKeyValue('acquisition_search_strategy', value)
         updates['acquisition_search_strategy'] = value
+
+    for key in ('torrent_search_delay_seconds', 'usenet_search_delay_seconds'):
+        if key in data:
+            updates[key] = str(_validated_delay(key, data[key]))
 
     if 'getcomics_quality_preference' in data:
         value = data['getcomics_quality_preference']
@@ -246,6 +305,15 @@ def update_acquisition_preferences(data: Mapping[str, Any]) -> Dict[str, Any]:
         commit()
 
     return get_acquisition_preferences()
+
+
+def search_delay(protocol: str) -> float:
+    """Minimum seconds between two requests to the same `protocol` indexer."""
+    key = (
+        'torrent_search_delay_seconds' if protocol == 'torrent'
+        else 'usenet_search_delay_seconds'
+    )
+    return get_acquisition_preferences()[key]
 
 
 def search_stops_at_first_match() -> bool:

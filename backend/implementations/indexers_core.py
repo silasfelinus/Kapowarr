@@ -48,13 +48,17 @@ returning a shape that isn't a well-formed Newznab response, not only
 non-JSON or an explicit `error` key (kapowarr/t-024).
 """
 
+from asyncio import Lock as AsyncLock, get_running_loop, sleep as async_sleep
 from concurrent.futures import (Future, ThreadPoolExecutor,
                                 TimeoutError as FutureTimeoutError)
 from json import loads as json_loads
 from os.path import splitext
 from re import search as re_search
+from threading import Lock as ThreadLock
+from time import monotonic
 from typing import Any, Dict, List, Mapping, Union
 from urllib.parse import urlsplit
+from weakref import WeakKeyDictionary
 
 from aiohttp import ClientError
 from requests import RequestException
@@ -71,6 +75,7 @@ from backend.base.helpers import (AsyncSession, Session,
                                   extract_year_from_date, normalise_base_url)
 from backend.base.helpers import redact_url
 from backend.base.logging import LOGGER
+from backend.features.acquisition_preferences import search_delay
 from backend.implementations.download_clients import NZBDownload
 from backend.implementations.matching import check_search_result_match
 from backend.implementations.volumes import Volume
@@ -369,6 +374,26 @@ class Indexers:
         return None
 
 
+_REQUEST_LOCKS_GUARD = ThreadLock()
+_REQUEST_LOCKS: "WeakKeyDictionary" = WeakKeyDictionary()
+_REQUEST_STARTS: "WeakKeyDictionary" = WeakKeyDictionary()
+
+
+def _request_state(indexer):
+    """Return the asyncio-loop-local pacing state for one Newznab feed.
+
+    Keyed by loop as well as by feed: each `asyncio.run` builds a new loop,
+    and a lock created in a previous one cannot be awaited in this one.
+    """
+    loop = get_running_loop()
+    key = indexer.base_url.lower()
+    with _REQUEST_LOCKS_GUARD:
+        locks = _REQUEST_LOCKS.setdefault(loop, {})
+        starts = _REQUEST_STARTS.setdefault(loop, {})
+        lock = locks.setdefault(key, AsyncLock())
+    return lock, starts, key
+
+
 async def search_indexer(
     session: AsyncSession,
     indexer: Indexer,
@@ -388,6 +413,20 @@ async def search_indexer(
             `search_getcomics()`'s `quiet_fail=True` -- one broken indexer
             shouldn't fail a search that combines results from several.
     """
+    # Newznab had no gate at all, on the theory that Usenet indexers are
+    # generous. Most are, and the default is still no delay -- but the
+    # coordinator runs several phrasings concurrently against one endpoint,
+    # and whether that burst is welcome is the indexer's call rather than
+    # Kapowarr's. Settings > Download > Usenet Search Delay.
+    interval = search_delay('usenet')
+    if interval > 0:
+        lock, starts, key = _request_state(indexer)
+        async with lock:
+            elapsed = monotonic() - starts.get(key, 0.0)
+            if elapsed < interval:
+                await async_sleep(interval - elapsed)
+            starts[key] = monotonic()
+
     body = await session.get_text(
         newznab_api_url(indexer.base_url),
         params={

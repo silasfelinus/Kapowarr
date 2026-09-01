@@ -349,6 +349,10 @@ const LIBRARY_WINDOW_SAMPLE = 40;
 // what it has.
 const MAX_GEOMETRY_CORRECTIONS = 3;
 
+// How many frames to keep trying for a first measurement before settling
+// for what is rendered and waiting for a scroll to try again.
+const MEASURE_ATTEMPTS = 5;
+
 // Kept with the spacer rows that have to span the table.
 const TABLE_COLUMN_COUNT = 6;
 
@@ -421,8 +425,15 @@ function virtualiseLibraryView(config) {
 
 	function update() {
 		frame = null;
-		if (row_height <= 0)
-			return;
+
+		if (row_height <= 0) {
+			// Never measured, or measured while the view was hidden. A
+			// scroll is as good a moment to try again as any, and until it
+			// succeeds the sample is what is on screen.
+			adopt(itemsPerRow());
+			if (row_height <= 0)
+				return;
+		};
 
 		const was = [per_row, row_height];
 		const [start, end] = visibleRange();
@@ -496,14 +507,6 @@ function virtualiseLibraryView(config) {
 
 	return {
 		start(sample_end) {
-			if (!measureFrom(Math.min(total, sample_end))) {
-				// Could not measure -- a hidden container, a zero-height row.
-				// Render everything rather than render nothing.
-				setSpacers(0, 0);
-				renderRange(0, total);
-				rendered = [0, total];
-				return;
-			};
 			// Captured at the document, so whichever element is scrolling
 			// is heard from without having to know which one it is.
 			document.addEventListener('scroll', on_scroll, {
@@ -512,7 +515,22 @@ function virtualiseLibraryView(config) {
 			// A phone rotating, or a browser bar sliding away, should not
 			// repaint once per pixel.
 			window.addEventListener('resize', debounced_resize);
-			schedule();
+
+			// Measuring can fail for a frame -- a container not laid out
+			// yet, a font still loading. Try again on the next frame rather
+			// than assuming, and never fall back to rendering the whole
+			// library: that fallback was worse than the problem, because it
+			// silently restored exactly what windowing replaced. A view
+			// that has not measured yet shows its sample and keeps trying.
+			const attempt = tries => {
+				if (measureFrom(Math.min(total, sample_end)) || tries <= 0) {
+					schedule();
+					return;
+				};
+				scheduleLibraryPaint(() => attempt(tries - 1));
+			};
+
+			attempt(MEASURE_ATTEMPTS);
 		},
 		destroy() {
 			document.removeEventListener('scroll', on_scroll, {capture: true});
@@ -685,11 +703,19 @@ function buildLibraryView(view, api_key, generation, on_first_batch=null) {
 			}
 		});
 
-		library_view_window.start(LIBRARY_WINDOW_SAMPLE);
-		library_els.mass_edit.button.disabled = false;
-
+		// Shown *before* the window measures itself. `showLibraryPage` is
+		// what removes `hidden` from the container, and every
+		// `getBoundingClientRect` inside a `display: none` subtree is zero:
+		// measuring first meant measuring nothing, every time, on every
+		// device. The window then could not compute a row height, and fell
+		// back to rendering the whole library -- which is the behaviour
+		// windowing exists to replace. The Chromium bench never caught it
+		// because its container was visible from the first frame.
 		if (on_first_batch !== null)
 			on_first_batch();
+
+		library_view_window.start(LIBRARY_WINDOW_SAMPLE);
+		library_els.mass_edit.button.disabled = false;
 	});
 };
 

@@ -290,8 +290,11 @@ function buildTableEntry(entry, volume, api_key, fragment) {
 	link.innerText = volume.title;
 
 	table_entry.querySelector('.table-year').innerText = volume.year;
+	// The number alone. "Volume 1" repeated down a column headed "Vol."
+	// spends the width of the whole word to say nothing, and on a phone
+	// that width comes straight out of the title.
 	table_entry.querySelector('.table-volume').innerText =
-		`Volume ${volume.volume_number}`;
+		volume.volume_number;
 
 	entry.table_entry = table_entry;
 	fragment.appendChild(table_entry);

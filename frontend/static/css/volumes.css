@@ -226,7 +226,7 @@ main:has(#massedit-toggle:checked) #table-container {
 }
 
 #table-container > table {
-	width: max(100%, 32rem);
+	width: max(100%, 26rem);
 	border-collapse: collapse;
 
 	/* Auto layout sizes columns by measuring every cell in the table. At
@@ -241,11 +241,26 @@ main:has(#massedit-toggle:checked) #table-container {
 
 /* Fixed layout takes its columns from the first row, so they are stated
    once here. The title column is whatever is left. */
-#table-container :where(th, td):nth-child(1) { width: 3rem; }
-#table-container :where(th, td):nth-child(3) { width: 4.5rem; }
-#table-container :where(th, td):nth-child(4) { width: 7rem; }
-#table-container :where(th, td):nth-child(5) { width: 8.5rem; }
-#table-container :where(th, td):nth-child(6) { width: 4.5rem; }
+/* Everything except the title is a fixed, known shape: a four-digit year,
+   a volume number, a ratio, an icon. They get exactly what they need and
+   the title gets the rest, because the title is the only column anyone
+   scans. At 390px the old numbers left it 60px -- 28px of that padding --
+   which is one character and an ellipsis. */
+/* The title takes whatever the others do not.
+   `width: 100%` rather than leaving it unset: under `table-layout: fixed`
+   an unset column is given a share of the remainder rather than all of it,
+   and at 390px that share came to 90px against 180px of space actually
+   free. Asking for the whole table and being cut down to the remainder is
+   the deterministic way to say "the rest". */
+#table-container :where(th, td):nth-child(2) { width: 100%; }
+#table-container :where(th, td):nth-child(1) { width: 2.5rem; }
+/* Wide enough for the heading, which is bold and so wider than the four
+   digits or the single number beneath it, plus the 1rem of padding either
+   side that this breakpoint keeps. */
+#table-container :where(th, td):nth-child(3) { width: 5rem; }
+#table-container :where(th, td):nth-child(4) { width: 4.2rem; }
+#table-container :where(th, td):nth-child(5) { width: 7rem; }
+#table-container :where(th, td):nth-child(6) { width: 4rem; }
 
 /* Every row the same height, which is what lets the spacers above and
    below the window stand in for the rest of the library at an exact
@@ -274,7 +289,7 @@ main:has(#massedit-toggle:checked) #table-container {
 }
 
 .table-volume {
-    min-width: 6.2rem;
+	text-align: center;
 }
 
 .table-entry {
@@ -291,8 +306,51 @@ main:has(#massedit-toggle:checked) #table-container {
 	padding-block: .5rem;
 }
 
+/* A header wider than its column used to run into the next one -- at 390px
+   "Progress" sat on top of "Monitored", which showed as "Mor". Columns are
+   sized for their contents, so the header is the thing that has to give. */
+#table-container th {
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+/* On a phone the padding was the layout: 16px each side of five columns
+   is 160px of a 512px table, none of it showing anything. */
+@media (max-width: 600px) {
+	#table-container :where(th, td) {
+		padding-inline: .4rem;
+	}
+	#table-container :where(th, td):nth-child(3) { width: 3rem; }
+	#table-container :where(th, td):nth-child(4) { width: 2.3rem; }
+	#table-container :where(th, td):nth-child(5) { width: 3.9rem; }
+	#table-container :where(th, td):nth-child(6) { width: 2.2rem; }
+
+	/* Sized for the header, not the data: "Year" set bold is wider than
+	   the four digits underneath it, so at the body font the headings
+	   were the thing forcing these columns open -- and when they were
+	   not given the room, they clipped to "Y..." and "V...". */
+	#table-container th {
+		font-size: .68rem;
+	}
+
+	/* The bar still reads as a bar at this size; the ratio inside it is
+	   what needs to shrink to stay legible rather than clipped. */
+	.table-prog-container {
+		font-size: .62rem;
+	}
+
+	.table-monitored {
+		width: 1.15rem;
+	}
+
+	#table-container > table {
+		width: 100%;
+	}
+}
+
 .table-prog-container {
-	min-width: 5rem;
+	min-width: 0;
 	border-radius: 4px;
 }
 

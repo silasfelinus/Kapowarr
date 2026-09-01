@@ -32,14 +32,6 @@ _DEFAULTS = {
 }
 
 
-def _ensure_defaults() -> None:
-    get_db().executemany(
-        'INSERT OR IGNORE INTO config(key, value) VALUES (?, ?);',
-        _DEFAULTS.items()
-    )
-    commit()
-
-
 def _validated_limit(key: str, value: Any) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise InvalidKeyValue(key, value)
@@ -52,26 +44,42 @@ def _read_limits() -> Dict[str, Any]:
     Search providers are also exercised by background tasks and pure parser
     tests, where Flask's ``g``-backed cursor cache is intentionally absent.
     Use Kapowarr's normal cursor when a context exists; otherwise do the tiny
-    read through an independent SQLite connection. The fallback is read-only,
-    so it does not bypass Kapowarr's normal write/transaction discipline.
+    read through an independent SQLite connection.
+
+    Read-only, in both branches and on purpose. This used to seed the config
+    table with the default limits first, on the theory that a read may as
+    well leave the row behind. That made a write out of a read on the
+    hottest path there is -- `filter_search_results` is called for every
+    indexer response, from inside `asyncio.gather` over every source -- and
+    on 2026-08-31 it did what a write there eventually does: it collided
+    with the library import holding the writer, raised "database is locked"
+    through `Search All`, and ended the day's sweep after twenty-one
+    volumes. Nothing needed the row: a missing key already means the
+    default, and the settings endpoint writes explicitly when a value
+    actually changes.
     """
     query = """SELECT key, value FROM config
         WHERE key IN ('minimum_grab_size_mb', 'maximum_grab_size_mb');"""
 
-    if has_app_context():
-        _ensure_defaults()
-        return dict(get_db().execute(query).fetchall())
-
-    if not DBConnection.file:
-        return {}
-
     try:
+        if has_app_context():
+            return dict(get_db().execute(query).fetchall())
+
+        if not DBConnection.file:
+            return {}
+
         with connect(DBConnection.file) as connection:
             return dict(connection.execute(query).fetchall())
+
     except OperationalError:
-        # Early startup/tests can legitimately reach this helper before the
-        # database or config table exists. Defaults are the correct policy in
-        # that case and will be persisted once a normal app context exists.
+        # Missing rows, a database that does not exist yet, or one whose
+        # writer is busy. Every one of those means "use the defaults", and
+        # `get_grab_size_limits` supplies them for any key not returned.
+        #
+        # It has to mean that, because of where this is called from:
+        # `filter_search_results` runs on every indexer response, inside
+        # `asyncio.gather` over every source, inside `Search All`. Letting a
+        # size-limit lookup raise there ends the whole nightly sweep.
         return {}
 
 

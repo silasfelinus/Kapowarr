@@ -185,10 +185,11 @@
 
 		usingApiKey()
 		.then(apiKey => {
-			if (continuousPoll !== null) {
-				clearInterval(continuousPoll);
-				continuousPoll = null;
-			};
+			// The poll schedules itself, so stopping it means telling it not
+			// to schedule again as well as cancelling the pending timer --
+			// clearing the handle alone leaves an in-flight request that
+			// will arm the next one when it lands.
+			stopContinuousPoll();
 
 			continuousReviewOpen = false;
 			continuousPanelDismissed = false;

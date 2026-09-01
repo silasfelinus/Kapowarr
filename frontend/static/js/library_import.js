@@ -683,9 +683,24 @@ function stopContinuousImport(api_key) {
 	});
 };
 
+// A second between replies, not a request per second whatever happens.
+const CONTINUOUS_POLL_INTERVAL_MS = 1000;
+
+let stopContinuousPollFn = null;
+
+function stopContinuousPoll() {
+	if (stopContinuousPollFn !== null) {
+		stopContinuousPollFn();
+		stopContinuousPollFn = null;
+	};
+	if (continuousPoll !== null) {
+		clearTimeout(continuousPoll);
+		continuousPoll = null;
+	};
+};
+
 function pollContinuousTask(api_key) {
-	if (continuousPoll !== null)
-		clearInterval(continuousPoll);
+	stopContinuousPoll();
 
 	// One request per tick, to the endpoint that reports the durable job and
 	// the live task together. Polling the task queue separately was what let
@@ -711,8 +726,42 @@ function pollContinuousTask(api_key) {
 	})
 	.catch(() => null);
 
-	refresh();
-	continuousPoll = setInterval(refresh, 1000);
+	// One request in flight at a time, and the next one scheduled only once
+	// this one has settled.
+	//
+	// `setInterval(refresh, 1000)` fired regardless of whether the previous
+	// snapshot had come back. That is fine while the server answers in
+	// milliseconds and catastrophic when it does not: a library import
+	// holding the SQLite writer makes this endpoint take seconds, the timer
+	// keeps adding requests, and they pile up. The browser's own connection
+	// pool for the host fills with them, so every other request the page
+	// makes -- opening the search window, the search itself -- queues behind
+	// a backlog of stale polls and the page stops responding before the user
+	// has typed anything. Kapowarr's log shows the far end of the same
+	// pileup: waitress hitting its connection limit and refusing new
+	// connections, twenty-one times in twenty-seven seconds
+	// (2026-09-01 13:48).
+	//
+	// Self-scheduling costs nothing when the server is quick -- a fast reply
+	// still leaves a one-second gap -- and degrades to "as often as the
+	// server can answer" when it is not.
+	let stopped = false;
+
+	const tick = () => {
+		if (stopped)
+			return;
+
+		refresh().then(() => {
+			if (stopped)
+				return;
+			continuousPoll = setTimeout(tick, CONTINUOUS_POLL_INTERVAL_MS);
+		});
+	};
+
+	stopContinuousPollFn = () => {
+		stopped = true;
+	};
+	tick();
 };
 
 // A pass that already finished, or one interrupted by a restart, leaves nothing

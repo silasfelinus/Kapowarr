@@ -482,13 +482,41 @@ class SearchAll(Task):
                 break
             self.message = f'Searching for {volume_title}'
             ws.emit(TaskStatusEvent(self.message))
-            # Get search results and download them
-            results = auto_search(volume_id)
+
+            try:
+                results = auto_search(volume_id)
+
+            except Exception:
+                # One volume must not cost the rest of the library its
+                # nightly search.
+                #
+                # This loop is the whole of unattended acquisition: it runs
+                # once a day, and it is what fills in issues nobody went
+                # looking for by hand. Any exception from any of the sources
+                # it touches used to end the task where it stood, leaving
+                # every volume after that one unsearched until tomorrow --
+                # when the same thing would happen at roughly the same
+                # place. On 2026-08-31 that was a "database is locked" out
+                # of a config read on the search path, twenty-one volumes
+                # into a library of thousands, and it is why almost nothing
+                # arrived that had not been searched for by hand.
+                #
+                # Broad on purpose. The sources here are indexers, trackers
+                # and HTTP scrapers, and the failure that matters is the one
+                # not thought of.
+                LOGGER.exception(
+                    'Auto search failed for volume %d (%s); '
+                    'continuing with the rest of the library',
+                    volume_id, volume_title
+                )
+                continue
+
             if results:
                 downloads += [
                     (result['link'], volume_id, None)
                     for result in results
                 ]
+
         return downloads
 
 

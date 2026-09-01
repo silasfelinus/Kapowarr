@@ -8,6 +8,7 @@ cannot promote unrelated comics above a better match.
 """
 
 from json import dumps, loads
+from sqlite3 import OperationalError
 from re import IGNORECASE, compile
 from typing import Any, Dict, List, Mapping, Sequence
 
@@ -38,14 +39,6 @@ _DOWNLOAD_TYPE_NAMES = {
 
 _HD_RE = compile(r'(^|[^a-z0-9])hd([^a-z0-9]|$)', IGNORECASE)
 _SD_RE = compile(r'(^|[^a-z0-9])sd([^a-z0-9]|$)', IGNORECASE)
-
-
-def _ensure_defaults() -> None:
-    get_db().executemany(
-        'INSERT OR IGNORE INTO config(key, value) VALUES (?, ?);',
-        _DEFAULTS.items()
-    )
-    commit()
 
 
 def _validated_source_preference(value: Any) -> List[str]:
@@ -93,18 +86,33 @@ def _validated_client_priority_map(value: Any) -> Dict[str, int]:
 
 
 def get_acquisition_preferences() -> Dict[str, Any]:
-    """Return the current acquisition policy, inserting defaults lazily."""
-    _ensure_defaults()
-    rows = dict(get_db().execute(
-        """SELECT key, value FROM config
-        WHERE key IN (
-            'acquisition_source_preference',
-            'getcomics_quality_preference',
-            'pack_preference',
-            'indexer_priorities',
-            'client_priorities'
-        );"""
-    ).fetchall())
+    """Return the current acquisition policy.
+
+    Read-only. This used to seed the config table with the defaults first,
+    which made a write out of a read on a path that runs per search result
+    (`file_quality` consults the source preference for every candidate it
+    ranks). A write there contends with whatever long job holds the SQLite
+    writer, and losing that race raises "database is locked" out through
+    the search and ends the task -- which is exactly how `Search All` died
+    on 2026-08-31, in the sibling of this function.
+
+    Nothing needed the rows to exist: every value below falls back to its
+    default when the key is absent, and the settings endpoint writes
+    explicitly when one actually changes.
+    """
+    try:
+        rows = dict(get_db().execute(
+            """SELECT key, value FROM config
+            WHERE key IN (
+                'acquisition_source_preference',
+                'getcomics_quality_preference',
+                'pack_preference',
+                'indexer_priorities',
+                'client_priorities'
+            );"""
+        ).fetchall())
+    except OperationalError:
+        rows = {}
 
     try:
         source_preference = _validated_source_preference(

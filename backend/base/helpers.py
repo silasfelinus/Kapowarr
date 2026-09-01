@@ -9,7 +9,9 @@ from __future__ import annotations
 from asyncio import sleep
 from base64 import urlsafe_b64encode
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from time import monotonic
 from functools import lru_cache
 from hashlib import pbkdf2_hmac
 from multiprocessing.pool import Pool
@@ -1165,6 +1167,78 @@ class Session(RSession):
         return result
 
 
+# Hosts that have reported a rate limit, and the monotonic time at which it
+# is worth asking them again.
+#
+# A search sweep walks thousands of volumes. Without this, an indexer that
+# has spent its daily quota is rediscovered on every one of them -- and,
+# because 429 sat in the retry forcelist, rediscovered five times per volume
+# with exponential backoff in between. That is not just wasted: those
+# rejected requests are what the limiter is counting, so the retries make
+# the limit arrive sooner and stay longer. Silas's Prowlarr log shows nine
+# searches turning into forty-five requests against indexers allowing a
+# hundred queries a day between them.
+_rate_limited_until: Dict[str, float] = {}
+
+
+class RateLimited(ClientError):
+    """A host said it is out of quota.
+
+    A `ClientError` subclass so every existing caller keeps handling it the
+    way it handles any other request failure, and its own type so the retry
+    loop can tell it apart from the failures worth retrying.
+    """
+
+
+def _rate_limit_host(url: str) -> str:
+    return urlsplit(url).netloc.lower()
+
+
+def rate_limit_cooldown_remaining(url: str) -> float:
+    """Seconds left before `url`'s host is worth asking again."""
+    until = _rate_limited_until.get(_rate_limit_host(url))
+    if until is None:
+        return 0.0
+    return max(0.0, until - monotonic())
+
+
+def note_rate_limit(url: str, retry_after: Optional[float] = None) -> float:
+    """Record that a host reported a rate limit. Returns the cooldown set."""
+    cooldown = (
+        retry_after if retry_after is not None
+        else Constants.RATE_LIMIT_DEFAULT_COOLDOWN
+    )
+    _rate_limited_until[_rate_limit_host(url)] = monotonic() + cooldown
+    return cooldown
+
+
+def clear_rate_limits() -> None:
+    """Forget every recorded limit. For tests and for a manual retry."""
+    _rate_limited_until.clear()
+
+
+def parse_retry_after(value: Optional[str]) -> Optional[float]:
+    """Seconds from a Retry-After header, in either of its two forms."""
+    if not value:
+        return None
+
+    try:
+        return max(0.0, float(value.strip()))
+    except ValueError:
+        pass
+
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+
+
 class AsyncSession(ClientSession):
     """
     Inherits from `aiohttp.ClientSession`. Adds retries, sets user agent and
@@ -1193,6 +1267,20 @@ class AsyncSession(ClientSession):
         method, url = args[0], args[1]
         sleep_time = Constants.BACKOFF_FACTOR_RETRIES
 
+        # A host that has already said it is out of quota is not asked again
+        # until it is worth asking. Skipped without a request, because the
+        # request is the thing being rationed.
+        cooldown = rate_limit_cooldown_remaining(url)
+        if cooldown:
+            LOGGER.debug(
+                'Skipping %s to %s: rate limited for another %.0fs',
+                method, redact_url(url), cooldown
+            )
+            raise RateLimited(
+                f'HTTP {Constants.RATE_LIMIT_STATUS} '
+                f'(rate limited for another {cooldown:.0f}s)'
+            )
+
         ua, cf_cookies = self.fs.get_ua_cookies(url)
         self.headers.update({"User-Agent": ua})
         self.cookie_jar.update_cookies(cf_cookies)
@@ -1212,9 +1300,53 @@ class AsyncSession(ClientSession):
                     int(response.headers.get('Content-Length', -1))
                 )
 
+                if response.status == Constants.RATE_LIMIT_STATUS:
+                    # Not a hiccup. Retrying a quota spends the quota: each
+                    # attempt is another request the limiter counts, so the
+                    # five rounds this used to take turned one search into
+                    # five and brought the limit on faster.
+                    #
+                    # A short Retry-After is a burst limiter catching its
+                    # breath and is worth waiting out. Anything else means
+                    # the window will not reopen while this search is
+                    # running, so stop asking -- and remember, so the rest
+                    # of the sweep does not rediscover it volume by volume.
+                    retry_after = parse_retry_after(
+                        response.headers.get('Retry-After')
+                    )
+                    if (
+                        retry_after is not None
+                        and retry_after <= Constants.RATE_LIMIT_MAX_HONOURED_WAIT
+                        and round < Constants.TOTAL_RETRIES
+                    ):
+                        LOGGER.warning(
+                            '%s to %s is rate limited; waiting the %.0fs it '
+                            'asked for',
+                            method, redact_url(url), retry_after
+                        )
+                        await sleep(retry_after)
+                        continue
+
+                    held = note_rate_limit(url, retry_after)
+                    LOGGER.warning(
+                        '%s to %s is rate limited; not asking again for '
+                        '%.0fs. Retrying would only spend more of the '
+                        'quota that is exhausted.',
+                        method, redact_url(url), held
+                    )
+                    raise RateLimited(
+                        f'HTTP {response.status} (rate limited)'
+                    )
+
                 if response.status in Constants.STATUS_FORCELIST_RETRIES:
                     reason = f'HTTP {response.status}'
                     raise ClientError(reason)
+
+            except RateLimited:
+                # Deliberately not retried: the loop below would spend four
+                # more requests discovering the same quota, which is how a
+                # single search came to cost five.
+                raise
 
             except ClientError as error:
                 if not reason:

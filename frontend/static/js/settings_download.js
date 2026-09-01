@@ -24,6 +24,10 @@ function fillSettings(api_key) {
 		document.querySelector('#pack-preference-input').value = acquisition.pack_preference;
 		document.querySelector('#search-strategy-input').value =
 			acquisition.acquisition_search_strategy;
+		document.querySelector('#torrent-search-delay-input').value =
+			acquisition.torrent_search_delay_seconds;
+		document.querySelector('#usenet-search-delay-input').value =
+			acquisition.usenet_search_delay_seconds;
 	});
 };
 
@@ -49,7 +53,13 @@ function saveSettings(api_key) {
 		'getcomics_quality_preference': document.querySelector('#getcomics-quality-input').value,
 		'pack_preference': document.querySelector('#pack-preference-input').value,
 		'acquisition_search_strategy':
-			document.querySelector('#search-strategy-input').value
+			document.querySelector('#search-strategy-input').value,
+		'torrent_search_delay_seconds': parseFloat(
+			document.querySelector('#torrent-search-delay-input').value || 0
+		),
+		'usenet_search_delay_seconds': parseFloat(
+			document.querySelector('#usenet-search-delay-input').value || 0
+		)
 	};
 	Promise.all([
 		sendAPI('PUT', '/settings', api_key, {}, settingsData),

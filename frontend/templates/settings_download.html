@@ -109,6 +109,20 @@
 						</td>
 					</tr>
 					<tr>
+						<th><label for="torrent-search-delay-input">Torrent Search Delay</label></th>
+						<td>
+							<input type="number" id="torrent-search-delay-input" min="0" max="300" step="0.5">
+							<p>Minimum seconds between two searches of the same torrent indexer. The default is 1. Raise it if an indexer answers <code>429</code>: public trackers behind Prowlarr are usually happier with 15&ndash;30. Set to 0 for no delay.</p>
+						</td>
+					</tr>
+					<tr>
+						<th><label for="usenet-search-delay-input">Usenet Search Delay</label></th>
+						<td>
+							<input type="number" id="usenet-search-delay-input" min="0" max="300" step="0.5">
+							<p>The same, for Usenet indexers. The default is 0, since most allow far more queries than a search will ever use.</p>
+						</td>
+					</tr>
+					<tr>
 						<th><label for="minimum-grab-size-input">Minimum Grab Size</label></th>
 						<td>
 							<input type="number" id="minimum-grab-size-input" min="0" step="1">

@@ -43,6 +43,8 @@ from backend.features.grab_size_limits import filter_search_results
 from backend.implementations.download_clients import TorrentDownload
 from backend.implementations.external_clients import ExternalClients
 from backend.implementations.matching import check_search_result_match
+from backend.features.acquisition_preferences import (
+    DEFAULT_TORRENT_SEARCH_DELAY, search_delay)
 from backend.implementations.naming import generate_issue_name
 from backend.implementations.volumes import Volume
 from backend.internals.db import get_db
@@ -55,7 +57,13 @@ TORZNAB_DOWNLOAD_TIMEOUT = 30.0
 # Torznab endpoint receives a burst of near-simultaneous requests. Prowlarr can
 # then relay the burst into an indexer's own rate limit. One request per second
 # is cheap enough for interactive search while avoiding the observed 429 storm.
-TORZNAB_REQUEST_MIN_INTERVAL = 1.0
+#
+# Kept as the default rather than the rule: how fast an indexer wants to be
+# asked is a property of the indexer. A public tracker behind Prowlarr may
+# want fifteen or thirty seconds, and a second was demonstrably too fast for
+# Silas's three (torrentdownload, limetorrents, 1337x). Settings > Download >
+# Torrent Search Delay.
+TORZNAB_REQUEST_MIN_INTERVAL = DEFAULT_TORRENT_SEARCH_DELAY
 DEFAULT_COMIC_CATEGORIES = '7030'
 TORZNAB_TAG_KEY = 'kapowarr-torznab'
 TORZNAB_TITLE_KEY = 'kapowarr-title'
@@ -506,11 +514,12 @@ async def search_torznab_indexer(
     if indexer.category_filter_enabled and indexer.categories:
         params['cat'] = indexer.categories
 
+    interval = search_delay('torrent')
     lock, starts, key = _request_state(indexer)
     async with lock:
         elapsed = monotonic() - starts.get(key, 0.0)
-        if elapsed < TORZNAB_REQUEST_MIN_INTERVAL:
-            await async_sleep(TORZNAB_REQUEST_MIN_INTERVAL - elapsed)
+        if elapsed < interval:
+            await async_sleep(interval - elapsed)
         starts[key] = monotonic()
         body = await session.get_text(
             indexer.base_url,

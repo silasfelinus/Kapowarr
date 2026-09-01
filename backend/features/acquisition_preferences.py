@@ -12,12 +12,34 @@ from sqlite3 import OperationalError
 from re import IGNORECASE, compile
 from typing import Any, Dict, List, Mapping, Sequence
 
+from flask import has_app_context
+
 from backend.base.custom_exceptions import InvalidKeyValue, KeyNotFound
 from backend.base.definitions import DownloadGroup, DownloadType
 from backend.internals.db import commit, get_db
 
 SOURCE_PREFERENCE_OPTIONS = ('direct', 'torrent', 'usenet')
 DEFAULT_SOURCE_PREFERENCE = SOURCE_PREFERENCE_OPTIONS
+
+# What the source preference is allowed to decide.
+#
+# 'ranking' is what it has always done: every protocol is searched at once
+# and the preference breaks ties between otherwise-equal results. That is
+# the right default -- it finds the most, fastest -- and it is the wrong
+# behaviour for anyone whose protocols are not equally cheap. Silas has
+# three pro Usenet accounts allowing around ten thousand queries a day
+# between them, and three public torrent indexers allowing a hundred; under
+# 'ranking' every search spends the scarce quota whether the plentiful one
+# had the issue or not.
+#
+# 'first_match' lets the preference decide whether a protocol is asked at
+# all: protocols are searched in preference order, and the first one to
+# return a result that actually matches the volume ends the search. Silas,
+# 2026-09-01: "I would rather miss something on the first go around, and
+# then pick them up later as we drip torrent checks, then delays
+# everything."
+SEARCH_STRATEGY_OPTIONS = ('ranking', 'first_match')
+DEFAULT_SEARCH_STRATEGY = 'ranking'
 QUALITY_PREFERENCE_OPTIONS = ('any', 'hd', 'sd')
 PACK_PREFERENCE_OPTIONS = ('neutral', 'prefer', 'avoid')
 DEFAULT_INDEXER_PRIORITY = 50
@@ -28,7 +50,8 @@ _DEFAULTS = {
     'getcomics_quality_preference': 'any',
     'pack_preference': 'neutral',
     'indexer_priorities': dumps({}),
-    'client_priorities': dumps({})
+    'client_priorities': dumps({}),
+    'acquisition_search_strategy': DEFAULT_SEARCH_STRATEGY
 }
 
 _DOWNLOAD_TYPE_NAMES = {
@@ -100,11 +123,20 @@ def get_acquisition_preferences() -> Dict[str, Any]:
     default when the key is absent, and the settings endpoint writes
     explicitly when one actually changes.
     """
+    if not has_app_context():
+        # Background tasks and parser tests reach the search path without
+        # Flask's g-backed cursor. Defaults are the right policy there, and
+        # every value below already falls back to one -- the same trade
+        # `grab_size_limits._read_limits` makes for the same reason.
+        rows: Dict[str, Any] = {}
+        return _preferences_from(rows)
+
     try:
         rows = dict(get_db().execute(
             """SELECT key, value FROM config
             WHERE key IN (
                 'acquisition_source_preference',
+                'acquisition_search_strategy',
                 'getcomics_quality_preference',
                 'pack_preference',
                 'indexer_priorities',
@@ -113,6 +145,12 @@ def get_acquisition_preferences() -> Dict[str, Any]:
         ).fetchall())
     except OperationalError:
         rows = {}
+
+    return _preferences_from(rows)
+
+
+def _preferences_from(rows: Mapping[str, Any]) -> Dict[str, Any]:
+    """Turn whatever config rows came back into a complete policy."""
 
     try:
         source_preference = _validated_source_preference(
@@ -143,8 +181,15 @@ def get_acquisition_preferences() -> Dict[str, Any]:
     except (TypeError, ValueError, InvalidKeyValue):
         client_priorities = {}
 
+    strategy = rows.get(
+        'acquisition_search_strategy', DEFAULT_SEARCH_STRATEGY
+    )
+    if strategy not in SEARCH_STRATEGY_OPTIONS:
+        strategy = DEFAULT_SEARCH_STRATEGY
+
     return {
         'acquisition_source_preference': source_preference,
+        'acquisition_search_strategy': strategy,
         'getcomics_quality_preference': quality,
         'pack_preference': pack,
         'indexer_priorities': indexer_priorities,
@@ -164,6 +209,12 @@ def update_acquisition_preferences(data: Mapping[str, Any]) -> Dict[str, Any]:
         updates['acquisition_source_preference'] = dumps(
             _validated_source_preference(data['acquisition_source_preference'])
         )
+
+    if 'acquisition_search_strategy' in data:
+        value = data['acquisition_search_strategy']
+        if value not in SEARCH_STRATEGY_OPTIONS:
+            raise InvalidKeyValue('acquisition_search_strategy', value)
+        updates['acquisition_search_strategy'] = value
 
     if 'getcomics_quality_preference' in data:
         value = data['getcomics_quality_preference']
@@ -195,6 +246,20 @@ def update_acquisition_preferences(data: Mapping[str, Any]) -> Dict[str, Any]:
         commit()
 
     return get_acquisition_preferences()
+
+
+def search_stops_at_first_match() -> bool:
+    """Whether the source preference decides who gets asked, not just who wins.
+
+    Under 'ranking' every protocol is searched at once and the preference
+    only breaks ties. That finds the most and finds it fastest, and it
+    assumes every protocol costs the same to ask -- which stops being true
+    the moment one of them is metered far more tightly than the others.
+    """
+    return (
+        get_acquisition_preferences()['acquisition_search_strategy']
+        == 'first_match'
+    )
 
 
 def ordered_download_types(

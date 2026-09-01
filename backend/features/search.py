@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 
 from asyncio import gather, run
-from typing import (Dict, List, Mapping, NamedTuple, Sequence, Tuple, Type,
-                    Union)
+from typing import (Callable, Dict, List, Mapping, NamedTuple, Optional,
+                    Sequence, Tuple, Type, Union)
 
 from backend.base.definitions import (DownloadType, MatchedSearchResultData,
                                       SearchResultData, SearchResultMatchData,
@@ -12,10 +12,9 @@ from backend.base.helpers import (AsyncSession, check_overlapping_issues,
                                   extract_year_from_date, force_range,
                                   normalise_query_string)
 from backend.base.logging import LOGGER
-from backend.features.acquisition_preferences import (availability_rank,
-                                                       indexer_priority,
-                                                       ordered_download_types,
-                                                       pack_preference_rank)
+from backend.features.acquisition_preferences import (
+    availability_rank, indexer_priority, ordered_download_types,
+    pack_preference_rank, search_stops_at_first_match)
 from backend.implementations.getcomics import search_getcomics
 from backend.implementations.indexers import Indexers, search_indexer
 from backend.implementations.matching import check_search_result_match
@@ -323,7 +322,8 @@ async def _search_source(Source, queries: Sequence[str], session):
 
 
 async def search_planned_queries(
-    query_plan: Mapping[DownloadType, Sequence[str]]
+    query_plan: Mapping[DownloadType, Sequence[str]],
+    accepts: Optional[Callable[[List[SearchResultData]], bool]] = None
 ) -> List[SearchResultData]:
     """Search each protocol only with the queries built for that protocol.
 
@@ -333,16 +333,56 @@ async def search_planned_queries(
 
     Sources are still searched concurrently; the phrasings within one source
     are not, because each is only sent when the one before it found nothing.
-    """
-    async with AsyncSession() as session:
-        searches = [
-            _search_source(Source, query_plan[download_type], session)
-            for download_type in ordered_download_types(tuple(query_plan))
-            for Source in SearchSources.sources.get(download_type, [])
-        ]
-        responses = await gather(*searches)
 
-    return _dedupe_search_results(responses)
+    `accepts` turns the preference from an ordering into a decision. Given
+    one, protocols are searched a tier at a time in preference order and the
+    first tier whose results it accepts ends the search -- so a protocol
+    further down the list is never asked when a preferred one already had
+    the issue. That matters when the protocols are not equally cheap: three
+    pro Usenet accounts allow around ten thousand queries a day between
+    them, three public torrent indexers a hundred, and under the concurrent
+    search every issue spends the scarce one whether the plentiful one
+    answered or not.
+
+    It asks whether the results *match*, not whether there are any. An
+    indexer will happily return fifty rows for a title it does not have, and
+    stopping on those would be worse than not gating at all.
+    """
+    if accepts is None:
+        async with AsyncSession() as session:
+            searches = [
+                _search_source(Source, query_plan[download_type], session)
+                for download_type in ordered_download_types(tuple(query_plan))
+                for Source in SearchSources.sources.get(download_type, [])
+            ]
+            responses = await gather(*searches)
+
+        return _dedupe_search_results(responses)
+
+    gathered: List[List[SearchResultData]] = []
+    async with AsyncSession() as session:
+        for download_type in ordered_download_types(tuple(query_plan)):
+            sources = SearchSources.sources.get(download_type, [])
+            if not sources:
+                continue
+
+            responses = await gather(*(
+                _search_source(Source, query_plan[download_type], session)
+                for Source in sources
+            ))
+            gathered.extend(responses)
+
+            results = _dedupe_search_results(gathered)
+            if accepts(results):
+                LOGGER.debug(
+                    'Stopping at %s: it has a match, so no lower-preference '
+                    'protocol is asked', download_type.name
+                )
+                return results
+
+    # Nobody matched. Everything gathered is returned regardless, so the
+    # caller ranks over the same pool it would have had anyway.
+    return _dedupe_search_results(gathered)
 
 
 def _match_search_result(
@@ -453,19 +493,32 @@ def manual_search(
                 issue_number
             )
 
-        search_results = run(search_planned_queries(query_plan))
-        if not search_results:
-            continue
-
-        results: List[MatchedSearchResultData] = [
-            {
+        def matched(result):
+            return {
                 **result,
                 **_match_search_result(
                     result, volume_data, volume_issues,
                     number_to_year, calculated_issue_number
                 )
             }
-            for result in search_results
+
+        # Under `first_match` the preference decides who gets asked, so the
+        # question a tier has to answer is whether it found this issue --
+        # not whether it returned rows. An indexer returns fifty rows for a
+        # title it does not carry, and stopping on those would spend the
+        # preferred protocol's answer on nothing while never asking the
+        # protocol that had it.
+        accepts = None
+        if search_stops_at_first_match():
+            def accepts(results):
+                return any(matched(result)['match'] for result in results)
+
+        search_results = run(search_planned_queries(query_plan, accepts))
+        if not search_results:
+            continue
+
+        results: List[MatchedSearchResultData] = [
+            matched(result) for result in search_results
         ]
 
         search_title = normalise_query_string(title).replace(':', '')

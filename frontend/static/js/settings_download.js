@@ -22,6 +22,8 @@ function fillSettings(api_key) {
 		document.querySelector('#maximum-grab-size-input').value = acquisition.maximum_grab_size_mb;
 		document.querySelector('#getcomics-quality-input').value = acquisition.getcomics_quality_preference;
 		document.querySelector('#pack-preference-input').value = acquisition.pack_preference;
+		document.querySelector('#search-strategy-input').value =
+			acquisition.acquisition_search_strategy;
 	});
 };
 
@@ -45,7 +47,9 @@ function saveSettings(api_key) {
 		'minimum_grab_size_mb': parseInt(document.querySelector('#minimum-grab-size-input').value || 0),
 		'maximum_grab_size_mb': parseInt(document.querySelector('#maximum-grab-size-input').value || 0),
 		'getcomics_quality_preference': document.querySelector('#getcomics-quality-input').value,
-		'pack_preference': document.querySelector('#pack-preference-input').value
+		'pack_preference': document.querySelector('#pack-preference-input').value,
+		'acquisition_search_strategy':
+			document.querySelector('#search-strategy-input').value
 	};
 	Promise.all([
 		sendAPI('PUT', '/settings', api_key, {}, settingsData),

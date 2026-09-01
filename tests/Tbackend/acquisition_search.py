@@ -80,7 +80,7 @@ class SearchCoordinatorTest(unittest.TestCase):
 
         captured = []
 
-        async def fake_search_planned_queries(plan):
+        async def fake_search_planned_queries(plan, accepts=None):
             captured.append(plan)
             return []
 

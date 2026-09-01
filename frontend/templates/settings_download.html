@@ -98,6 +98,17 @@
 						</td>
 					</tr>
 					<tr>
+						<th><label for="search-strategy-input">How Far To Search</label></th>
+						<td>
+							<select id="search-strategy-input">
+								<option value="ranking">Search every source</option>
+								<option value="first_match">Stop at the first source with a match</option>
+							</select>
+							<p><strong>Search every source</strong> asks all of them at once and uses Source Priority to pick between the results. It finds the most, and it spends every source's quota on every search.</p>
+							<p><strong>Stop at the first source with a match</strong> works down Source Priority and stops as soon as one actually has the issue, so a source further down is never asked when a preferred one already had it. Choose this when your sources are not equally cheap &mdash; an unmetered Usenet account above tightly rationed public torrent indexers, for instance. It can miss a better release that a lower-priority source had.</p>
+						</td>
+					</tr>
+					<tr>
 						<th><label for="minimum-grab-size-input">Minimum Grab Size</label></th>
 						<td>
 							<input type="number" id="minimum-grab-size-input" min="0" step="1">

@@ -97,6 +97,24 @@ class Constants:
     "Backoff factor for waiting in-between retries"
 
     STATUS_FORCELIST_RETRIES = (429, 500, 502, 503, 504)
+
+    # 429 is in that list because urllib3's own retry honours Retry-After,
+    # but the async session handles it separately -- see `RATE_LIMIT_*`
+    # below and `AsyncSession._request`. A 500 is a hiccup and retrying it
+    # is free; a 429 is a quota, and retrying it spends the very thing it
+    # is telling you that you have run out of.
+    RATE_LIMIT_STATUS = 429
+
+    # A Retry-After this short is a burst limiter catching its breath and is
+    # worth waiting out. Anything longer is a window that will not reopen on
+    # a timescale a search can wait for.
+    RATE_LIMIT_MAX_HONOURED_WAIT = 30.0
+
+    # How long to leave a host alone after it reports a limit with no usable
+    # Retry-After. Short enough that a limit which resets quickly is picked
+    # back up within one sweep, long enough that a daily quota is not
+    # re-probed thousands of times on the way through the library.
+    RATE_LIMIT_DEFAULT_COOLDOWN = 900.0
     """The HTTP status codes for which a retry should be done
 
     429 is here because it is the one status that explicitly asks to be

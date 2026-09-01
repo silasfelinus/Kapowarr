@@ -34,10 +34,18 @@ def _task(volumes):
 
 
 def _run(task, cursor, auto_search):
+    """Returns what the sweep queued, which is now the thing to assert on:
+    results are enqueued per volume rather than handed back at the end."""
+    queued = []
     with patch.object(TC, 'get_db', return_value=cursor), \
             patch.object(TC, 'WebSocket', MagicMock()), \
-            patch.object(TC, 'auto_search', side_effect=auto_search):
-        return task.run()
+            patch.object(TC, 'auto_search', side_effect=auto_search), \
+            patch.object(
+                TC.SearchAll, '_queue',
+                staticmethod(lambda entries: queued.extend(entries))
+            ):
+        task.run()
+    return queued
 
 
 class a_failing_volume(unittest.TestCase):
@@ -58,8 +66,8 @@ class a_failing_volume(unittest.TestCase):
         self.assertEqual(searched, [1, 2, 3], 'every volume must be searched')
         self.assertEqual(
             downloads,
-            [('https://example.test/2', 2, None),
-             ('https://example.test/3', 3, None)]
+            [('https://example.test/2', 2, None, False),
+             ('https://example.test/3', 3, None, False)]
         )
 
     def test_the_failure_is_not_silent(self):
@@ -111,7 +119,41 @@ class what_the_loop_still_honours(unittest.TestCase):
             lambda volume_id: [{'link': 'a'}, {'link': 'b'}]
         )
 
-        self.assertEqual(downloads, [('a', 7, None), ('b', 7, None)])
+        self.assertEqual(
+            downloads, [('a', 7, None, False), ('b', 7, None, False)]
+        )
+
+
+class what_a_stopped_sweep_keeps(unittest.TestCase):
+    """The runner enqueues `if not task.stop`, so everything a sweep had
+    found was thrown away the moment the user asked it to finish early."""
+
+    def test_results_found_before_the_stop_are_already_queued(self):
+        def auto_search(volume_id):
+            if volume_id == 2:
+                task.stop = True
+            return [{'link': 'link-%d' % volume_id}]
+
+        task, cursor = _task([(1, 'A'), (2, 'B'), (3, 'C')])
+        queued = _run(task, cursor, auto_search)
+
+        self.assertEqual(
+            [entry[1] for entry in queued], [1, 2],
+            'what the sweep found before stopping must survive the stop'
+        )
+
+    def test_the_runner_is_not_asked_to_queue_them_again(self):
+        # It would double every download.
+        task, cursor = _task([(1, 'A')])
+        with patch.object(TC, 'get_db', return_value=cursor), \
+                patch.object(TC, 'WebSocket', MagicMock()), \
+                patch.object(
+                    TC, 'auto_search', return_value=[{'link': 'a'}]
+                ), \
+                patch.object(TC.SearchAll, '_queue', staticmethod(lambda e: None)):
+            returned = task.run()
+
+        self.assertEqual(returned, [])
 
 
 if __name__ == '__main__':

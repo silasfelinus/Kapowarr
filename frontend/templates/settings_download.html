@@ -112,7 +112,8 @@
 						<th><label for="torrent-search-delay-input">Torrent Search Delay</label></th>
 						<td>
 							<input type="number" id="torrent-search-delay-input" min="0" max="300" step="0.5">
-							<p>Minimum seconds between two searches of the same torrent indexer. The default is 1. Raise it if an indexer answers <code>429</code>: public trackers behind Prowlarr are usually happier with 15&ndash;30. Set to 0 for no delay.</p>
+							<p>Minimum seconds between two <em>requests</em> to the same torrent indexer. The default is 1. Set to 0 for no delay.</p>
+							<p>Note that one search is several requests: it tries up to four phrasings of the title, stopping at the first that returns anything, and asks every torrent indexer each time. A fruitless search therefore costs roughly <em>four times</em> this delay &mdash; 5 seconds here is about 15 seconds per search, and 30 is about 90. Pick it against how long a sweep of your whole library may take, not just against the indexer&rsquo;s patience.</p>
 						</td>
 					</tr>
 					<tr>

@@ -40,7 +40,8 @@ from __future__ import annotations
 
 from os.path import getmtime, isdir, isfile
 from time import time
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import (Callable, Container, Dict, List, Optional, Tuple,
+                    Union)
 
 from backend.base.definitions import (FileConstants, FilenameData,
                                       IssueData, VolumeData)
@@ -332,22 +333,69 @@ def run_watched_folder_import(
             summary, because the task is enrolled on an interval for every
             install and most installs will never configure one.
     """
+    watched_folder = Settings().sv.watched_folder
+    if not watched_folder:
+        return WatchedFolderImportSummary(
+            imported=0, unmatched=0, unsettled=0, skipped=0, volumes=0,
+            errors=0
+        )
+
+    return import_loose_files(
+        watched_folder, should_stop, description='Watched folder')
+
+
+def import_loose_files(
+    folder: str,
+    should_stop: Union[Callable[[], bool], None] = None,
+    leave_alone: Union[Container[str], None] = None,
+    description: str = 'Loose files',
+    leave_original: bool = False
+) -> WatchedFolderImportSummary:
+    """Import whatever finished files in a folder belong to a known volume.
+
+    The watched folder is one caller; recovering downloads that finished but
+    never reached the library is the other (see
+    `backend.features.orphaned_downloads`). Both want the same thing: take a
+    file sitting on disk, work out which volume already in the library it
+    belongs to, and hand it to the same import path a manual import uses.
+
+    Args:
+        folder (str): The folder to scan.
+
+        should_stop (Union[Callable[[], bool], None], optional): Polled
+            between volumes so a stop takes effect at a safe boundary -- never
+            part-way through one volume's move/rename/convert sequence.
+            Defaults to None.
+
+        leave_alone (Union[Container[str], None], optional): Paths this pass
+            must not touch, whatever their state. The download folder holds
+            files that belong to downloads still running, and a torrent that
+            is still seeding is being read from where it sits. Defaults to
+            None, meaning everything in the folder is fair game.
+
+        description (str, optional): What to call this pass in the log.
+            Defaults to 'Loose files'.
+
+        leave_original (bool, optional): Link the file into the volume folder
+            and leave the source where it is, instead of moving it. Defaults
+            to False.
+
+    Returns:
+        WatchedFolderImportSummary: What the pass did.
+    """
     summary = WatchedFolderImportSummary(
         imported=0, unmatched=0, unsettled=0, skipped=0, volumes=0, errors=0
     )
 
-    watched_folder = Settings().sv.watched_folder
-    if not watched_folder:
-        return summary
-
-    if not isdir(watched_folder):
+    if not isdir(folder):
         LOGGER.warning(
-            'Watched folder %s no longer exists; skipping this pass',
-            watched_folder
+            '%s: %s no longer exists; skipping this pass', description, folder
         )
         return summary
 
-    ready, summary['unsettled'] = find_importable_files(watched_folder)
+    ready, summary['unsettled'] = find_importable_files(folder)
+    if leave_alone is not None:
+        ready = [f for f in ready if f not in leave_alone]
     if not ready:
         return summary
 
@@ -363,15 +411,16 @@ def run_watched_folder_import(
     moved_anything = False
     for volume_id, filepaths in per_volume.items():
         if should_stop is not None and should_stop():
-            LOGGER.info('Watched folder import stopped between volumes')
+            LOGGER.info('%s: import stopped between volumes', description)
             break
 
         LOGGER.info(
-            'Watched folder: importing %d file(s) into volume %d',
-            len(filepaths), volume_id
+            '%s: importing %d file(s) into volume %d',
+            description, len(filepaths), volume_id
         )
         try:
-            result = manual_import_files(volume_id, filepaths)
+            result = manual_import_files(
+                volume_id, filepaths, leave_original=leave_original)
 
             summary['imported'] += len(result['imported'])
             summary['skipped'] += len(result['skipped'])
@@ -389,16 +438,16 @@ def run_watched_folder_import(
             # swallowed: the count surfaces in the task message, and the
             # traceback is logged in full.
             LOGGER.exception(
-                'Watched folder: failed to import into volume %d', volume_id
+                '%s: failed to import into volume %d', description, volume_id
             )
             summary['errors'] += 1
 
-    if moved_anything:
+    if moved_anything and not leave_original:
         # Only the directories the moved files vacated. `list_files()` ignores
         # hidden files, so a folder holding only e.g. a `.DS_Store` would look
         # empty to the scan but must not be removed -- hence skip_hidden_folders
         # is left off and deletion is driven by real emptiness on disk.
-        delete_empty_child_folders(watched_folder)
+        delete_empty_child_folders(folder)
 
     return summary
 

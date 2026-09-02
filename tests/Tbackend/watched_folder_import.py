@@ -268,7 +268,8 @@ class running_a_watched_folder_pass(unittest.TestCase):
         imported_paths = list(imported_paths or [])
         skipped_paths = list(skipped_paths or [])
 
-        def _fake_import(volume_id, filepaths, issue_id=None):
+        def _fake_import(volume_id, filepaths, issue_id=None,
+                         leave_original=False):
             imported = []
             for path in filepaths:
                 if path not in imported_paths:
@@ -276,7 +277,12 @@ class running_a_watched_folder_pass(unittest.TestCase):
                 dest = os.path.join(
                     self.volume_folder, os.path.basename(path)
                 )
-                os.replace(path, dest)
+                if leave_original:
+                    # The recovery pass links and leaves the source alone,
+                    # so the source folder is not vacated.
+                    os.link(path, dest)
+                else:
+                    os.replace(path, dest)
                 imported.append({
                     'filepath': path, 'status': 'imported', 'reason': None,
                     'moved_to': dest
@@ -337,7 +343,7 @@ class running_a_watched_folder_pass(unittest.TestCase):
 
         summary = run_watched_folder_import()
 
-        mock_import.assert_called_once_with(1, [src])
+        mock_import.assert_called_once_with(1, [src], leave_original=False)
         self.assertEqual(summary['imported'], 1)
         self.assertEqual(summary['volumes'], 1)
         self.mock_post_process.assert_called_once_with(
@@ -405,7 +411,8 @@ class running_a_watched_folder_pass(unittest.TestCase):
         second = self._make_settled('Superman 001.cbz')
         self._patch_matching({'Batman 001.cbz': 1, 'Superman 001.cbz': 2})
 
-        def _import(volume_id, filepaths, issue_id=None):
+        def _import(volume_id, filepaths, issue_id=None,
+                    leave_original=False):
             if volume_id == 1:
                 raise RuntimeError('volume vanished')
             dest = os.path.join(

@@ -427,11 +427,25 @@ def failed_integrity_check(download: Download) -> Union[IntegrityResult, None]:
 # region Post-Processors
 class PostProcessor:
     actions_success = [
-        remove_from_queue,
-        add_to_history,
+        # The file first, the bookkeeping second.
+        #
+        # `remove_from_queue` used to lead, which meant the queue row was
+        # gone before anything had moved the file anywhere. Every failure
+        # after that point -- and on 2026-09-01 there were twenty-three of
+        # them in one run, all the same locked write -- lost the download
+        # silently: it had left the queue, it had never reached the library,
+        # and nothing anywhere said so. Twenty-three finished downloads sat
+        # in the download folder with no record that they existed.
+        #
+        # Dequeue once the file is in the library and recorded. A failure
+        # before that now leaves the download visibly queued, which is both
+        # honest and recoverable: `__load_downloads` picks it up on the next
+        # start.
         move_to_dest,
         rename_with_proper_extension,
         add_file_to_database,
+        remove_from_queue,
+        add_to_history,
         convert_file,
         record_download_file_provenance,
         set_file_properties

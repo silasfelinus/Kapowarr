@@ -23,6 +23,7 @@ from typing import List, Union
 
 from backend.base.definitions import ManualImportFileResult, ManualImportResult
 from backend.base.files import folder_is_inside_folder, rename_file
+from backend.features.seed_import import hardlink_or_copy_path
 from backend.base.logging import LOGGER
 from backend.implementations.file_matching import scan_files, set_file_matching
 from backend.implementations.volumes import Library
@@ -31,7 +32,8 @@ from backend.implementations.volumes import Library
 def manual_import_files(
     volume_id: int,
     filepaths: List[str],
-    issue_id: Union[int, None] = None
+    issue_id: Union[int, None] = None,
+    leave_original: bool = False
 ) -> ManualImportResult:
     """Import specific, user-supplied files into a volume, matching them the
     same way the rest of the library-import machinery does.
@@ -46,6 +48,13 @@ def manual_import_files(
             file in `filepaths` to this issue (which must belong to
             `volume_id`) instead of letting the filename-based matcher decide.
             Defaults to None.
+
+        leave_original (bool, optional): Put a hardlink (or, across a
+            filesystem boundary, a copy) in the volume folder and leave the
+            source file where it is, instead of moving it. For sources that
+            something else may still be reading -- a torrent seeding out of
+            the download folder is the case this exists for. Defaults to
+            False, which moves.
 
     Raises:
         VolumeNotFound: `volume_id` doesn't exist.
@@ -95,11 +104,18 @@ def manual_import_files(
                 })
                 continue
 
-            LOGGER.info(
-                f'Manual import: moving {filepath} into volume folder '
-                f'as {target}'
-            )
-            rename_file(filepath, target)
+            if leave_original:
+                LOGGER.info(
+                    f'Manual import: linking {filepath} into volume folder '
+                    f'as {target}, leaving the original in place'
+                )
+                hardlink_or_copy_path(filepath, target)
+            else:
+                LOGGER.info(
+                    f'Manual import: moving {filepath} into volume folder '
+                    f'as {target}'
+                )
+                rename_file(filepath, target)
 
         moved_paths.append(target)
         imported.append({

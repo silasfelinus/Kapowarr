@@ -487,11 +487,22 @@ class post_processor_pipeline_composition(unittest.TestCase):
 
     def test_success_pipeline(self):
         self.assertEqual(PostProcessor.actions_success, [
-            pp.remove_from_queue, pp.add_to_history, pp.move_to_dest,
-            pp.rename_with_proper_extension, pp.add_file_to_database,
+            pp.move_to_dest, pp.rename_with_proper_extension,
+            pp.add_file_to_database, pp.remove_from_queue, pp.add_to_history,
             pp.convert_file, pp.record_download_file_provenance,
             pp.set_file_properties
         ])
+
+    def test_the_download_leaves_the_queue_only_once_it_is_in_the_library(self):
+        """Dequeuing first lost twenty-three finished downloads on
+        2026-09-01: out of the queue, never into the library, no record
+        anywhere that they existed."""
+        order = PostProcessor.actions_success
+        self.assertLess(
+            order.index(pp.move_to_dest), order.index(pp.remove_from_queue))
+        self.assertLess(
+            order.index(pp.add_file_to_database),
+            order.index(pp.remove_from_queue))
 
     def test_seeding_pipeline_is_empty_by_default(self):
         self.assertEqual(PostProcessor.actions_seeding, [])

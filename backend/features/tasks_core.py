@@ -21,6 +21,8 @@ from backend.features.download_queue import DownloadHandler
 from backend.features.pull_list import (check_weekly_pull_list,
                                         process_publisher_subscriptions)
 from backend.features.search import auto_search
+from backend.features.orphaned_downloads import (describe_recovery,
+                                                  recover_orphaned_downloads)
 from backend.features.watched_folder_import import (describe_summary,
                                                     run_watched_folder_import)
 from backend.implementations.conversion import mass_convert
@@ -701,6 +703,41 @@ class WatchedFolderImport(Task):
         summary = run_watched_folder_import(lambda: self.stop)
 
         self.message = describe_summary(summary)
+        WebSocket().emit(TaskStatusEvent(self.message))
+        return
+
+
+class OrphanedDownloadRecovery(Task):
+    "Import downloads that finished but never reached the library"
+
+    stop = False
+    message = ''
+    action = 'orphaned_download_recovery'
+    display_title = 'Recover Orphaned Downloads'
+    category = ''
+
+    @property
+    def volume_id(self) -> None:
+        return None
+
+    @property
+    def issue_id(self) -> None:
+        return None
+
+    def __init__(self) -> None:
+        return
+
+    def run(self) -> None:
+        # Declared here for the same reason as `WatchedFolderImport`: the
+        # interval is seeded for every install, so `task_library` has to be
+        # able to find it without the module being imported first. The work
+        # lives in backend.features.orphaned_downloads.
+        self.message = 'Checking the download folder for anything left behind'
+        WebSocket().emit(TaskStatusEvent(self.message))
+
+        summary = recover_orphaned_downloads(lambda: self.stop)
+
+        self.message = describe_recovery(summary)
         WebSocket().emit(TaskStatusEvent(self.message))
         return
 

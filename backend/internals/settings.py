@@ -197,7 +197,12 @@ task_intervals = {
     # Enrolled for every install, but a no-op until `watched_folder` is set.
     # Cheap enough to run unconditionally: with no folder configured it returns
     # before touching the filesystem at all.
-    'watched_folder_import': 900 # every 15 minutes
+    'watched_folder_import': 900, # every 15 minutes
+    # A download that finished and then failed to import leaves its file in
+    # the download folder with nothing coming back for it. Hourly is plenty:
+    # this is a backstop for a failure that should be rare, and the files it
+    # looks for are not going anywhere.
+    'orphaned_download_recovery': 3600 # every hour
 }
 
 SENSITIVE_SETTING_KEYS = frozenset((

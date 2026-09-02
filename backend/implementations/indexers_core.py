@@ -66,6 +66,8 @@ from requests import RequestException
 from backend.base.custom_exceptions import (EnqueuingDownloadFailure,
                                             IndexerNotFound, IssueNotFound,
                                             KeyNotFound)
+from xml.etree import ElementTree
+
 from backend.base.definitions import (Constants, Download, DownloadSource, EnqueuingDownloadFailureReason, SearchResultData)
 from backend.base.file_extraction import (extract_filename_data,
                                           refine_special_version)
@@ -465,8 +467,12 @@ async def search_indexer(
     try:
         data = json_loads(body)
     except ValueError:
-        LOGGER.warning("Indexer %s returned a non-JSON response", indexer.title)
-        return []
+        # Newznab's native format is XML; `o=json` is an extension, and
+        # indexers that honour it for a search do not necessarily honour it
+        # for a query-less feed request. All three of Silas's returned
+        # something unparseable to every feed poll on 2026-09-02, so the feed
+        # sync found nothing for half a day while reporting that it had run.
+        return _results_from_xml(body, indexer)
 
     if not isinstance(data, dict):
         # A well-formed Newznab response is always a JSON object; a
@@ -519,6 +525,86 @@ async def search_indexer(
         })
 
     return results
+
+
+def _results_from_xml(
+    body: str,
+    indexer: Indexer
+) -> List[SearchResultData]:
+    """Parse a Newznab response that came back as XML rather than JSON.
+
+    Args:
+        body (str): The response body.
+
+        indexer (Indexer): Whose response it is, for the log and the source.
+
+    Returns:
+        List[SearchResultData]: The releases, or none if the body was neither
+            a feed nor something this can make sense of.
+    """
+    try:
+        root = ElementTree.fromstring(body)
+    except ElementTree.ParseError:
+        LOGGER.warning(
+            "Indexer %s returned neither JSON nor XML: %s",
+            indexer.title, body[:200].replace('\n', ' ')
+        )
+        return []
+
+    if _local_name(root.tag) == 'error':
+        LOGGER.warning(
+            "Indexer %s returned an error: %s (code %s)",
+            indexer.title,
+            root.get('description') or 'no description',
+            root.get('code') or '?'
+        )
+        return []
+
+    results: List[SearchResultData] = []
+    for item in root.iter():
+        if _local_name(item.tag) != 'item':
+            continue
+
+        title = _child_text(item, 'title')
+        if not title:
+            continue
+
+        link = _child_enclosure_url(item) or _child_text(item, 'link')
+        if not link:
+            continue
+
+        results.append({
+            **extract_filename_data(
+                title, assume_volume_number=False, fix_year=True),
+            "link": link,
+            "display_title": title,
+            "source": indexer.title
+        })
+
+    return results
+
+
+def _local_name(tag: str) -> str:
+    "An XML tag without its namespace."
+    return tag.rsplit('}', 1)[-1]
+
+
+def _child_text(item, name: str) -> Union[str, None]:
+    "The text of a named child element, if it has one."
+    for child in item:
+        if _local_name(child.tag) == name and child.text:
+            return child.text.strip()
+    return None
+
+
+def _child_enclosure_url(item) -> Union[str, None]:
+    "The URL an `<enclosure>` points at, which is the NZB itself."
+    for child in item:
+        if _local_name(child.tag) == 'enclosure':
+            url = child.get('url')
+            if url:
+                return url
+    return None
 
 
 def _extract_item_link(item: Mapping[str, Any]) -> Union[str, None]:

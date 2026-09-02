@@ -8,6 +8,11 @@ const library_els = {
 		list: document.querySelector('#list-library'),
 		table: document.querySelector('#table-library'),
 	},
+	alphabet: {
+		rail: document.querySelector('#alphabet-rail'),
+		letters: document.querySelector('#alphabet-letters'),
+		bubble: document.querySelector('#alphabet-bubble')
+	},
 	view_options: {
 		sort: document.querySelector('#sort-button'),
 		view: document.querySelector('#view-button'),
@@ -508,7 +513,44 @@ function virtualiseLibraryView(config) {
 		schedule();
 	};
 
+	// Which element actually scrolls is not fixed -- see `visibleRange`. Ask
+	// the DOM rather than assume: the first ancestor that can scroll, or the
+	// document if none of them do.
+	function scroller() {
+		let el = anchor.parentElement;
+		while (el) {
+			const overflow = getComputedStyle(el).overflowY;
+			if (
+				(overflow === 'auto' || overflow === 'scroll')
+				&& el.scrollHeight > el.clientHeight
+			)
+				return el;
+			el = el.parentElement;
+		};
+		return document.scrollingElement || document.documentElement;
+	}
+
 	return {
+		// Put the row holding `index` at the top of the viewport.
+		//
+		// Computed rather than found: the element for that index almost
+		// certainly does not exist -- that is the whole point of the window
+		// -- so there is nothing to call `scrollIntoView` on. The spacers
+		// make the scroll height real, so the arithmetic that sizes them
+		// gives the position too.
+		scrollToIndex(index) {
+			if (row_height <= 0)
+				return false;
+
+			const target_row = Math.floor(index / per_row);
+			const anchor_top = anchor.getBoundingClientRect().top;
+			// Where the row sits now, relative to the viewport top.
+			const delta = target_row * row_height + anchor_top;
+			scroller().scrollBy({top: delta, behavior: 'auto'});
+			schedule();
+			return true;
+		},
+
 		start(sample_end) {
 			// Captured at the document, so whichever element is scrolling
 			// is heard from without having to know which one it is.
@@ -543,6 +585,169 @@ function virtualiseLibraryView(config) {
 			rendered = null;
 		}
 	};
+};
+
+// Which field each sort actually orders by, where that field is text. The
+// rail is only honest for these: under "Year" or "Recently Added" a letter
+// says nothing about where anything is.
+const ALPHABETICAL_SORTS = {
+	title: volume => volume.title,
+	publisher: volume => volume.publisher
+};
+
+// Below this there is nothing to jump past.
+const ALPHABET_RAIL_MINIMUM = 30;
+
+// Where each letter starts in the library, in the order the library came in.
+//
+// Read off the data rather than worked out from the alphabet, because the
+// server does the sorting and the rail has to agree with it -- collation,
+// leading articles, punctuation and all. A letter with nothing under it is
+// not offered, which is why the rail on a small library is short rather than
+// twenty-six dead targets.
+function buildAlphabetIndex(volumes, keyOf) {
+	const letters = [];
+	const seen = new Set();
+
+	volumes.forEach((volume, index) => {
+		const value = (keyOf(volume) || '').trim();
+		const first = value.charAt(0).toUpperCase();
+		// Anything that is not a letter shares one bucket, which is where
+		// the numbers and the punctuation live.
+		const letter = first >= 'A' && first <= 'Z' ? first : '#';
+
+		if (!seen.has(letter)) {
+			seen.add(letter);
+			letters.push({letter: letter, index: index});
+		};
+	});
+
+	return letters;
+}
+
+let alphabet_index = [];
+
+// Draw the rail for the library as it currently stands.
+function renderAlphabetRail() {
+	const els = library_els.alphabet;
+	if (!els.rail)
+		return;
+
+	const keyOf = ALPHABETICAL_SORTS[library_els.view_options.sort.value];
+	alphabet_index = keyOf && library_volumes.length >= ALPHABET_RAIL_MINIMUM
+		? buildAlphabetIndex(library_volumes, keyOf)
+		: [];
+
+	// One letter is not a rail, it is a label.
+	if (alphabet_index.length < 2) {
+		els.rail.classList.add('hidden');
+		els.letters.replaceChildren();
+		return;
+	};
+
+	els.letters.replaceChildren(...alphabet_index.map(entry => {
+		const button = document.createElement('button');
+		button.type = 'button';
+		button.className = 'alphabet-letter';
+		button.textContent = entry.letter;
+		button.dataset.index = entry.index;
+		button.tabIndex = -1;
+		button.setAttribute(
+			'aria-label', `Jump to ${entry.letter === '#'
+				? 'numbers and symbols' : entry.letter}`);
+		return button;
+	}));
+	els.rail.classList.remove('hidden');
+};
+
+function jumpToAlphabetIndex(index, letter) {
+	if (library_view_window === null)
+		return;
+
+	library_view_window.scrollToIndex(index);
+	const bubble = library_els.alphabet.bubble;
+	if (bubble) {
+		bubble.textContent = letter;
+		bubble.classList.remove('hidden');
+	};
+};
+
+function hideAlphabetBubble() {
+	const bubble = library_els.alphabet.bubble;
+	if (bubble)
+		bubble.classList.add('hidden');
+};
+
+// Which letter a pointer at `client_y` is over.
+//
+// By proportion of the rail rather than by hit-testing an element, so a
+// finger that slides off the side of a rail two characters wide -- which on
+// a phone it does constantly -- goes on scrubbing instead of stopping dead.
+function letterAtPointer(client_y) {
+	if (!alphabet_index.length)
+		return null;
+
+	const rail = library_els.alphabet.letters.getBoundingClientRect();
+	if (rail.height <= 0)
+		return null;
+
+	const proportion = (client_y - rail.top) / rail.height;
+	const position = Math.floor(proportion * alphabet_index.length);
+	return alphabet_index[
+		Math.min(alphabet_index.length - 1, Math.max(0, position))
+	];
+};
+
+function setupAlphabetRail() {
+	const els = library_els.alphabet;
+	if (!els.rail)
+		return;
+
+	let scrubbing = false;
+	let last_letter = null;
+
+	const scrubTo = client_y => {
+		const entry = letterAtPointer(client_y);
+		if (entry === null || entry.letter === last_letter)
+			return;
+		last_letter = entry.letter;
+		jumpToAlphabetIndex(entry.index, entry.letter);
+	};
+
+	els.rail.addEventListener('pointerdown', event => {
+		scrubbing = true;
+		last_letter = null;
+		// So a finger that leaves the rail keeps sending moves here.
+		if (els.rail.setPointerCapture)
+			els.rail.setPointerCapture(event.pointerId);
+		scrubTo(event.clientY);
+		event.preventDefault();
+	});
+
+	els.rail.addEventListener('pointermove', event => {
+		if (scrubbing)
+			scrubTo(event.clientY);
+	});
+
+	const release = () => {
+		if (!scrubbing)
+			return;
+		scrubbing = false;
+		last_letter = null;
+		hideAlphabetBubble();
+	};
+	els.rail.addEventListener('pointerup', release);
+	els.rail.addEventListener('pointercancel', release);
+
+	// Keyboard and assistive technology never see the drag, so the letters
+	// stay ordinary buttons underneath it.
+	els.letters.addEventListener('click', event => {
+		const button = event.target.closest('.alphabet-letter');
+		if (button === null)
+			return;
+		jumpToAlphabetIndex(Number(button.dataset.index), button.textContent);
+		setTimeout(hideAlphabetBubble, 600);
+	});
 };
 
 // The live window for whichever view is built, so switching views or
@@ -751,6 +956,7 @@ function populateLibrary(volumes, api_key, generation, on_first_batch) {
 		generation,
 		on_first_batch
 	);
+	renderAlphabetRail();
 };
 
 function fetchLibrary(api_key) {
@@ -779,6 +985,7 @@ function fetchLibrary(api_key) {
 			clearLibraryView('table');
 			library_volumes = [];
 			library_entries.clear();
+			renderAlphabetRail();
 			library_els.mass_edit.button.disabled = false;
 			showLibraryPage(library_els.pages.empty);
 		} else {
@@ -885,6 +1092,8 @@ usingApiKey()
 		});
 	library_els.task_buttons.search_all.onclick =
 		e => sendAPI('POST', '/system/tasks', api_key, {}, {'cmd': 'search_all'});
+
+	setupAlphabetRail();
 
 	library_els.view_options.sort.onchange = e => {
 		setLocalStorage({'lib_sorting': library_els.view_options.sort.value});

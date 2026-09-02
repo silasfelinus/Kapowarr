@@ -117,6 +117,13 @@
 		<h2>Library is empty</h2>
 	</div>
 	<div id="library-container" class="hidden">
+		<!-- The alphabet rail. Populated from the library as delivered, so
+		     it says where the letters actually are rather than where they
+		     ought to be; hidden entirely when the sort is not alphabetical. -->
+		<nav id="alphabet-rail" class="hidden" aria-label="Jump to a letter">
+			<div id="alphabet-letters"></div>
+		</nav>
+		<div id="alphabet-bubble" class="hidden" aria-hidden="true"></div>
 		<div id="list-library">
 			<div class="space-taker"></div>
 		</div>

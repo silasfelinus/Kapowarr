@@ -1,4 +1,3 @@
-import sqlite3
 import unittest
 from asyncio import sleep
 from datetime import date, timedelta
@@ -15,7 +14,8 @@ from backend.features.pull_list import (GetComicsWeeklyReleases,
                                         get_publishers, get_pull_list,
                                         match_releases_to_library,
                                         set_publisher_subscription)
-from backend.internals.db import KapowarrCursor
+from Tbackend.a_test_database_behaves_like_the_real_one import (
+    connect as connect_test_db, cursor as test_db_cursor)
 
 
 def _current_week():
@@ -150,8 +150,7 @@ class weekly_release_source_timeout(unittest.IsolatedAsyncioTestCase):
 
 class weekly_pull_list_persistence(unittest.TestCase):
     def setUp(self):
-        self.connection = sqlite3.connect(':memory:')
-        self.connection.row_factory = sqlite3.Row
+        self.connection = connect_test_db()
         self.connection.executescript("""
             CREATE TABLE root_folders(id INTEGER PRIMARY KEY, folder TEXT);
             CREATE TABLE volumes(
@@ -217,9 +216,7 @@ class weekly_pull_list_persistence(unittest.TestCase):
         self.get_db_patch.start()
 
     def _cursor(self):
-        cursor = KapowarrCursor(self.connection)
-        cursor.row_factory = sqlite3.Row
-        return cursor
+        return test_db_cursor(self.connection)
 
     def tearDown(self):
         self.get_db_patch.stop()

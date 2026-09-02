@@ -1,4 +1,3 @@
-import sqlite3
 import unittest
 from datetime import date, timedelta
 from unittest.mock import AsyncMock, patch
@@ -6,7 +5,8 @@ from unittest.mock import AsyncMock, patch
 from backend.features import pull_list as pull_list_module
 from backend.features.pull_list import (check_weekly_pull_list,
                                         process_publisher_subscriptions)
-from backend.internals.db import KapowarrCursor
+from Tbackend.a_test_database_behaves_like_the_real_one import (
+    connect as connect_test_db, cursor as test_db_cursor)
 
 
 def _week(offset=0):
@@ -36,8 +36,7 @@ def _release(title, week_start=None, publisher='DC Comics'):
 
 class pull_list_history_retention(unittest.TestCase):
     def setUp(self):
-        self.connection = sqlite3.connect(':memory:')
-        self.connection.row_factory = sqlite3.Row
+        self.connection = connect_test_db()
         self.connection.executescript("""
             CREATE TABLE pull_list_entries(
                 id INTEGER PRIMARY KEY,
@@ -80,9 +79,7 @@ class pull_list_history_retention(unittest.TestCase):
         self.get_db_patch.start()
 
     def _cursor(self):
-        cursor = KapowarrCursor(self.connection)
-        cursor.row_factory = sqlite3.Row
-        return cursor
+        return test_db_cursor(self.connection)
 
     def _insert_entry(self, title, week_start, publisher='DC Comics'):
         self.connection.execute(

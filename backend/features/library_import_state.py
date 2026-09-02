@@ -75,27 +75,30 @@ def create_job(folders: Iterable[str]) -> int:
     ordered_folders = list(dict.fromkeys(folders))
     now = round(time())
     cursor = get_db()
-    cursor.execute(
-        """
-        INSERT INTO library_import_jobs(status, created_at, updated_at, last_error)
-        VALUES (?, ?, ?, NULL);
-        """,
-        (JOB_RUNNING, now, now)
-    )
-    job_id = cursor.lastrowid
-    cursor.executemany(
-        """
-        INSERT INTO library_import_items(
-            job_id, position, folder, state, imported_volumes,
-            review_reason, review_items, updated_at
-        ) VALUES (?, ?, ?, ?, 0, NULL, '[]', ?);
-        """,
-        (
-            (job_id, position, folder, ITEM_PENDING, now)
-            for position, folder in enumerate(ordered_folders)
+    # A job row without its folder rows is a job that would resume with
+    # nothing to do, so write the two together.
+    with cursor:
+        cursor.execute(
+            """
+            INSERT INTO library_import_jobs(status, created_at, updated_at, last_error)
+            VALUES (?, ?, ?, NULL);
+            """,
+            (JOB_RUNNING, now, now)
         )
-    )
-    commit()
+        job_id = cursor.lastrowid
+        cursor.executemany(
+            """
+            INSERT INTO library_import_items(
+                job_id, position, folder, state, imported_volumes,
+                review_reason, review_items, updated_at
+            ) VALUES (?, ?, ?, ?, 0, NULL, '[]', ?);
+            """,
+            (
+                (job_id, position, folder, ITEM_PENDING, now)
+                for position, folder in enumerate(ordered_folders)
+            )
+        )
+
     return job_id
 
 
@@ -147,46 +150,52 @@ def mark_job_running(job_id: int) -> None:
     """Resume a job and replay only a folder that was interrupted mid-check."""
     now = round(time())
     cursor = get_db()
-    cursor.execute(
-        """
-        UPDATE library_import_items
-        SET state = ?, updated_at = ?
-        WHERE job_id = ? AND state = ?;
-        """,
-        (ITEM_PENDING, now, job_id, ITEM_PROCESSING)
-    )
-    cursor.execute(
-        """
-        UPDATE library_import_jobs
-        SET status = ?, updated_at = ?, last_error = NULL
-        WHERE id = ?;
-        """,
-        (JOB_RUNNING, now, job_id)
-    )
-    commit()
+    # Replaying the interrupted folder and flipping the job to running
+    # are one step: either both or neither.
+    with cursor:
+        cursor.execute(
+            """
+            UPDATE library_import_items
+            SET state = ?, updated_at = ?
+            WHERE job_id = ? AND state = ?;
+            """,
+            (ITEM_PENDING, now, job_id, ITEM_PROCESSING)
+        )
+        cursor.execute(
+            """
+            UPDATE library_import_jobs
+            SET status = ?, updated_at = ?, last_error = NULL
+            WHERE id = ?;
+            """,
+            (JOB_RUNNING, now, job_id)
+        )
+
     return
 
 
 def mark_job_paused(job_id: int, error: Optional[str] = None) -> None:
     now = round(time())
     cursor = get_db()
-    cursor.execute(
-        """
-        UPDATE library_import_items
-        SET state = ?, updated_at = ?
-        WHERE job_id = ? AND state = ?;
-        """,
-        (ITEM_PENDING, now, job_id, ITEM_PROCESSING)
-    )
-    cursor.execute(
-        """
-        UPDATE library_import_jobs
-        SET status = ?, updated_at = ?, last_error = ?
-        WHERE id = ?;
-        """,
-        (JOB_PAUSED, now, error, job_id)
-    )
-    commit()
+    # As above: the pause and the folder it has to come back to belong
+    # to the same checkpoint.
+    with cursor:
+        cursor.execute(
+            """
+            UPDATE library_import_items
+            SET state = ?, updated_at = ?
+            WHERE job_id = ? AND state = ?;
+            """,
+            (ITEM_PENDING, now, job_id, ITEM_PROCESSING)
+        )
+        cursor.execute(
+            """
+            UPDATE library_import_jobs
+            SET status = ?, updated_at = ?, last_error = ?
+            WHERE id = ?;
+            """,
+            (JOB_PAUSED, now, error, job_id)
+        )
+
     return
 
 
@@ -256,56 +265,59 @@ def mark_folder_result(
     now = round(time())
     state = ITEM_REVIEW if review_items else ITEM_DONE
     cursor = get_db()
-    cursor.execute(
-        """
-        UPDATE library_import_items
-        SET
-            state = ?,
-            imported_volumes = ?,
-            review_reason = ?,
-            review_items = ?,
-            updated_at = ?
-        WHERE job_id = ? AND folder = ?;
-        """,
-        (
-            state,
-            imported_volumes,
-            review_reason if review_items else None,
-            dumps(review_items),
-            now,
-            job_id,
-            folder
+    # The docstring says atomically, so make it so: the new verdict and
+    # the retirement of the verdict it supersedes are one checkpoint.
+    with cursor:
+        cursor.execute(
+            """
+            UPDATE library_import_items
+            SET
+                state = ?,
+                imported_volumes = ?,
+                review_reason = ?,
+                review_items = ?,
+                updated_at = ?
+            WHERE job_id = ? AND folder = ?;
+            """,
+            (
+                state,
+                imported_volumes,
+                review_reason if review_items else None,
+                dumps(review_items),
+                now,
+                job_id,
+                folder
+            )
         )
-    )
-    # A folder that has just been re-checked supersedes whatever an earlier
-    # pass concluded about it. Without this, an old job's hold row keeps
-    # `state = review` forever, even once this pass has imported the folder:
-    # the review queue only retires rows when it is *read*, and the count on
-    # the progress panel is a SQL `COUNT(DISTINCT folder)` across every job
-    # precisely so that polling it does not decode every held row.
-    #
-    # So the backlog figure and the "Review Holds (N)" button sat at the old
-    # number for the length of a pass and only dropped when the user opened
-    # the list -- and the better the importer gets at resolving old holds,
-    # the more wrong that number is while it works. Retire the superseded
-    # rows here, where the new verdict is already being written.
-    cursor.execute(
-        """
-        UPDATE library_import_items
-        SET
-            state = ?,
-            review_reason = NULL,
-            review_items = '[]',
-            updated_at = ?
-        WHERE folder = ? AND job_id != ? AND state = ?;
-        """,
-        (ITEM_DONE, now, folder, job_id, ITEM_REVIEW)
-    )
-    cursor.execute(
-        "UPDATE library_import_jobs SET updated_at = ? WHERE id = ?;",
-        (now, job_id)
-    )
-    commit()
+        # A folder that has just been re-checked supersedes whatever an earlier
+        # pass concluded about it. Without this, an old job's hold row keeps
+        # `state = review` forever, even once this pass has imported the folder:
+        # the review queue only retires rows when it is *read*, and the count on
+        # the progress panel is a SQL `COUNT(DISTINCT folder)` across every job
+        # precisely so that polling it does not decode every held row.
+        #
+        # So the backlog figure and the "Review Holds (N)" button sat at the old
+        # number for the length of a pass and only dropped when the user opened
+        # the list -- and the better the importer gets at resolving old holds,
+        # the more wrong that number is while it works. Retire the superseded
+        # rows here, where the new verdict is already being written.
+        cursor.execute(
+            """
+            UPDATE library_import_items
+            SET
+                state = ?,
+                review_reason = NULL,
+                review_items = '[]',
+                updated_at = ?
+            WHERE folder = ? AND job_id != ? AND state = ?;
+            """,
+            (ITEM_DONE, now, folder, job_id, ITEM_REVIEW)
+        )
+        cursor.execute(
+            "UPDATE library_import_jobs SET updated_at = ? WHERE id = ?;",
+            (now, job_id)
+        )
+
     return
 
 

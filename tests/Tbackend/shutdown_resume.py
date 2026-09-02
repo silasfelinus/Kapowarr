@@ -2,7 +2,6 @@
 
 """A restart must not cost the continuous import its progress."""
 
-import sqlite3
 import unittest
 from threading import Event, Thread
 from unittest.mock import MagicMock, patch
@@ -10,6 +9,8 @@ from unittest.mock import MagicMock, patch
 from backend.features import library_import_state as state
 import backend.features.tasks as tasks_module
 from backend.features.tasks import TaskHandler
+from Tbackend.a_test_database_behaves_like_the_real_one import (
+    connect as connect_test_db, cursor as test_db_cursor)
 
 
 class stopping_reaches_every_lane(unittest.TestCase):
@@ -131,15 +132,14 @@ class a_shutdown_is_not_a_failure(unittest.TestCase):
     """
 
     def setUp(self):
-        self.connection = sqlite3.connect(':memory:')
-        self.connection.row_factory = sqlite3.Row
+        self.connection = connect_test_db()
         self.connection.execute(
             'CREATE TABLE files(id INTEGER PRIMARY KEY, filepath TEXT UNIQUE);'
         )
         for target in (
             patch.object(
                 state, 'get_db',
-                side_effect=lambda *a, **k: self.connection.cursor()
+                side_effect=lambda *a, **k: test_db_cursor(self.connection)
             ),
             patch.object(state, 'commit', side_effect=self.connection.commit),
             patch.object(state, 'exists', return_value=True),

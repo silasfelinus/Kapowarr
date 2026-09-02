@@ -5,7 +5,8 @@ from __future__ import annotations
 from asyncio import gather, run
 from os import listdir
 from os.path import basename, join
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Tuple, Type, Union
+from typing import (TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Tuple,
+                    Type, Union)
 
 from typing_extensions import assert_never
 
@@ -68,6 +69,35 @@ class DownloadHandler(metaclass=Singleton):
         return
 
     # region Running Download
+    @staticmethod
+    def _post_process(
+        action: Callable[[Download], Any],
+        download: Download
+    ) -> None:
+        """Run a post-processing step without letting a failure take the
+        download thread with it.
+
+        Post-processing moves files about and writes to the database, so it
+        has plenty of ways to fail. Whatever happens, the caller still has to
+        take this download out of the queue and start the one behind it: a
+        thread that dies here leaves its entry sitting in the queue forever,
+        looking exactly like a download still in progress. That is how two
+        downloads stalled on 2026-09-01, when a locked database ended both
+        threads inside `remove_from_queue`.
+
+        Args:
+            action (Callable[[Download], Any]): The post-processing step.
+
+            download (Download): The download to run it for.
+        """
+        try:
+            action(download)
+        except Exception:
+            LOGGER.exception(
+                'Post-processing of download %s failed: ', download.id
+            )
+        return
+
     def __run_download(self, download: Download) -> None:
         """Start a download. Intended to be run in a thread.
 
@@ -92,11 +122,11 @@ class DownloadHandler(metaclass=Singleton):
             PostProcessor.shutdown(download)
             return
 
-        elif download.state == DownloadState.CANCELED_STATE:
-            PostProcessor.canceled(download)
+        if download.state == DownloadState.CANCELED_STATE:
+            self._post_process(PostProcessor.canceled, download)
 
         elif download.state == DownloadState.FAILED_STATE:
-            PostProcessor.failed(download)
+            self._post_process(PostProcessor.failed, download)
 
         elif download.state == DownloadState.DOWNLOADING_STATE:
             download.state = DownloadState.IMPORTING_STATE
@@ -105,7 +135,7 @@ class DownloadHandler(metaclass=Singleton):
             # While this download is post-processing, start the next one.
             self._process_queue()
 
-            PostProcessor.success(download)
+            self._post_process(PostProcessor.success, download)
 
         self.queue.remove(download)
         ws.emit(RemovedFromQueueEvent(download))
@@ -189,13 +219,13 @@ class DownloadHandler(metaclass=Singleton):
 
             if download.state == DownloadState.CANCELED_STATE:
                 self._remove_from_client(download, delete_files=True)
-                post_processer.canceled(download)
+                self._post_process(post_processer.canceled, download)
                 self.queue.remove(download)
                 break
 
             elif download.state == DownloadState.FAILED_STATE:
                 self._remove_from_client(download, delete_files=True)
-                post_processer.perm_failed(download)
+                self._post_process(post_processer.perm_failed, download)
                 self.queue.remove(download)
                 break
 
@@ -207,12 +237,12 @@ class DownloadHandler(metaclass=Singleton):
                 and not files_copied
             ):
                 files_copied = True
-                post_processer.seeding(download)
+                self._post_process(post_processer.seeding, download)
 
             elif download.state == DownloadState.IMPORTING_STATE:
                 if self.settings.sv.delete_completed_downloads:
                     self._remove_from_client(download, delete_files=False)
-                post_processer.success(download)
+                self._post_process(post_processer.success, download)
                 self.queue.remove(download)
                 break
 

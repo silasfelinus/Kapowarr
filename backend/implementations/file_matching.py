@@ -24,7 +24,7 @@ from backend.implementations.matching import (COLLECTED_EDITION_MATCH,
                                               collected_edition_of_volume,
                                               file_importing_filter)
 from backend.implementations.root_folders import RootFolders
-from backend.internals.db import commit, get_db
+from backend.internals.db import get_db
 from backend.internals.db_models import FilesDB
 from backend.internals.server import DownloadedStatusEvent, WebSocket
 from backend.internals.settings import Settings
@@ -311,71 +311,74 @@ def scan_files(
         if not v
     ]
 
-    # Delete bindings that aren't in new bindings
-    if not filepath_filter:
-        cursor.executemany(
-            "DELETE FROM issues_files WHERE file_id = ? AND issue_id = ?;",
-            delete_bindings
-        )
-
-        if settings.unmonitor_deleted_issues:
+    # Every binding this scan worked out replaces the ones already
+    # recorded, so the deletes and the inserts have to land together: a
+    # crash between them would leave the volume with files bound to
+    # nothing, or to issues they no longer match.
+    with cursor:
+        # Delete bindings that aren't in new bindings
+        if not filepath_filter:
             cursor.executemany(
-                "UPDATE issues SET monitored = 0 WHERE id = ?;",
-                ((issue_id,) for issue_id in deleted_downloaded_issues)
+                "DELETE FROM issues_files WHERE file_id = ? AND issue_id = ?;",
+                delete_bindings
             )
 
-    # Add bindings that aren't in current bindings
-    cursor.executemany(
-        "INSERT INTO issues_files(file_id, issue_id) VALUES (?, ?);",
-        add_bindings
-    )
+            if settings.unmonitor_deleted_issues:
+                cursor.executemany(
+                    "UPDATE issues SET monitored = 0 WHERE id = ?;",
+                    ((issue_id,) for issue_id in deleted_downloaded_issues)
+                )
 
-    # Delete bindings for general files that aren't in new bindings
-    if not filepath_filter:
-        manually_matched_general_files_missing = set(
-            manually_matched_general_files.values()
-        )
-        current_general_bindings = {
-            gf['id']: gf['file_type']
-            for gf in volume.get_general_files()
-        }
-        delete_general_bindings = (
-            (b,)
-            for b in current_general_bindings
-            if (
-                b not in new_general_bindings
-                and b not in manually_matched_general_files_found
-
-                or b in manually_matched_general_files_missing
-            )
-        )
+        # Add bindings that aren't in current bindings
         cursor.executemany(
-            "DELETE FROM volume_files WHERE file_id = ?;",
-            delete_general_bindings
+            "INSERT INTO issues_files(file_id, issue_id) VALUES (?, ?);",
+            add_bindings
         )
 
-    # Add bindings for general files that aren't in current bindings
-    cursor.executemany("""
-        INSERT INTO volume_files(
-            file_id, volume_id, file_type
-        ) VALUES (
-            ?, ?, ?
-        )
-        ON CONFLICT(file_id) DO
-        UPDATE SET
-            file_type = ?;
-        """,
-        (
-            (file_id, volume_id, file_type, file_type)
-            for file_id, file_type in new_general_bindings.items()
-        )
-    )
+        # Delete bindings for general files that aren't in new bindings
+        if not filepath_filter:
+            manually_matched_general_files_missing = set(
+                manually_matched_general_files.values()
+            )
+            current_general_bindings = {
+                gf['id']: gf['file_type']
+                for gf in volume.get_general_files()
+            }
+            delete_general_bindings = (
+                (b,)
+                for b in current_general_bindings
+                if (
+                    b not in new_general_bindings
+                    and b not in manually_matched_general_files_found
 
-    # Remove files from the database that aren't matched to anything anymore
-    if del_unmatched_files:
-        FilesDB.delete_unmatched_files()
+                    or b in manually_matched_general_files_missing
+                )
+            )
+            cursor.executemany(
+                "DELETE FROM volume_files WHERE file_id = ?;",
+                delete_general_bindings
+            )
 
-    commit()
+        # Add bindings for general files that aren't in current bindings
+        cursor.executemany("""
+            INSERT INTO volume_files(
+                file_id, volume_id, file_type
+            ) VALUES (
+                ?, ?, ?
+            )
+            ON CONFLICT(file_id) DO
+            UPDATE SET
+                file_type = ?;
+            """,
+            (
+                (file_id, volume_id, file_type, file_type)
+                for file_id, file_type in new_general_bindings.items()
+            )
+        )
+
+        # Remove files from the database that aren't matched to anything anymore
+        if del_unmatched_files:
+            FilesDB.delete_unmatched_files()
 
     if update_websocket:
         if not filepath_filter and (

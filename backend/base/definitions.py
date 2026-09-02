@@ -57,6 +57,18 @@ class Constants:
     DB_TIMEOUT = 10.0 # seconds
     "Seconds to wait on database command before timing out"
 
+    DB_LOCK_RETRY_TIMEOUT = 50.0 # seconds
+    """How long to keep retrying a statement that SQLite rejected because the
+    database was locked, on top of the `DB_TIMEOUT` each attempt already waits
+    on its own. Contention is a queue to stand in, not a reason to abandon the
+    write and take the thread down with it."""
+
+    DB_LOCK_RETRY_FIRST_WAIT = 0.2 # seconds
+    "How long to wait before the first retry of a locked statement"
+
+    DB_LOCK_RETRY_MAX_WAIT = 3.0 # seconds
+    "The longest the backoff between retries of a locked statement may grow to"
+
     DB_MAX_CONCURRENT_CONNECTIONS = 32
     "Maximum allowed database connections to be open at the same time"
 

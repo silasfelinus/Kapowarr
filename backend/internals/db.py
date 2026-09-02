@@ -670,6 +670,8 @@ CREATE TABLE IF NOT EXISTS issues(
     date VARCHAR(10),
     description TEXT,
     monitored BOOL NOT NULL DEFAULT 1,
+    last_auto_search INTEGER(8) NOT NULL DEFAULT 0,
+    auto_search_misses INTEGER(4) NOT NULL DEFAULT 0,
 
     FOREIGN KEY (volume_id) REFERENCES volumes(id)
         ON DELETE CASCADE

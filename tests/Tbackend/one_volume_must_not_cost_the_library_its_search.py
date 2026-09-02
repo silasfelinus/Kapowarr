@@ -54,7 +54,7 @@ class a_failing_volume(unittest.TestCase):
     def test_the_sweep_continues_past_it(self):
         searched = []
 
-        def auto_search(volume_id):
+        def auto_search(volume_id, respect_backoff=False):
             searched.append(volume_id)
             if volume_id == 1:
                 raise Exception('database is locked')
@@ -71,7 +71,7 @@ class a_failing_volume(unittest.TestCase):
         )
 
     def test_the_failure_is_not_silent(self):
-        def auto_search(volume_id):
+        def auto_search(volume_id, respect_backoff=False):
             raise RuntimeError('indexer exploded')
 
         task, cursor = _task(self.VOLUMES)
@@ -98,7 +98,7 @@ class what_the_loop_still_honours(unittest.TestCase):
     def test_a_stop_request_still_stops_it(self):
         searched = []
 
-        def auto_search(volume_id):
+        def auto_search(volume_id, respect_backoff=False):
             searched.append(volume_id)
             task.stop = True
             raise Exception('and then it broke')
@@ -116,7 +116,7 @@ class what_the_loop_still_honours(unittest.TestCase):
         task, cursor = _task([(7, 'Saga')])
         downloads = _run(
             task, cursor,
-            lambda volume_id: [{'link': 'a'}, {'link': 'b'}]
+            lambda volume_id, **kw: [{'link': 'a'}, {'link': 'b'}]
         )
 
         self.assertEqual(
@@ -129,7 +129,7 @@ class what_a_stopped_sweep_keeps(unittest.TestCase):
     found was thrown away the moment the user asked it to finish early."""
 
     def test_results_found_before_the_stop_are_already_queued(self):
-        def auto_search(volume_id):
+        def auto_search(volume_id, respect_backoff=False):
             if volume_id == 2:
                 task.stop = True
             return [{'link': 'link-%d' % volume_id}]
@@ -182,7 +182,7 @@ class a_lost_queue_write(unittest.TestCase):
                 patch.object(TC.SearchAll, '_queue', side_effect=flaky), \
                 patch.object(
                     TC, 'auto_search',
-                    side_effect=lambda v: [{'link': f'l{v}'}]):
+                    side_effect=lambda v, **kw: [{'link': f'l{v}'}]):
             TC.SearchAll().run()
 
         self.assertEqual([v for _, v, _, _ in queued], [2, 3])

@@ -14,6 +14,8 @@ from backend.base.helpers import (AsyncSession, check_overlapping_issues,
                                   normalise_query_string, request_tally,
                                   reset_request_tally)
 from backend.base.logging import LOGGER
+from backend.features.search_backoff import (due_issues, record_hit,
+                                             record_miss)
 from backend.features.acquisition_preferences import (
     availability_rank, indexer_priority, ordered_download_types,
     pack_preference_rank, search_stops_at_first_match)
@@ -586,7 +588,8 @@ def _log_search_cost(volume_data, issue_number, started, found: int) -> None:
 
 def auto_search(
     volume_id: int,
-    issue_id: Union[int, None] = None
+    issue_id: Union[int, None] = None,
+    respect_backoff: bool = False
 ) -> List[MatchedSearchResultData]:
     """Search for a volume or issue and automatically choose a result.
 
@@ -595,6 +598,12 @@ def auto_search(
         issue_id (Union[int, None], optional): The id of the issue to search for,
         in the case that you want to search for an issue instead of a volume.
             Defaults to None.
+
+        respect_backoff (bool, optional): Skip issues that recent searches
+            found nothing for, and record what this search finds. For the
+            unattended sweep -- a person asking for a search is always
+            honoured, however many times it has come up empty before.
+            Defaults to False.
 
     Returns:
         List[MatchedSearchResultData]: List with chosen search results.
@@ -623,6 +632,15 @@ def auto_search(
         # Auto search volume
         # Get open issues (monitored and no file).
         searchable_issues = volume.get_open_issues()
+        if respect_backoff:
+            due = due_issues(searchable_issues)
+            if len(due) != len(searchable_issues):
+                LOGGER.info(
+                    'Volume %d: asking about %d of %d open issues; the rest '
+                    'came up empty recently enough to leave alone',
+                    volume_id, len(due), len(searchable_issues)
+                )
+            searchable_issues = due
 
     else:
         # Auto search issue
@@ -633,7 +651,8 @@ def auto_search(
             searchable_issues = [(issue_id, issue_data.calculated_issue_number)]
 
     if not searchable_issues:
-        # No issues to search for
+        # No issues to search for -- either none are open, or every one of
+        # them is still waiting out a run of fruitless searches.
         result = []
         LOGGER.debug(f'Auto search results: {result}')
         return result
@@ -650,6 +669,11 @@ def auto_search(
     ):
         # We're searching for one "item", so just grab first search result.
         result = search_results[:1] if search_results else []
+        if respect_backoff and issue_id is not None:
+            if result:
+                record_hit((issue_id,))
+            else:
+                record_miss(issue_id)
         LOGGER.debug('Auto search results: %s', result)
         return result
 
@@ -715,9 +739,22 @@ def auto_search(
     ]
     chosen_links = {part['link'] for part in chosen_downloads}
 
+    if respect_backoff:
+        # Whatever the volume-level search covered has been found, so those
+        # issues start again from zero even though no issue search ran.
+        record_hit(
+            issue_id
+            for issue_id, number in searchable_issues
+            if any(
+                check_overlapping_issues(number, part["issue_number"]) # type: ignore
+                for part in chosen_downloads
+            )
+        )
+
     while remaining_missing:
         missing_issue = remaining_missing.pop(0)
-        fallback_results = auto_search(volume_id, missing_issue[0])
+        fallback_results = auto_search(
+            volume_id, missing_issue[0], respect_backoff)
         for fallback in fallback_results:
             if fallback['link'] not in chosen_links:
                 chosen_downloads.append(fallback)

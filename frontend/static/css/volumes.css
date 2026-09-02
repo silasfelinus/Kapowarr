@@ -63,6 +63,86 @@ main:not(
 
 #library-container {
 	padding: 1.5rem;
+	position: relative;
+}
+
+/*  */
+/* Alphabet rail */
+/* A strip of the letters the library actually contains, down the right of
+   the gallery. Dragging it scrubs; tapping a letter jumps. Positioned
+   against the viewport rather than the list so it stays put while the
+   library moves underneath it. */
+#alphabet-rail {
+	position: fixed;
+	right: 0;
+	top: 50%;
+	transform: translateY(-50%);
+	z-index: 4;
+	/* The strip of letters is under thirty pixels wide, which is a poor
+	   target for a thumb. The rail is what receives the pointer, so it
+	   reaches further left than it appears to: once the drag has started
+	   the position along it is all that is read, and horizontal precision
+	   stops mattering entirely. */
+	padding: .5rem .25rem .5rem 1.25rem;
+	/* The rail is a scrub target: a finger dragging down it must not also
+	   drag the page. */
+	touch-action: none;
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+#alphabet-letters {
+	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+	gap: 0;
+	padding: .35rem .15rem;
+	border-radius: 1rem;
+	background-color: var(--foreground-color);
+	border: 1px solid var(--border-color);
+	box-shadow: 0 0 .35rem rgba(0, 0, 0, .35);
+}
+
+.alphabet-letter {
+	appearance: none;
+	background: none;
+	border: none;
+	color: var(--text-color);
+	font-size: .62rem;
+	font-weight: 700;
+	line-height: 1.15;
+	padding: 0 .3rem;
+	margin: 0;
+	cursor: pointer;
+	/* The pointer is tracked by where it is on the rail, not by which
+	   letter it lands on, so the letters themselves must not swallow it. */
+	pointer-events: none;
+}
+
+/* The letter under the finger, big enough to read while dragging. */
+#alphabet-bubble {
+	position: fixed;
+	right: 3rem;
+	top: 50%;
+	transform: translateY(-50%);
+	z-index: 5;
+	min-width: 3.5rem;
+	padding: .75rem;
+	border-radius: .75rem;
+	background-color: var(--header-background-color);
+	color: var(--header-color);
+	font-size: 2rem;
+	font-weight: 700;
+	text-align: center;
+	pointer-events: none;
+	box-shadow: 0 0 .5rem rgba(0, 0, 0, .4);
+}
+
+/* Mass edit hands scrolling to the inner table and covers the right-hand
+   edge with its action bar; the rail has nowhere to be and nothing to do. */
+main:has(#massedit-toggle:checked) #alphabet-rail,
+main:has(#massedit-toggle:checked) #alphabet-bubble {
+	display: none;
 }
 
 main:has(#massedit-toggle:checked) #library-container {
@@ -540,6 +620,17 @@ main:has(#massedit-toggle:checked) #lib-stats {
 @media (max-width: 442px) {
 	#library-container {
 		padding: 1rem;
+	}
+
+	/* Bigger target and more room to move on the surface where the rail is
+	   most of the point. */
+	.alphabet-letter {
+		font-size: .7rem;
+		padding: .05rem .35rem;
+	}
+
+	#alphabet-bubble {
+		right: 3.25rem;
 	}
 
 	#list-library {

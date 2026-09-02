@@ -30,10 +30,7 @@ from requests import RequestException
 from backend.base.custom_exceptions import (EnqueuingDownloadFailure,
                                             IndexerNotFound, IssueNotFound,
                                             KeyNotFound)
-from backend.base.definitions import (Download, DownloadSource, DownloadState,
-                                      DownloadType,
-                                      EnqueuingDownloadFailureReason,
-                                      ExternalDownloadClient, SearchResultData)
+from backend.base.definitions import (Constants, Download, DownloadSource, DownloadState, DownloadType, EnqueuingDownloadFailureReason, ExternalDownloadClient, SearchResultData)
 from backend.base.file_extraction import (extract_filename_data,
                                           refine_special_version)
 from backend.base.helpers import (AsyncSession, Session,
@@ -510,12 +507,26 @@ async def search_torznab_indexer(
 ) -> List[SearchResultData]:
     params = {
         't': 'search',
-        'q': query,
         'apikey': indexer.api_key,
         'extended': '1'
     }
-    if indexer.category_filter_enabled and indexer.categories:
+    # An empty query is a feed request, not a search: Newznab and Torznab
+    # both answer `t=search` with no `q` by returning the indexer's most
+    # recent releases. One request then covers the whole library instead of
+    # one volume. See `backend.features.release_feed`.
+    if query:
+        params['q'] = query
+    if query and indexer.category_filter_enabled and indexer.categories:
         params['cat'] = indexer.categories
+
+    elif not query:
+        # A feed request is only useful narrowed. `category_filter_enabled`
+        # decides whether a *search* is confined to comics -- a reasonable
+        # thing to turn off, since the query itself does the narrowing. A
+        # request with no query has nothing doing the narrowing, so on a
+        # general-purpose tracker its hundred most recent items would be
+        # films and television and no comic would ever appear in the window.
+        params['cat'] = indexer.categories or Constants.COMIC_CATEGORY
 
     # Rationed on its own, not with every other indexer behind the same
     # Prowlarr/Jackett hostname. See `register_rate_limit_scope`.

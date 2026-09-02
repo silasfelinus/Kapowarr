@@ -200,11 +200,16 @@ def _rank_search_result(
     else:
         # Search was for volume
         if isinstance(result['issue_number'], tuple):
-            issue_fit = (
-                1.0
-                /
-                (result['issue_number'][1] - result['issue_number'][0] + 1)
-            )
+            # A pack covering fewer issues is the better answer to a volume
+            # search, so rank by how much it covers -- defensively, because
+            # the range comes from a parsed release name and need not be
+            # sane. A1 (1992) on 2026-09-02 produced one whose ends were the
+            # wrong way round, which divided by zero and took the whole
+            # volume's search down with it. Sorted, and guarded, a nonsense
+            # range simply ranks like a single issue.
+            low, high = sorted(result['issue_number'])
+            covered = high - low + 1
+            issue_fit = 1.0 / covered if covered > 0 else 1.0
 
         elif isinstance(result['issue_number'], float):
             issue_fit = 1
@@ -437,9 +442,63 @@ def _match_search_result(
     return match
 
 
+def _ranked_for(
+    search_results,
+    volume_data,
+    volume_issues,
+    number_to_year,
+    calculated_issue_number,
+    title: str
+) -> List[MatchedSearchResultData]:
+    """Match a fetched set of releases against one volume or issue and rank it.
+
+    Split out because it is the whole of what an issue search does beyond the
+    fetch, and the fetch is what costs an indexer request.
+
+    Args:
+        search_results: The releases to consider.
+
+        volume_data: The volume they were fetched for.
+
+        volume_issues: Its issues.
+
+        number_to_year: Issue number to release year, for matching.
+
+        calculated_issue_number: The issue being matched, or None for the
+            volume as a whole.
+
+        title (str): The title they were fetched under, for ranking.
+
+    Returns:
+        List[MatchedSearchResultData]: The results, matched and best first.
+    """
+    results: List[MatchedSearchResultData] = [
+        {
+            **result,
+            **_match_search_result(
+                result, volume_data, volume_issues,
+                number_to_year, calculated_issue_number
+            )
+        }
+        for result in search_results
+    ]
+
+    search_title = normalise_query_string(title).replace(':', '')
+    results.sort(key=lambda r: _rank_search_result(
+        r, search_title, volume_data.volume_number,
+        (
+            volume_data.year,
+            number_to_year.get(calculated_issue_number)
+        ),
+        calculated_issue_number
+    ))
+    return results
+
+
 def manual_search(
     volume_id: int,
-    issue_id: Union[int, None] = None
+    issue_id: Union[int, None] = None,
+    already_fetched: Union[List[MatchedSearchResultData], None] = None
 ) -> List[MatchedSearchResultData]:
     """Do a manual search for a volume or issue.
 
@@ -448,6 +507,21 @@ def manual_search(
         issue_id (Union[int, None], optional): The id of the issue to search for,
         in the case that you want to search for an issue instead of a volume.
             Defaults to None.
+
+        already_fetched (Union[List[MatchedSearchResultData], None], optional):
+            Rows a previous search of this volume already brought back, to be
+            matched against this issue instead of asking the indexers again.
+
+            An indexer's query is a text search on the series, so asking it
+            for "Save Now #2" hands back the same releases as asking it for
+            "Save Now" -- the issue is picked out here, locally, afterwards.
+            Silas, looking at a sweep: "I *definitely* donut think that one
+            catwoman query should result in 80 requests." He was right, and
+            the log agrees: a volume search returning 159 rows was followed
+            by three issue searches returning 159 rows each, eighty seconds
+            apiece, for rows that were already in hand.
+
+            Defaults to None, which searches.
 
     Returns:
         List[MatchedSearchResultData]: List with search results.
@@ -476,6 +550,21 @@ def manual_search(
         f'#{issue_number}' if issue_number else ''
     )
     started = monotonic()
+
+    if already_fetched is not None:
+        # Nothing to ask: rank what is already here against this issue.
+        results = _ranked_for(
+            already_fetched, volume_data, volume_issues, number_to_year,
+            calculated_issue_number,
+            volume_data.title or volume_data.alt_title or ''
+        )
+        LOGGER.info(
+            'Matched %s against %d release(s) already fetched for this '
+            'volume; no indexer was asked',
+            f'#{issue_number}' if issue_number else volume_data.title,
+            len(already_fetched)
+        )
+        return results
 
     for title in (volume_data.title, volume_data.alt_title):
         if not title:
@@ -522,20 +611,10 @@ def manual_search(
         if not search_results:
             continue
 
-        results: List[MatchedSearchResultData] = [
-            matched(result) for result in search_results
-        ]
-
-        search_title = normalise_query_string(title).replace(':', '')
-        # Sort results; put best result at top
-        results.sort(key=lambda r: _rank_search_result(
-            r, search_title, volume_data.volume_number,
-            (
-                volume_data.year,
-                number_to_year.get(calculated_issue_number) # type: ignore
-            ),
-            calculated_issue_number
-        ))
+        results = _ranked_for(
+            search_results, volume_data, volume_issues, number_to_year,
+            calculated_issue_number, title
+        )
 
         LOGGER.debug('Manual search results: %s', results)
         _log_search_cost(volume_data, issue_number, started, len(results))
@@ -589,7 +668,8 @@ def _log_search_cost(volume_data, issue_number, started, found: int) -> None:
 def auto_search(
     volume_id: int,
     issue_id: Union[int, None] = None,
-    respect_backoff: bool = False
+    respect_backoff: bool = False,
+    already_fetched: Union[List[MatchedSearchResultData], None] = None
 ) -> List[MatchedSearchResultData]:
     """Search for a volume or issue and automatically choose a result.
 
@@ -604,6 +684,11 @@ def auto_search(
             unattended sweep -- a person asking for a search is always
             honoured, however many times it has come up empty before.
             Defaults to False.
+
+        already_fetched (Union[List[MatchedSearchResultData], None], optional):
+            Releases a search of this volume has already brought back, to be
+            matched against this issue before any indexer is asked again.
+            Defaults to None.
 
     Returns:
         List[MatchedSearchResultData]: List with chosen search results.
@@ -657,11 +742,23 @@ def auto_search(
         LOGGER.debug(f'Auto search results: {result}')
         return result
 
-    search_results = [
-        r
-        for r in manual_search(volume_id, issue_id)
-        if r['match']
-    ]
+    # Kept unfiltered as well as filtered. `match` is answered against what
+    # this search asked for, so a release naming issue #34 does not match a
+    # search for the volume as a whole -- and handing on only the matches
+    # therefore threw away precisely the rows the issue searches were about
+    # to go and fetch again. On 2026-09-02 that was Star Trek (1967): 142
+    # releases came back for the volume, none of them matched it, and
+    # twenty-seven issue searches then re-asked the indexers one at a time.
+    fetched = manual_search(volume_id, issue_id, already_fetched)
+    search_results = [r for r in fetched if r['match']]
+
+    if not search_results and already_fetched:
+        # Nothing here for this issue. The volume-level fetch is one broad
+        # query and an indexer caps how many rows it returns, so a phrasing
+        # naming the issue can still surface something that fell off the end
+        # of that list. Only now is it worth the request.
+        fetched = manual_search(volume_id, issue_id)
+        search_results = [r for r in fetched if r['match']]
 
     if issue_id is not None or volume_data.special_version not in (
         SpecialVersion.NORMAL,
@@ -753,8 +850,15 @@ def auto_search(
 
     while remaining_missing:
         missing_issue = remaining_missing.pop(0)
+        # The releases the volume search brought back are handed on rather
+        # than fetched again -- see `manual_search`.
         fallback_results = auto_search(
-            volume_id, missing_issue[0], respect_backoff)
+            volume_id, missing_issue[0], respect_backoff,
+            # Everything that came back, not just what matched the volume:
+            # see where `fetched` is set. `or None`, not the empty list -- a
+            # volume search that came back with nothing has nothing to hand
+            # on, and the issue searches have to go and ask for themselves.
+            already_fetched=fetched or None)
         for fallback in fallback_results:
             if fallback['link'] not in chosen_links:
                 chosen_downloads.append(fallback)

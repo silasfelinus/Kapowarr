@@ -66,9 +66,7 @@ from requests import RequestException
 from backend.base.custom_exceptions import (EnqueuingDownloadFailure,
                                             IndexerNotFound, IssueNotFound,
                                             KeyNotFound)
-from backend.base.definitions import (Download, DownloadSource,
-                                      EnqueuingDownloadFailureReason,
-                                      SearchResultData)
+from backend.base.definitions import (Constants, Download, DownloadSource, EnqueuingDownloadFailureReason, SearchResultData)
 from backend.base.file_extraction import (extract_filename_data,
                                           refine_special_version)
 from backend.base.helpers import (AsyncSession, Session,
@@ -438,15 +436,27 @@ async def search_indexer(
                 await async_sleep(interval - elapsed)
             starts[key] = monotonic()
 
+    params = {
+        "t": "search",
+        "apikey": indexer.api_key,
+        "o": "json",
+        "extended": "1"
+    }
+    # An empty query is a feed request, not a search: Newznab and Torznab
+    # both answer `t=search` with no `q` by returning the indexer's most
+    # recent releases. One request then covers the whole library instead of
+    # one volume. See `backend.features.release_feed`.
+    if query:
+        params["q"] = query
+    else:
+        # Same reasoning as Torznab: a feed request has no query doing the
+        # narrowing, so without a category a general indexer's most recent
+        # hundred items are films and television and no comic is ever seen.
+        params["cat"] = Constants.COMIC_CATEGORY
+
     body = await session.get_text(
         newznab_api_url(indexer.base_url),
-        params={
-            "t": "search",
-            "q": query,
-            "apikey": indexer.api_key,
-            "o": "json",
-            "extended": "1"
-        },
+        params=params,
         quiet_fail=True
     )
     if not body:

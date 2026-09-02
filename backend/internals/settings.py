@@ -202,7 +202,11 @@ task_intervals = {
     # the download folder with nothing coming back for it. Hourly is plenty:
     # this is a backstop for a failure that should be rare, and the files it
     # looks for are not going anywhere.
-    'orphaned_download_recovery': 3600 # every hour
+    'orphaned_download_recovery': 3600, # every hour
+    # One request per indexer covers the whole library, so this is cheap
+    # enough to run often and is how a new release is noticed within the
+    # quarter hour instead of whenever the sweep next comes round.
+    'release_feed_sync': 900 # every 15 minutes
 }
 
 SENSITIVE_SETTING_KEYS = frozenset((

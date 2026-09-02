@@ -27,6 +27,15 @@ folder -- a hardlink where the filesystem allows one, a copy where it does
 not -- and leaves the original exactly where it was, for whatever is still
 reading it and for the user to clear when they choose.
 
+**It only recovers what the library is still missing.** Linking a file in
+does not make the original vanish -- that is the point -- and the library's
+own post-processing renames and converts what it imports, so the copy in the
+library no longer shares a name with the file in the download folder. Without
+this check the pass therefore re-imported the same file every hour, copying
+and re-converting it each time: on 2026-09-02 X-Statix 13 was recovered at
+09:02, 10:02, 11:02 and 12:02, a full cross-device copy apiece. A file whose
+issue the library already has is done, whatever it is called.
+
 **It only touches what nothing else claims.** A file belonging to a download
 still in the queue is left alone; it may still be being written. Files also
 have to have stopped changing for `WATCHED_FOLDER_SETTLE_SECONDS` before they
@@ -39,7 +48,7 @@ the library stays exactly where it is.
 
 from __future__ import annotations
 
-from typing import Callable, Set, Union
+from typing import Any, Callable, Dict, List, Set, Union
 
 from backend.base.logging import LOGGER
 from backend.features.watched_folder_import import (WatchedFolderImportSummary,
@@ -73,6 +82,70 @@ def files_in_use() -> Set[str]:
                 in_use.add(filepath)
 
     return in_use
+
+
+def still_missing(
+    filepaths: List[str],
+    index: Union[Any, None] = None
+) -> List[str]:
+    """Narrow a list of files to those whose issue the library still lacks.
+
+    Args:
+        filepaths (List[str]): Candidate files from the download folder.
+
+        index (Union[Any, None], optional): A prepared `LibraryIndex`, built
+            once for the pass. Defaults to None, meaning build one.
+
+    Returns:
+        List[str]: The ones worth importing. A file that cannot be placed is
+            kept, because `import_loose_files` leaves an unmatched file alone
+            anyway and deciding here would be a second, quieter place to get
+            that wrong.
+    """
+    from backend.base.file_extraction import extract_filename_data
+    from backend.base.helpers import check_overlapping_issues
+    from backend.features.release_feed import wanted_issues_of
+    from backend.features.watched_folder_import import (
+        LibraryIndex, match_parsed_to_library_volume)
+
+    if index is None:
+        index = LibraryIndex()
+
+    wanted: Dict[int, List[Any]] = {}
+    keep: List[str] = []
+    for filepath in filepaths:
+        try:
+            parsed = extract_filename_data(filepath)
+            volume_id = match_parsed_to_library_volume(parsed, index, filepath)
+        except Exception:
+            LOGGER.exception(
+                'Could not work out what %s is; leaving it to the import: ',
+                filepath)
+            keep.append(filepath)
+            continue
+
+        if volume_id is None:
+            keep.append(filepath)
+            continue
+
+        if volume_id not in wanted:
+            wanted[volume_id] = wanted_issues_of(volume_id)
+
+        covers = parsed.get('issue_number')
+        if covers is None:
+            # A special or a whole-volume file: no issue number to compare,
+            # so fall back to whether the volume wants anything at all.
+            if wanted[volume_id]:
+                keep.append(filepath)
+            continue
+
+        if any(
+            check_overlapping_issues(number, covers)
+            for _, number in wanted[volume_id]
+        ):
+            keep.append(filepath)
+
+    return keep
 
 
 def recover_orphaned_downloads(
@@ -110,7 +183,10 @@ def recover_orphaned_downloads(
         leave_alone=in_use,
         description='Orphaned downloads',
         # Never move: something may still be seeding out of this folder.
-        leave_original=True
+        leave_original=True,
+        # And never re-import what the library already has: see
+        # `still_missing`.
+        narrow=still_missing
     )
 
 

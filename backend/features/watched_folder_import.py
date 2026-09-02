@@ -377,7 +377,8 @@ def import_loose_files(
     should_stop: Union[Callable[[], bool], None] = None,
     leave_alone: Union[Container[str], None] = None,
     description: str = 'Loose files',
-    leave_original: bool = False
+    leave_original: bool = False,
+    narrow: Union[Callable[[List[str]], List[str]], None] = None
 ) -> WatchedFolderImportSummary:
     """Import whatever finished files in a folder belong to a known volume.
 
@@ -408,6 +409,13 @@ def import_loose_files(
             and leave the source where it is, instead of moving it. Defaults
             to False.
 
+        narrow (Union[Callable[[List[str]], List[str]], None], optional): A
+            last say over which settled files are worth importing. The
+            watched folder wants everything a user drops in it; orphan
+            recovery wants only what the library is still missing, since
+            linking a file in leaves the original behind to be found again.
+            Defaults to None, meaning import whatever matched.
+
     Returns:
         WatchedFolderImportSummary: What the pass did.
     """
@@ -424,6 +432,16 @@ def import_loose_files(
     ready, summary['unsettled'] = find_importable_files(folder)
     if leave_alone is not None:
         ready = [f for f in ready if f not in leave_alone]
+
+    if ready and narrow is not None:
+        considered = len(ready)
+        ready = narrow(ready)
+        if len(ready) != considered:
+            LOGGER.info(
+                '%s: %d of %d file(s) are still worth importing',
+                description, len(ready), considered
+            )
+
     if not ready:
         return summary
 

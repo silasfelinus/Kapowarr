@@ -6,9 +6,12 @@ from unittest.mock import MagicMock, patch
 
 from bencoding import bencode
 
+from aiohttp import ClientError
+
 from backend.base.custom_exceptions import EnqueuingDownloadFailure
-from backend.base.definitions import (DownloadType, SpecialVersion,
-                                      VolumeData)
+from backend.base.definitions import (DownloadType,
+                                      EnqueuingDownloadFailureReason,
+                                      SpecialVersion, VolumeData)
 from backend.features import search
 from backend.implementations import torznab as tz
 from backend.implementations.query_builders import QueryBuilders
@@ -217,28 +220,119 @@ class torrent_metadata_conversion(unittest.TestCase):
         self.assertIn('dn=Batman+Pack', magnet)
 
 
-class _SlowContentSession:
+class _TorrentResponse:
+    def __init__(self, status=200, content=b'', delay=0.0):
+        self.status = status
+        self.ok = 200 <= status < 400
+        self._content = content
+        self._delay = delay
+
+    @property
+    def content(self):
+        return self
+
+    async def read(self):
+        return self._content
+
+
+class _TorrentGetCM:
+    def __init__(self, response, delay=0.0, error=None):
+        self._response = response
+        self._delay = delay
+        self._error = error
+
+    async def __aenter__(self):
+        if self._delay:
+            await sleep(self._delay)
+        if self._error is not None:
+            raise self._error
+        return self._response
+
+    async def __aexit__(self, *args):
+        return None
+
+
+class _TorrentSession:
+    def __init__(self, response=None, delay=0.0, error=None):
+        self._response = response
+        self._delay = delay
+        self._error = error
+
     async def __aenter__(self):
         return self
 
     async def __aexit__(self, *args):
         return None
 
-    async def get_content(self, *args, **kwargs):
-        await sleep(1)
-        return b''
+    def get(self, link, *args, **kwargs):
+        return _TorrentGetCM(self._response, self._delay, self._error)
 
 
 class torrent_metadata_timeout(unittest.IsolatedAsyncioTestCase):
     async def test_torrent_metadata_fetch_has_a_total_deadline(self):
         with patch.object(
-            tz, 'AsyncSession', return_value=_SlowContentSession()
+            tz, 'AsyncSession', return_value=_TorrentSession(delay=1)
         ), patch.object(tz, 'TORZNAB_DOWNLOAD_TIMEOUT', 0.001):
             with self.assertRaises(EnqueuingDownloadFailure):
                 await tz._normalise_torrent_link(
                     'https://prowlarr.example/download/slow',
                     'Batman 001'
                 )
+
+
+class a_tracker_having_a_bad_day_is_not_a_dead_release(
+    unittest.IsolatedAsyncioTestCase
+):
+    """`LINK_BROKEN` is blocklisted forever and the release is never asked
+    about again, so it has to mean the release and not the indexer.
+
+    `get_content(quiet_fail=True)` handed back an empty bytestring for
+    every kind of failure alike, so the two could not be told apart and
+    both were recorded as broken.
+    """
+
+    async def _reason_for(self, **session):
+        with patch.object(
+            tz, 'AsyncSession', return_value=_TorrentSession(**session)
+        ):
+            with self.assertRaises(EnqueuingDownloadFailure) as ctx:
+                await tz._normalise_torrent_link(
+                    'https://prowlarr.example/download/1', 'Batman 001'
+                )
+        return ctx.exception.reason
+
+    async def test_a_release_the_indexer_says_is_gone_is_broken(self):
+        for status in (404, 410):
+            with self.subTest(status=status):
+                self.assertEqual(
+                    await self._reason_for(
+                        response=_TorrentResponse(status=status)
+                    ),
+                    EnqueuingDownloadFailureReason.LINK_BROKEN
+                )
+
+    async def test_an_indexer_that_is_unwell_does_not_condemn_the_release(self):
+        for status in (500, 502, 503, 401, 403):
+            with self.subTest(status=status):
+                self.assertEqual(
+                    await self._reason_for(
+                        response=_TorrentResponse(status=status)
+                    ),
+                    EnqueuingDownloadFailureReason.SOURCE_UNAVAILABLE
+                )
+
+    async def test_never_reaching_the_indexer_says_nothing_about_the_link(self):
+        self.assertEqual(
+            await self._reason_for(error=ClientError()),
+            EnqueuingDownloadFailureReason.SOURCE_UNAVAILABLE
+        )
+
+    async def test_an_answer_with_no_torrent_in_it_really_is_broken(self):
+        "The indexer answered, and had nothing to give."
+        self.assertEqual(
+            await self._reason_for(response=_TorrentResponse(content=b'')),
+            EnqueuingDownloadFailureReason.LINK_BROKEN
+        )
 
 
 class torznab_search_registration(unittest.TestCase):

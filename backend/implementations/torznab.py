@@ -689,6 +689,40 @@ class IndexerTorrentDownload(TorrentDownload):
         self._files = [join(self._download_folder, torrent_name)]
 
 
+async def _fetch_torrent(session: AsyncSession, link: str) -> bytes:
+    """The .torrent behind an indexer link, or a failure saying whose fault
+    it was.
+
+    `get_content(quiet_fail=True)` hands back an empty bytestring for every
+    kind of failure alike, which left the caller unable to tell a release
+    that is gone from an indexer that is briefly unreachable -- and it
+    blocklists, permanently, for the first.
+
+    Args:
+        session (AsyncSession): The session to fetch on.
+        link (str): The indexer's torrent link.
+
+    Raises:
+        EnqueuingDownloadFailure: The indexer answered, but not with a
+            torrent.
+
+    Returns:
+        bytes: The torrent file's content.
+    """
+    async with session.get(link) as response:
+        if not response.ok:
+            LOGGER.warning(
+                'Indexer answered HTTP %d for a torrent link',
+                response.status
+            )
+            raise EnqueuingDownloadFailure(
+                EnqueuingDownloadFailureReason.for_fetch_status(
+                    response.status
+                )
+            )
+        return await response.content.read()
+
+
 async def _normalise_torrent_link(
     link: str,
     title: str
@@ -699,12 +733,20 @@ async def _normalise_torrent_link(
     async with AsyncSession() as session:
         try:
             content = await wait_for(
-                session.get_content(link, quiet_fail=True),
+                _fetch_torrent(session, link),
                 timeout=TORZNAB_DOWNLOAD_TIMEOUT
             )
         except (AsyncioTimeoutError, ClientError):
-            content = b''
+            # Nothing came back at all -- a timeout, a reset, or a server
+            # error the session already retried. That is the indexer, not
+            # the release, and blocklisting the release for it is
+            # permanent.
+            raise EnqueuingDownloadFailure(
+                EnqueuingDownloadFailureReason.SOURCE_UNAVAILABLE
+            )
+
     if not content:
+        # The indexer answered, with nothing. That really is a dead link.
         raise EnqueuingDownloadFailure(
             EnqueuingDownloadFailureReason.LINK_BROKEN
         )

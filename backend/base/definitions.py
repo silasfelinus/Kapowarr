@@ -638,6 +638,45 @@ class EnqueuingDownloadFailureReason(BaseEnum):
     ONLY_RATE_LIMITED_LINKS = "All working download links on the webpage are from rate limited services"
 
     LINK_BROKEN = "Download link broken"
+    """
+    The indexer answered that this release is gone -- 404 or 410, and
+    nothing else. The caller blocklists on this, permanently, so it has to
+    mean the release and not the server: see `SOURCE_UNAVAILABLE`.
+    """
+
+    SOURCE_UNAVAILABLE = "The indexer could not be reached just now"
+    """
+    The fetch failed for a reason that says nothing about the release --
+    the indexer returned a server error, refused the credentials, timed
+    out, or could not be connected to at all.
+
+    Distinct from `LINK_BROKEN` because the caller blocklists that one
+    forever, and the two used to be the same thing: every failure to fetch
+    a release recorded it as broken and never tried it again. That is the
+    mistake `_raise_for_request_failure` in `download_clients.py` already
+    documents for GetComics' 429s, made again one layer up -- and it is
+    one-way, because a release that is blocklisted is never asked about
+    again to find out whether the answer has changed.
+    """
+
+    @classmethod
+    def for_fetch_status(cls, status: int) -> "EnqueuingDownloadFailureReason":
+        """What a failed fetch of a release means for the release itself.
+
+        Args:
+            status (int): The HTTP status the indexer answered with.
+
+        Returns:
+            EnqueuingDownloadFailureReason: `LINK_BROKEN` only when the
+            indexer said the release is gone, so only that is blocklisted;
+            `SOURCE_UNAVAILABLE` for everything else.
+        """
+        # The only statuses that say the release itself is gone.
+        # Everything else an indexer can answer with -- a 500, a 502 while
+        # it restarts, a 401 from a stale API key -- is about the indexer.
+        if status in (404, 410):
+            return cls.LINK_BROKEN
+        return cls.SOURCE_UNAVAILABLE
 
 
 class DownloadType(BaseEnum):

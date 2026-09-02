@@ -665,26 +665,71 @@ def _log_search_cost(volume_data, issue_number, started, found: int) -> None:
     )
 
 
-class RefetchBudget:
-    """Whether asking an indexer again is still worth it for one volume.
+# How many times in a row asking about a single issue may come back with
+# nothing before the volume stops asking. Small, because the whole point is
+# that a back catalogue answers the same way for every one of its issues --
+# but not one, because the first issue of a volume is not a fair sample of
+# the rest.
+FRUITLESS_PROBE_ALLOWANCE = 3
 
-    An issue the volume's own search did not cover may still be findable with
-    a phrasing that names it -- an indexer caps how many rows it returns, so
-    the wanted release can fall off the end of a broad query. But it usually
-    is not: when the indexers answer the whole run in one go, every such
-    request hands back rows already in front of us. One probe per volume
-    settles which of the two this is, and the rest of its issues go the cheap
-    way.
+
+class RefetchBudget:
+    """Whether asking an indexer again is still earning its keep for one
+    volume.
+
+    An issue the volume's own search did not cover may still be findable
+    with a phrasing that names it -- an indexer caps how many rows it
+    returns, so the wanted release can fall off the end of a broad query.
+    But usually it is not, and every such request is a second search paid
+    for at full price.
+
+    The first version of this asked whether the extra request brought back
+    any release the volume search had not. It never once said no. Silas's
+    sweep of 2026-09-02 ran 340 searches to finish 221: every volume with
+    results probed on every single issue, all the way down. The indexers do
+    return rows the broad query did not -- a different query, a different
+    top-N slice -- they are simply rows that do not match either. Asking
+    "did anything new come back" answers yes forever while the answer that
+    matters is no.
+
+    So the question is now the useful one: did asking actually find the
+    issue? A run of misses in a row means this volume's releases are not
+    hiding behind a per-issue phrasing, and the rest of its issues take the
+    cheap path. A hit resets the count, so a volume where asking does work
+    goes on asking for as long as it keeps working.
     """
 
-    __slots__ = ('exhausted',)
+    __slots__ = ('fruitless', 'spent')
 
     def __init__(self) -> None:
-        self.exhausted = False
+        self.fruitless = 0
+        self.spent = False
         return
 
     def __bool__(self) -> bool:
-        return not self.exhausted
+        return not self.spent
+
+    def answered(self, matched: bool, new_releases: int) -> None:
+        """Record what one probe brought back.
+
+        Args:
+            matched (bool): Whether the probe found the issue it was for.
+            new_releases (int): How many releases it returned that the
+                volume search had not. Zero settles the question outright:
+                the indexers are answering the whole run in one go.
+        """
+        if matched:
+            self.fruitless = 0
+            return
+
+        if not new_releases:
+            self.spent = True
+            return
+
+        self.fruitless += 1
+        if self.fruitless >= FRUITLESS_PROBE_ALLOWANCE:
+            self.spent = True
+        return
 
 
 def auto_search(
@@ -715,8 +760,9 @@ def auto_search(
 
         refetch (Union[RefetchBudget, None], optional): Whether asking an
             indexer again, for an issue the handed-on releases do not cover,
-            is still worth doing for this volume. Shared across the volume's
-            issues. Defaults to None, meaning never ask again.
+            is still earning its keep for this volume. Shared across the
+            volume's issues, and spent by a run of asks that find nothing.
+            Defaults to None, meaning never ask again.
 
     Returns:
         List[MatchedSearchResultData]: List with chosen search results.
@@ -790,23 +836,26 @@ def auto_search(
         # catalogue it usually does not: AC Annual on 2026-09-02 returned the
         # same forty-five rows for the volume and for every one of its
         # missing issues, so each issue paid for a second search that could
-        # only ever hand back what was already in front of it. So the first
-        # such request per volume is a probe. If it brings back nothing the
-        # volume search had not already, the indexers are answering the whole
-        # run in one go and no later issue of this volume asks again.
+        # only ever hand back what was already in front of it. So these are
+        # probes, and the volume stops paying for them once they stop
+        # finding anything -- see `RefetchBudget`.
         already_seen = {r['link'] for r in already_fetched}
         refetched = manual_search(volume_id, issue_id)
 
-        if not {r['link'] for r in refetched} - already_seen:
-            refetch.exhausted = True
-            LOGGER.debug(
-                'Volume %d: asking per issue adds nothing to what the volume '
-                'search returned; the rest of its issues will not ask',
-                volume_id
-            )
-
         fetched = refetched
         search_results = [r for r in fetched if r['match']]
+
+        refetch.answered(
+            bool(search_results),
+            len({r['link'] for r in refetched} - already_seen)
+        )
+        if not refetch:
+            LOGGER.info(
+                'Volume %d: asking per issue is not finding anything here; '
+                'the rest of its issues will go on what the volume search '
+                'returned',
+                volume_id
+            )
 
     if issue_id is not None or volume_data.special_version not in (
         SpecialVersion.NORMAL,

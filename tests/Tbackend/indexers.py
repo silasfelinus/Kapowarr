@@ -363,9 +363,10 @@ class search_indexer_parsing(unittest.IsolatedAsyncioTestCase):
 # create_nzb_download()
 # =====================
 class _FakeResponse:
-    def __init__(self, ok=True, headers=None):
+    def __init__(self, ok=True, headers=None, status=None):
         self.ok = ok
         self.headers = headers or {}
+        self.status = status if status is not None else (200 if ok else 404)
 
 
 class _FakeGetCM:
@@ -412,25 +413,17 @@ def _volume_mock(title='Batman', volume_number=1) -> MagicMock:
 
 
 class create_nzb_download_link_resolution(unittest.IsolatedAsyncioTestCase):
-    async def test_link_broken_on_client_error(self):
-        with patch.object(
-            indexers_module, 'AsyncSession',
-            return_value=_FakeResolveSession(raise_error=True)
-        ), patch.object(
-            indexers_module.Indexers, 'find_by_link', return_value=None
-        ):
-            with self.assertRaises(EnqueuingDownloadFailure) as ctx:
-                await create_nzb_download(
-                    'https://idx/get/1', 1, None, force_match=True
-                )
-        self.assertEqual(
-            ctx.exception.reason, EnqueuingDownloadFailureReason.LINK_BROKEN
-        )
+    """What a failed fetch says about the release.
 
-    async def test_link_broken_on_non_ok_response(self):
+    The caller blocklists `LINK_BROKEN` permanently and never asks about
+    that release again, so it has to mean the release is gone -- not that
+    the indexer was briefly unwell. Both used to raise it.
+    """
+
+    async def _reason_for(self, response=None, raise_error=False):
         with patch.object(
             indexers_module, 'AsyncSession',
-            return_value=_FakeResolveSession(_FakeResponse(ok=False))
+            return_value=_FakeResolveSession(response, raise_error)
         ), patch.object(
             indexers_module.Indexers, 'find_by_link', return_value=None
         ):
@@ -438,8 +431,35 @@ class create_nzb_download_link_resolution(unittest.IsolatedAsyncioTestCase):
                 await create_nzb_download(
                     'https://idx/get/1', 1, None, force_match=True
                 )
+        return ctx.exception.reason
+
+    async def test_a_release_the_indexer_says_is_gone_is_broken(self):
+        for status in (404, 410):
+            with self.subTest(status=status):
+                self.assertEqual(
+                    await self._reason_for(
+                        _FakeResponse(ok=False, status=status)
+                    ),
+                    EnqueuingDownloadFailureReason.LINK_BROKEN
+                )
+
+    async def test_an_indexer_that_is_unwell_does_not_condemn_the_release(self):
+        """500 while it restarts, 401 from a stale key, 503 behind a proxy.
+        None of those are the release's fault, and blocklisting is forever.
+        """
+        for status in (500, 502, 503, 401, 403, 400):
+            with self.subTest(status=status):
+                self.assertEqual(
+                    await self._reason_for(
+                        _FakeResponse(ok=False, status=status)
+                    ),
+                    EnqueuingDownloadFailureReason.SOURCE_UNAVAILABLE
+                )
+
+    async def test_never_reaching_the_indexer_says_nothing_about_the_link(self):
         self.assertEqual(
-            ctx.exception.reason, EnqueuingDownloadFailureReason.LINK_BROKEN
+            await self._reason_for(raise_error=True),
+            EnqueuingDownloadFailureReason.SOURCE_UNAVAILABLE
         )
 
     async def test_force_match_skips_matching_and_builds_download(self):

@@ -669,9 +669,11 @@ async def create_nzb_download(
             as-is. Defaults to False.
 
     Raises:
-        EnqueuingDownloadFailure: The link couldn't be reached
-            (LINK_BROKEN), or it doesn't match what's being downloaded for
-            and force_match is False (RESULT_DOES_NOT_MATCH).
+        EnqueuingDownloadFailure: The indexer said the release is gone
+            (LINK_BROKEN), the indexer could not be reached or answered
+            with anything else (SOURCE_UNAVAILABLE), or the release doesn't
+            match what's being downloaded for and force_match is False
+            (RESULT_DOES_NOT_MATCH). Only the first is blocklisted.
 
     Returns:
         Download: The download, ready to be queued.
@@ -683,16 +685,27 @@ async def create_nzb_download(
         async with AsyncSession() as session:
             async with session.get(link) as r:
                 if not r.ok:
+                    # Named, because the two outcomes below are very
+                    # different and nothing in the log used to say which
+                    # had happened -- a run on 2026-09-02 lost fourteen
+                    # releases to the blocklist without recording what the
+                    # indexer had actually answered.
+                    LOGGER.warning(
+                        'Indexer answered HTTP %d for a release of %s',
+                        r.status, source_name
+                    )
                     raise EnqueuingDownloadFailure(
-                        EnqueuingDownloadFailureReason.LINK_BROKEN
+                        EnqueuingDownloadFailureReason.for_fetch_status(r.status)
                     )
                 title = _parse_content_disposition_filename(
                     r.headers.get("Content-Disposition", "")
                 )
 
     except ClientError:
+        # Nothing came back at all -- a reset, a DNS failure, a timeout.
+        # That is the indexer, not the release.
         raise EnqueuingDownloadFailure(
-            EnqueuingDownloadFailureReason.LINK_BROKEN
+            EnqueuingDownloadFailureReason.SOURCE_UNAVAILABLE
         )
 
     if not title:

@@ -232,7 +232,7 @@ class the_rows_handed_on_are_all_of_them(unittest.TestCase):
         return
 
 
-class asking_again_is_probed_once_per_volume(unittest.TestCase):
+class asking_again_stops_when_it_stops_working(unittest.TestCase):
     """AC Annual (1990) on 2026-09-02:
 
         Search finished in 1.2s: AC Annual (1990)     -- 45 result(s)
@@ -246,14 +246,29 @@ class asking_again_is_probed_once_per_volume(unittest.TestCase):
 
     Asking per issue is worth it when an indexer truncated the broad query
     and the wanted release fell off the end. It is worth nothing when the
-    indexers answer the whole run in one go. One probe per volume settles
-    which, instead of paying per issue to be told the same thing.
+    indexers answer the whole run in one go.
+
+    The first fix asked whether the extra request brought back any release
+    the volume search had not, and the sweep of 2026-09-02 16:13 showed it
+    never once said no: 340 searches to finish 221, every volume with
+    results probing on every single issue. Different query, different top-N
+    slice -- so there is always something "new", and always something that
+    does not match either. What decides it is whether asking finds the
+    issue.
     """
 
-    OPEN = [(1, 1.0), (2, 2.0), (3, 3.0)]
+    OPEN = [(1, 1.0), (2, 2.0), (3, 3.0), (4, 4.0), (5, 5.0), (6, 6.0)]
 
-    def _run(self, refetch_adds_anything):
-        """Report every manual_search call: (issue, was it handed rows)."""
+    def _run(self, refetch_adds_anything, refetch_rows_are_new=False):
+        """Report every manual_search call: (issue, was it handed rows).
+
+        Args:
+            refetch_adds_anything (bool): Whether asking about one issue
+                specifically finds that issue.
+            refetch_rows_are_new (bool): Whether it brings back rows the
+                volume search had not -- true of a real indexer even when
+                none of them match, which is the whole difficulty.
+        """
         calls = []
 
         def fake_manual_search(volume_id, issue_id=None, already_fetched=None):
@@ -274,6 +289,15 @@ class asking_again_is_probed_once_per_volume(unittest.TestCase):
                     'match': True, 'link': f'https://example/new-{issue_id}',
                     'issue_number': float(issue_id), 'special_version': None
                 }]
+
+            if refetch_rows_are_new:
+                # Rows the volume search never returned, none of them this
+                # issue. What Prowlarr actually does.
+                return [{
+                    'match': False,
+                    'link': f'https://example/other-{issue_id}-{n}',
+                    'issue_number': float(n), 'special_version': None
+                } for n in (91, 92, 93)]
 
             # The same rows the volume search already brought back.
             return [{
@@ -303,12 +327,49 @@ class asking_again_is_probed_once_per_volume(unittest.TestCase):
         self.assertEqual(len(asked), len(self.OPEN))
         return
 
-    def test_the_budget_reads_as_spent_once_exhausted(self):
+    def test_a_volume_whose_probes_never_match_gives_up(self):
+        """The 2026-09-02 16:13 case, which the first fix walked straight
+        past: every probe brings back rows the volume search had not, and
+        not one of them is the issue. Alias (2001) paid for that twelve
+        times in a row.
+        """
+        asked = self._run(refetch_adds_anything=False, refetch_rows_are_new=True)
+
+        self.assertEqual(
+            len(asked), SR.FRUITLESS_PROBE_ALLOWANCE,
+            'the volume should stop once asking has stopped finding anything'
+        )
+        return
+
+    def test_the_budget_reads_as_spent_once_it_is(self):
+        budget = SR.RefetchBudget()
+        self.assertTrue(budget)
+
+        for _ in range(SR.FRUITLESS_PROBE_ALLOWANCE):
+            self.assertTrue(budget, 'spent before its allowance was used')
+            budget.answered(matched=False, new_releases=5)
+
+        self.assertFalse(budget)
+        return
+
+    def test_nothing_new_at_all_settles_it_outright(self):
+        "No need to spend the allowance on a question already answered."
         budget = SR.RefetchBudget()
 
-        self.assertTrue(budget)
-        budget.exhausted = True
+        budget.answered(matched=False, new_releases=0)
+
         self.assertFalse(budget)
+        return
+
+    def test_a_hit_buys_the_allowance_back(self):
+        "A volume where asking works should not run out of permission to."
+        budget = SR.RefetchBudget()
+
+        for _ in range(SR.FRUITLESS_PROBE_ALLOWANCE * 3):
+            budget.answered(matched=False, new_releases=5)
+            budget.answered(matched=True, new_releases=5)
+
+        self.assertTrue(budget)
         return
 
     def test_a_direct_issue_search_never_asks_twice(self):

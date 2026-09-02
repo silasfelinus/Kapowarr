@@ -357,15 +357,29 @@ async def create_nzb_download(
         async with AsyncSession() as session:
             async with session.get(link) as response:
                 if not response.ok:
+                    # Named, because what follows differs sharply and
+                    # nothing in the log used to say which had happened: a
+                    # run on 2026-09-02 lost fourteen releases to the
+                    # blocklist without recording what the indexer had
+                    # actually answered.
+                    LOGGER.warning(
+                        'Indexer answered HTTP %d for a release of %s',
+                        response.status, source_name
+                    )
                     raise EnqueuingDownloadFailure(
-                        EnqueuingDownloadFailureReason.LINK_BROKEN
+                        EnqueuingDownloadFailureReason.for_fetch_status(
+                            response.status
+                        )
                     )
                 title = _parse_content_disposition_filename(
                     response.headers.get('Content-Disposition', '')
                 )
     except ClientError:
+        # Nothing came back at all -- a reset, a DNS failure, a timeout, or
+        # a server error the session already retried. That is the indexer,
+        # not the release, and the blocklist is forever.
         raise EnqueuingDownloadFailure(
-            EnqueuingDownloadFailureReason.LINK_BROKEN
+            EnqueuingDownloadFailureReason.SOURCE_UNAVAILABLE
         )
 
     if not title:

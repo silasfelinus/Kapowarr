@@ -74,7 +74,7 @@ class the_sweep_stops_when_there_is_nothing_to_ask(unittest.TestCase):
         cursor.execute.return_value.fetchall.return_value = list(volumes)
         searched, stamped = [], []
 
-        def _auto_search(volume_id):
+        def _auto_search(volume_id, respect_backoff=False):
             searched.append(volume_id)
             return []
 

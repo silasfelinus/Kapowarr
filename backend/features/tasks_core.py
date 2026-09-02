@@ -526,7 +526,10 @@ class SearchAll(Task):
             reset_request_tally()
 
             try:
-                results = auto_search(volume_id)
+                # The unattended sweep leaves alone what recent searches
+                # found nothing for. A person asking is never held back this
+                # way; see `auto_search`.
+                results = auto_search(volume_id, respect_backoff=True)
 
             except Exception:
                 # One volume must not cost the rest of the library its

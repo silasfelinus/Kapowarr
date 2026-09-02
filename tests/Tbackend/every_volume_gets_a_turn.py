@@ -22,6 +22,7 @@ prefix into a rotation. A run that covers a third of the library covers a
 different third tomorrow.
 """
 
+import inspect
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -50,8 +51,15 @@ class the_order_the_sweep_asks_for(unittest.TestCase):
         )
 
     def test_and_an_upgraded_one_gets_it_too(self):
+        # What matters is that the migration exists and is reached, not what
+        # number happens to be newest -- pinning that made every later
+        # migration fail this test.
         self.assertIn(51, DatabaseMigrationHandler.handlers)
-        self.assertEqual(DatabaseMigrationHandler.latest_db_version(), 52)
+        self.assertGreater(DatabaseMigrationHandler.latest_db_version(), 51)
+        self.assertIn(
+            'last_auto_search',
+            inspect.getsource(DatabaseMigrationHandler.handlers[51])
+        )
 
 
 class when_the_turn_is_recorded(unittest.TestCase):
@@ -83,7 +91,7 @@ class when_the_turn_is_recorded(unittest.TestCase):
     def test_a_volume_whose_search_fails_is_stamped_anyway(self):
         # Otherwise one reliably-failing volume sits at the front of the
         # queue every day forever -- the exact problem this ordering fixes.
-        def auto_search(volume_id):
+        def auto_search(volume_id, respect_backoff=False):
             if volume_id == 1:
                 raise RuntimeError('indexer exploded')
             return []
@@ -97,7 +105,7 @@ class when_the_turn_is_recorded(unittest.TestCase):
         # So tomorrow picks up where this run was interrupted.
         holder = {}
 
-        def auto_search(volume_id):
+        def auto_search(volume_id, respect_backoff=False):
             holder['task'].stop = True
             return []
 

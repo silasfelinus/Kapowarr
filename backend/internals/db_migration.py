@@ -1464,3 +1464,17 @@ def _migrate_add_last_auto_search():
             last_auto_search INTEGER(8) NOT NULL DEFAULT 0;
     """)
     return
+
+
+@DatabaseMigrationHandler.register_handler(52)
+def _migrate_add_issue_search_backoff():
+    cursor = get_db()
+    cursor.execute("""
+        ALTER TABLE issues ADD COLUMN
+            last_auto_search INTEGER(8) NOT NULL DEFAULT 0;
+    """)
+    cursor.execute("""
+        ALTER TABLE issues ADD COLUMN
+            auto_search_misses INTEGER(4) NOT NULL DEFAULT 0;
+    """)
+    return

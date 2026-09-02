@@ -677,6 +677,10 @@ class TaskHandler(metaclass=Singleton):
     queue: List[dict] = []
     task_interval_waiter: Union[Timer, None] = None
 
+    INTERVAL_FALLBACK_DELAY = 60
+    """How long to wait before looking at the intervals again when working out
+    the real answer failed."""
+
     def __init__(self) -> None:
         """Setup the handler"""
         handler_context = Flask('handler')
@@ -808,40 +812,63 @@ class TaskHandler(metaclass=Singleton):
     def __check_intervals(self) -> None:
         "Check if any interval task needs to be run and add to queue if so"
         LOGGER.debug('Checking task intervals')
-        with self.context():
-            current_time = time()
+        try:
+            with self.context():
+                current_time = time()
 
-            cursor = get_db()
-            interval_tasks = cursor.execute(
-                "SELECT task_name, interval, next_run FROM task_intervals;"
-            ).fetchall()
-            LOGGER.debug(f'Task intervals: {list(map(dict, interval_tasks))}')
-            for task in interval_tasks:
-                if task['next_run'] <= current_time:
-                    # Add task to queue
-                    task_class = task_library[task['task_name']]
-                    if task_class is UpdateAll:
-                        inst = task_class(allow_skipping=True)
-                    else:
-                        inst = task_class()
-                    self.add(inst)
+                cursor = get_db()
+                interval_tasks = cursor.execute(
+                    "SELECT task_name, interval, next_run FROM task_intervals;"
+                ).fetchall()
+                LOGGER.debug(
+                    f'Task intervals: {list(map(dict, interval_tasks))}')
+                for task in interval_tasks:
+                    if task['next_run'] <= current_time:
+                        # Add task to queue
+                        task_class = task_library[task['task_name']]
+                        if task_class is UpdateAll:
+                            inst = task_class(allow_skipping=True)
+                        else:
+                            inst = task_class()
+                        self.add(inst)
 
-                    # Update next_run
-                    next_run = round(current_time + task['interval'])
-                    cursor.execute(
-                        "UPDATE task_intervals SET next_run = ? WHERE task_name = ?;",
-                        (next_run, task['task_name']))
+                        # Update next_run
+                        next_run = round(current_time + task['interval'])
+                        cursor.execute(
+                            "UPDATE task_intervals SET next_run = ? WHERE task_name = ?;",
+                            (next_run, task['task_name']))
+
+        except Exception:
+            # This method is the only thing that schedules the next run of
+            # itself, so an exception escaping it doesn't skip one check --
+            # it ends scheduled tasks for the lifetime of the process. On
+            # 2026-09-01 a locked database did exactly that, and nothing ran
+            # on an interval again until the container was restarted. Log it
+            # and get back in the rota.
+            LOGGER.exception('Could not check the task intervals; retrying: ')
 
         self.handle_intervals()
         return
 
     def handle_intervals(self) -> None:
         "Find next time an interval task needs to be run"
-        with self.context():
-            next_run = get_db().execute(
-                "SELECT MIN(next_run) FROM task_intervals"
-            ).fetchone()[0]
-        timedelta = next_run - round(time()) + 1
+        try:
+            with self.context():
+                next_run = get_db().execute(
+                    "SELECT MIN(next_run) FROM task_intervals"
+                ).fetchone()[0]
+            timedelta = next_run - round(time()) + 1
+
+        except Exception:
+            # Same reasoning as above: whatever went wrong, the one thing we
+            # can't do is fail to set the next alarm.
+            LOGGER.exception(
+                'Could not work out when the next interval task is due; '
+                'checking again in %ds: ',
+                self.INTERVAL_FALLBACK_DELAY
+            )
+            timedelta = self.INTERVAL_FALLBACK_DELAY
+
         LOGGER.debug(f'Next interval task is in {timedelta} seconds')
 
         self.task_interval_waiter = Timer(timedelta, self.__check_intervals)

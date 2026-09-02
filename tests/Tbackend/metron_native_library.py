@@ -3,16 +3,16 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from Tbackend.a_test_database_behaves_like_the_real_one import (
+    connect as connect_test_db, cursor as test_db_cursor)
 from backend.base.definitions import MonitorScheme, SpecialVersion
 from backend.implementations import volumes
-from backend.internals.db import KapowarrCursor
 
 
 class metron_native_library_add(unittest.TestCase):
     def setUp(self):
         sqlite3.register_adapter(SpecialVersion, lambda value: value.value)
-        self.connection = sqlite3.connect(':memory:')
-        self.connection.row_factory = sqlite3.Row
+        self.connection = connect_test_db()
         self.connection.executescript("""
             CREATE TABLE volumes(
                 id INTEGER PRIMARY KEY,
@@ -75,8 +75,7 @@ class metron_native_library_add(unittest.TestCase):
         self.connection.close()
 
     def _cursor(self):
-        cursor = KapowarrCursor(self.connection)
-        cursor.row_factory = sqlite3.Row
+        cursor = test_db_cursor(self.connection)
         return cursor
 
     def test_adds_and_refreshes_native_ids_without_inventing_comicvine_ids(self):

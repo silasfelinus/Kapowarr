@@ -70,7 +70,6 @@ class scan_files_reports_what_it_declines(unittest.TestCase):
                 patch.object(FM, 'list_files', return_value=[filename]), \
                 patch.object(FM, 'get_db', return_value=cursor), \
                 patch.object(FM, 'Settings'), \
-                patch.object(FM, 'commit'), \
                 patch.object(FM, 'WebSocket'), \
                 patch.object(FM, 'RootFolders'), \
                 patch.object(FM, 'delete_empty_child_folders'), \

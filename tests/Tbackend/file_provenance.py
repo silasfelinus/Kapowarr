@@ -1,10 +1,11 @@
 import os
-import sqlite3
 import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from Tbackend.a_test_database_behaves_like_the_real_one import (
+    connect as connect_test_db, cursor as test_db_cursor)
 from backend.features import file_provenance
 from backend.features.post_processing import (
     PostProcessor,
@@ -16,55 +17,22 @@ from backend.features.post_processing import (
 )
 
 
-class CursorAdapter:
-    def __init__(self, connection):
-        self.connection = connection
-        self.cursor = connection.cursor()
-
-    def executescript(self, script):
-        self.cursor.executescript(script)
-        return self
-
-    def execute(self, sql, params=()):
-        self.cursor = self.connection.execute(sql, params)
-        return self
-
-    def fetchalldict(self):
-        columns = [item[0] for item in self.cursor.description]
-        return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
-
-    def fetchonedict(self):
-        row = self.cursor.fetchone()
-        if row is None:
-            return None
-        columns = [item[0] for item in self.cursor.description]
-        return dict(zip(columns, row))
-
-
 class durable_file_provenance(unittest.TestCase):
     def setUp(self):
-        self.connection = sqlite3.connect(':memory:')
-        self.connection.execute('PRAGMA foreign_keys = ON;')
+        self.connection = connect_test_db()
         self.connection.execute(
             'CREATE TABLE files('
             'id INTEGER PRIMARY KEY, filepath TEXT UNIQUE NOT NULL, size INTEGER);'
         )
-        self.cursor = CursorAdapter(self.connection)
+        self.cursor = test_db_cursor(self.connection)
         self.get_db_patch = patch.object(
             file_provenance,
             'get_db',
             return_value=self.cursor,
         )
-        self.commit_patch = patch.object(
-            file_provenance,
-            'commit',
-            side_effect=self.connection.commit,
-        )
         self.get_db_patch.start()
-        self.commit_patch.start()
 
     def tearDown(self):
-        self.commit_patch.stop()
         self.get_db_patch.stop()
         self.connection.close()
 

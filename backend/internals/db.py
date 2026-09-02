@@ -7,11 +7,13 @@ Setting up the database, handling connections, using it and closing it.
 from __future__ import annotations
 
 from os.path import dirname, exists, isdir, join
-from sqlite3 import (PARSE_DECLTYPES, Connection, Cursor, ProgrammingError,
-                     Row, register_adapter, register_converter)
+from random import uniform
+from sqlite3 import (PARSE_DECLTYPES, Connection, Cursor, OperationalError,
+                     ProgrammingError, Row, register_adapter,
+                     register_converter)
 from threading import current_thread
-from time import time
-from typing import Any, Dict, Iterable, Iterator, List, Type, Union
+from time import monotonic, sleep, time
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Type, Union
 
 from flask import g
 
@@ -20,6 +22,33 @@ from backend.base.definitions import (Constants, DateType, FileDate, ProxyType,
 from backend.base.files import create_folder, folder_path
 from backend.base.helpers import CommaList, current_thread_id
 from backend.base.logging import LOGGER, set_log_level
+
+
+# SQLite reports both of its contention errors -- SQLITE_BUSY as "database is
+# locked" and SQLITE_LOCKED as "database table is locked" -- through the same
+# `OperationalError` it uses for a typo in a query or a missing column, so the
+# message is the only thing that tells them apart. Everything else that
+# arrives as an `OperationalError` is a real bug that must keep travelling.
+LOCK_ERROR_MARKERS = (
+    "database is locked",
+    "database table is locked"
+)
+
+
+def is_lock_error(error: BaseException) -> bool:
+    """Whether an exception is SQLite refusing to wait any longer for a lock.
+
+    Args:
+        error (BaseException): The exception to judge.
+
+    Returns:
+        bool: Whether the exception is a lock/busy timeout rather than a real
+            error in the statement.
+    """
+    if not isinstance(error, OperationalError):
+        return False
+    message = str(error).lower()
+    return any(marker in message for marker in LOCK_ERROR_MARKERS)
 
 
 class KapowarrCursor(Cursor):
@@ -36,6 +65,83 @@ class KapowarrCursor(Cursor):
     def __init__(self, cursor: DBConnection, /) -> None:
         super().__init__(cursor)
         return
+
+    @staticmethod
+    def _run_waiting_for_lock(
+        statement: Callable[..., Any],
+        *args: Any,
+        **kwargs: Any
+    ) -> Any:
+        """Run a statement, standing in line again if SQLite reports the
+        database as locked instead of giving up on the caller's behalf.
+
+        A statement that fails on a lock never got the write lock, so it never
+        wrote anything: re-running it is the same statement, not a second one.
+
+        Args:
+            statement (Callable[..., Any]): The underlying `execute` or
+                `executemany` to run.
+
+        Raises:
+            OperationalError: The database stayed locked for the whole of
+                `Constants.DB_LOCK_RETRY_TIMEOUT`, or the error was never
+                about a lock in the first place.
+
+        Returns:
+            Any: Whatever the statement returned.
+        """
+        deadline = monotonic() + Constants.DB_LOCK_RETRY_TIMEOUT
+        wait = Constants.DB_LOCK_RETRY_FIRST_WAIT
+        attempt = 0
+
+        while True:
+            try:
+                return statement(*args, **kwargs)
+
+            except OperationalError as error:
+                if not is_lock_error(error):
+                    raise
+
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    LOGGER.error(
+                        'Database stayed locked through %d retries; giving up '
+                        'on this statement',
+                        attempt
+                    )
+                    raise
+
+                attempt += 1
+                # Jitter, so that several threads that piled up behind the
+                # same writer don't all come back at the same instant and
+                # collide with each other instead.
+                delay = min(wait * uniform(0.5, 1.5), remaining)
+                LOGGER.warning(
+                    'Database is locked; retrying in %.1fs (attempt %d)',
+                    delay, attempt
+                )
+                sleep(delay)
+                wait = min(wait * 2, Constants.DB_LOCK_RETRY_MAX_WAIT)
+
+    def execute(self, *args: Any, **kwargs: Any) -> KapowarrCursor:
+        return self._run_waiting_for_lock(super().execute, *args, **kwargs)
+
+    def executemany(self, *args: Any, **kwargs: Any) -> KapowarrCursor:
+        # `executemany` applies one statement to many rows, and under
+        # autocommit each row would land on its own. A retry halfway through
+        # would then re-apply the rows that already succeeded, so take the
+        # write lock up front and let the whole batch be one transaction:
+        # then only the `BEGIN` can meet a lock, and that has written nothing.
+        connection = self.connection
+        if connection.transaction_depth or connection.in_transaction:
+            return self._run_waiting_for_lock(
+                super().executemany, *args, **kwargs
+            )
+
+        with self:
+            return self._run_waiting_for_lock(
+                super().executemany, *args, **kwargs
+            )
 
     def fetchonedict(self) -> Union[Dict[str, Any], None]:
         """Same as `fetchone` but convert the Row object to a dict.
@@ -81,21 +187,39 @@ class KapowarrCursor(Cursor):
         return r[0]
 
     def __enter__(self):
-        """Start a transaction"""
-        self.connection.isolation_level = None
-        # IMMEDIATE, not the default DEFERRED -- see `WRITE_TRANSACTION_MODE`.
-        self.execute("BEGIN IMMEDIATE;")
+        """Start a transaction, or join the one already running.
+
+        Nesting has to be allowed because these blocks call each other:
+        `refresh_and_scan` wraps its own writes and calls `scan_files`, which
+        wraps its own. SQLite has no nested transactions, so the outermost
+        block owns the real one and the inner blocks ride along.
+        """
+        connection = self.connection
+        if not connection.transaction_depth:
+            # IMMEDIATE, not the default DEFERRED -- see
+            # `WRITE_TRANSACTION_MODE`.
+            self.execute(f"BEGIN {WRITE_TRANSACTION_MODE};")
+        connection.transaction_depth += 1
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Commit the transaction or rollback if an exception occurred"""
-        if self.connection.in_transaction:
+        connection = self.connection
+        connection.transaction_depth = max(
+            connection.transaction_depth - 1, 0
+        )
+
+        if connection.transaction_depth:
+            # An enclosing block owns the transaction. An exception in here is
+            # still on its way up to that block, which will roll back for us.
+            return
+
+        if connection.in_transaction:
             if exc_type is not None:
                 self.execute("ROLLBACK;")
             else:
                 self.execute("COMMIT;")
 
-        self.connection.isolation_level = WRITE_TRANSACTION_MODE
         return
 
 
@@ -126,14 +250,13 @@ class DBConnectionManager(type):
         return
 
 
-# sqlite3 opens an implicit transaction before a write statement, and the
-# mode it uses decides what happens under concurrency. DEFERRED -- the
-# module default -- takes no lock until the first statement, so a
-# transaction that reads before it writes holds a read lock and then has to
-# upgrade. If another connection took the write lock in between, SQLite
-# cannot make that upgrade wait: both sides would be waiting on each other,
-# so it returns SQLITE_BUSY at once. `timeout` does not help, because the
-# busy handler is exactly what SQLite refuses to run here.
+# The mode every explicit transaction is opened in. DEFERRED -- SQLite's
+# default -- takes no lock until the first statement, so a transaction that
+# reads before it writes holds a read lock and then has to upgrade. If
+# another connection took the write lock in between, SQLite cannot make that
+# upgrade wait: both sides would be waiting on each other, so it returns
+# SQLITE_BUSY at once. `timeout` does not help, because the busy handler is
+# exactly what SQLite refuses to run here.
 #
 # That is not a hypothetical. Two tasks died of it in one import run
 # (2026-08-24): `Search All` in `grab_size_limits._ensure_defaults`, and
@@ -141,11 +264,32 @@ class DBConnectionManager(type):
 # mid-run by "database is locked" while the library import held the writer.
 #
 # IMMEDIATE takes the write lock up front instead, which the busy handler
-# *can* wait on, so contention becomes a wait of up to `DB_TIMEOUT` rather
-# than an instant failure. It costs nothing on reads: sqlite3 only opens
-# these implicit transactions for DML, so plain SELECTs stay in autocommit
-# and never take a write lock at all.
+# *can* wait on, so contention becomes a wait rather than an instant failure.
 WRITE_TRANSACTION_MODE = "IMMEDIATE"
+
+# `isolation_level` is sqlite3's legacy transaction control: set to a mode, it
+# opens a transaction before the first write and then keeps it open until
+# something calls `commit()`. That is the wrong default for Kapowarr, because
+# connections here are cached per thread and the threads live as long as the
+# process (see `DBConnectionManager`). Of the ~83 functions in the backend
+# that write, 75 never commit at all -- they leave that to a caller, or to
+# nobody. Under legacy mode every one of those leaves the write lock held on
+# its thread's connection until that thread happens to write-and-commit again,
+# which may be minutes of network I/O later.
+#
+# That is what killed three threads on 2026-09-01: two `DownloadThread`s in
+# `remove_from_queue` and, worse, the `TaskIntervalThread` in
+# `__check_intervals` -- and the interval thread reschedules itself at the end
+# of that method, so losing it meant no scheduled task ran again until Silas
+# restarted the container. All three waited out the full `DB_TIMEOUT` while a
+# `Search All` sweep sat on an open transaction it had no further use for,
+# 80 seconds at a time, waiting on an indexer.
+#
+# `None` is autocommit: a lone write commits the instant it completes and the
+# write lock is held for microseconds. Where several statements genuinely have
+# to land together, say so with `with cursor:`, which opens a real IMMEDIATE
+# transaction for exactly as long as the block runs.
+AUTOCOMMIT = None
 
 CONNECTION_PRAGMAS = (
     "PRAGMA foreign_keys = ON;",
@@ -180,6 +324,10 @@ CONNECTION_PRAGMAS = (
 class DBConnection(Connection, metaclass=DBConnectionManager):
     file = ''
 
+    transaction_depth: int = 0
+    """How many `with cursor:` blocks are currently open on this connection.
+    Only the outermost one begins and ends the actual transaction."""
+
     def __init__(
         self, *,
         timeout: float = Constants.DB_TIMEOUT
@@ -198,7 +346,8 @@ class DBConnection(Connection, metaclass=DBConnectionManager):
             timeout=timeout,
             detect_types=PARSE_DECLTYPES
         )
-        self.isolation_level = WRITE_TRANSACTION_MODE
+        self.isolation_level = AUTOCOMMIT
+        self.transaction_depth = 0
         c = super().cursor()
         for pragma in CONNECTION_PRAGMAS:
             c.execute(pragma)
@@ -292,8 +441,17 @@ def get_db(force_new: bool = False) -> KapowarrCursor:
 
 
 def commit() -> None:
-    """Commit the database changes"""
-    get_db().connection.commit()
+    """Commit the database changes.
+
+    Does nothing while a `with cursor:` block is open: that block owns the
+    transaction and commits it on the way out, so committing here would cut
+    the block in half and leave the rest of it unprotected.
+    """
+    connection = get_db().connection
+    if connection.transaction_depth:
+        return
+
+    connection.commit()
     return
 
 
@@ -314,7 +472,6 @@ def iter_commit(iterable: Iterable[T]) -> Iterator[T]:
     Yields:
         Iterator[T]: Items of iterable.
     """
-    commit = get_db().connection.commit
     commit()
     for i in iterable:
         yield i

@@ -1,4 +1,3 @@
-import sqlite3
 import unittest
 from unittest.mock import patch
 
@@ -7,19 +6,20 @@ from backend.features.library_import_persistent import (
     PersistentContinuousLibraryImport,
 )
 from backend.features.tasks import task_library
+from Tbackend.a_test_database_behaves_like_the_real_one import (
+    connect as connect_test_db, cursor as test_db_cursor)
 
 
 class durable_library_import_state(unittest.TestCase):
     def setUp(self):
-        self.connection = sqlite3.connect(':memory:')
-        self.connection.row_factory = sqlite3.Row
+        self.connection = connect_test_db()
         self.connection.execute(
             "CREATE TABLE files(id INTEGER PRIMARY KEY, filepath TEXT UNIQUE);"
         )
         self.get_db_patch = patch.object(
             state,
             'get_db',
-            side_effect=lambda *args, **kwargs: self.connection.cursor()
+            side_effect=lambda *args, **kwargs: test_db_cursor(self.connection)
         )
         self.commit_patch = patch.object(
             state,

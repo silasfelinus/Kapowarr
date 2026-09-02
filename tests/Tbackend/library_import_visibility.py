@@ -9,7 +9,6 @@ checkpoints and review holds live in SQLite precisely so they do not.
 """
 
 import json
-import sqlite3
 import unittest
 from unittest.mock import patch
 
@@ -18,6 +17,8 @@ from flask import Flask
 import frontend.api as api_module
 import frontend.library_import_status as status_module
 from backend.features import library_import_state as state
+from Tbackend.a_test_database_behaves_like_the_real_one import (
+    connect as connect_test_db, cursor as test_db_cursor)
 
 
 def _hold(folder: str, reason: str = 'no_candidate', cv_id=None):
@@ -38,8 +39,7 @@ def _hold(folder: str, reason: str = 'no_candidate', cv_id=None):
 
 class _StateHarness(unittest.TestCase):
     def setUp(self):
-        self.connection = sqlite3.connect(':memory:')
-        self.connection.row_factory = sqlite3.Row
+        self.connection = connect_test_db()
         self.connection.execute(
             "CREATE TABLE files(id INTEGER PRIMARY KEY, filepath TEXT UNIQUE);"
         )
@@ -50,7 +50,7 @@ class _StateHarness(unittest.TestCase):
         patches = (
             patch.object(
                 state, 'get_db',
-                side_effect=lambda *a, **k: self.connection.cursor()
+                side_effect=lambda *a, **k: test_db_cursor(self.connection)
             ),
             patch.object(state, 'commit', side_effect=self.connection.commit),
             patch.object(

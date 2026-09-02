@@ -1,15 +1,14 @@
-import sqlite3
 import unittest
 from unittest.mock import patch
 
 from backend.features import publisher_automation
-from backend.internals.db import KapowarrCursor
+from Tbackend.a_test_database_behaves_like_the_real_one import (
+    connect as connect_test_db, cursor as test_db_cursor)
 
 
 class publisher_bulk_automation(unittest.TestCase):
     def setUp(self):
-        self.connection = sqlite3.connect(':memory:')
-        self.connection.row_factory = sqlite3.Row
+        self.connection = connect_test_db()
         self.connection.executescript("""
             CREATE TABLE pull_list_entries(
                 id INTEGER PRIMARY KEY,
@@ -40,9 +39,7 @@ class publisher_bulk_automation(unittest.TestCase):
         self.get_db_patch.start()
 
     def _cursor(self):
-        cursor = KapowarrCursor(self.connection)
-        cursor.row_factory = sqlite3.Row
-        return cursor
+        return test_db_cursor(self.connection)
 
     def tearDown(self):
         self.get_db_patch.stop()

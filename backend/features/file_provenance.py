@@ -14,7 +14,7 @@ from time import time
 from typing import Any, Dict, Iterable, List, Optional
 
 from backend.base.logging import LOGGER
-from backend.internals.db import commit, get_db
+from backend.internals.db import get_db
 
 
 PROVENANCE_SCHEMA = """
@@ -86,34 +86,36 @@ def record_download_file_provenance(download: Any) -> int:
         except OSError:
             continue
 
-        cursor.execute(
-            'UPDATE files SET size = ? WHERE id = ?;',
-            (size, row['id']),
-        )
-        cursor.execute("""
-            INSERT INTO file_provenance(
-                file_id, source_type, source_name,
-                release_title, web_title, web_sub_title, acquired_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(file_id) DO UPDATE SET
-                source_type = excluded.source_type,
-                source_name = excluded.source_name,
-                release_title = excluded.release_title,
-                web_title = excluded.web_title,
-                web_sub_title = excluded.web_sub_title,
-                acquired_at = excluded.acquired_at;
-        """, (
-            row['id'],
-            source_type,
-            source_name,
-            release_title,
-            web_title,
-            web_sub_title,
-            acquired_at,
-        ))
+        # The recorded size and the provenance row describe the same
+        # newly imported file, so they land together or not at all.
+        with cursor:
+            cursor.execute(
+                'UPDATE files SET size = ? WHERE id = ?;',
+                (size, row['id']),
+            )
+            cursor.execute("""
+                INSERT INTO file_provenance(
+                    file_id, source_type, source_name,
+                    release_title, web_title, web_sub_title, acquired_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(file_id) DO UPDATE SET
+                    source_type = excluded.source_type,
+                    source_name = excluded.source_name,
+                    release_title = excluded.release_title,
+                    web_title = excluded.web_title,
+                    web_sub_title = excluded.web_sub_title,
+                    acquired_at = excluded.acquired_at;
+            """, (
+                row['id'],
+                source_type,
+                source_name,
+                release_title,
+                web_title,
+                web_sub_title,
+                acquired_at,
+            ))
         recorded += 1
 
-    commit()
     if recorded:
         LOGGER.debug(
             'Recorded acquisition provenance for %d library file(s) from %s / %s',

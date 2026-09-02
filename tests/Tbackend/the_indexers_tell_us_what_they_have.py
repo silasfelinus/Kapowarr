@@ -166,7 +166,7 @@ class a_feed_has_to_be_narrowed_to_comics(unittest.TestCase):
 class deciding_what_the_library_wants(unittest.TestCase):
     def _worth_grabbing(self, releases, volume_of, open_issues, matches=True):
         """Run the decision with the library and matcher stubbed."""
-        def match_volume(parsed, index=None, described_as=''):
+        def match_volume(parsed, index=None, described_as='', quiet=False):
             return volume_of.get(parsed['series'])
 
         def manual_search(volume_id, issue_id=None, already_fetched=None):
@@ -360,4 +360,106 @@ class it_runs_without_being_asked(unittest.TestCase):
 
         self.assertEqual(len(asked), 3)
         self.assertEqual([query for _, query in asked], ['', '', ''])
+        return
+
+
+class a_poll_says_what_it_did(unittest.TestCase):
+    """Four hours of feed syncs on 2026-09-02 said only that they had
+    finished. The interesting number -- how many releases were read, and why
+    the ones that were passed over were passed over -- reached the task
+    message and nothing else, so a log could not tell a working feed from a
+    silent one. A poll that queues nothing has to say whether that is because
+    the library is complete or because nothing it saw belonged to it."""
+
+    @staticmethod
+    def _summary(**counts):
+        base = dict(indexers=3, releases=100, matched=0, queued=0,
+                    unknown=0, ambiguous=0, already_held=0)
+        base.update(counts)
+        return RF.FeedSyncSummary(**base)
+
+    def test_a_poll_that_queued_something_says_so(self):
+        described = RF.describe_sync(self._summary(matched=2, queued=2))
+
+        self.assertIn('2 queued', described)
+        self.assertIn('3 indexer(s)', described)
+        return
+
+    def test_a_complete_library_reads_differently_from_an_irrelevant_feed(self):
+        complete = RF.describe_sync(self._summary(already_held=100))
+        irrelevant = RF.describe_sync(self._summary(unknown=100))
+
+        self.assertIn('already held', complete)
+        self.assertIn('not in the library', irrelevant)
+        self.assertNotEqual(complete, irrelevant)
+        return
+
+    def test_an_empty_feed_does_not_invent_reasons(self):
+        described = RF.describe_sync(self._summary(releases=0))
+
+        self.assertNotIn('already held', described)
+        self.assertNotIn('not in the library', described)
+        return
+
+    def test_an_empty_feed_is_the_one_most_worth_saying_out_loud(self):
+        "It is what four silent hours of polling looked like."
+        with patch.object(RF, 'fetch_recent_releases', return_value=([], 3)), \
+                self.assertLogs(level='INFO') as logged:
+            RF.poll_release_feeds()
+
+        self.assertIn('0 recent release(s)', '\n'.join(logged.output))
+        return
+
+    def test_the_poll_writes_it_to_the_log(self):
+        with patch.object(
+                RF, 'fetch_recent_releases',
+                return_value=([_release('Save Now', 4, 'https://x/4')], 2)), \
+                patch.object(RF, 'releases_worth_grabbing', return_value=[]), \
+                self.assertLogs(level='INFO') as logged:
+            RF.poll_release_feeds()
+
+        self.assertIn('2 indexer(s)', '\n'.join(logged.output))
+        return
+
+    def test_the_reasons_are_counted_as_releases_are_judged(self):
+        rows = [_release('Save Now', 4, 'https://x/4'),
+                _release('Unknown Book', 1, 'https://x/u')]
+
+        def match_volume(parsed, index=None, described_as='', quiet=False):
+            return 19 if parsed['series'] == 'Save Now' else None
+
+        def manual_search(volume_id, issue_id=None, already_fetched=None):
+            return [{**already_fetched[0], 'match': True, 'match_issue': None}]
+
+        counts = {}
+        with patch.object(RF, 'match_parsed_to_library_volume', match_volume), \
+                patch.object(RF, 'LibraryIndex', MagicMock()), \
+                patch.object(RF, 'wanted_issues_of', return_value=[]), \
+                patch('backend.features.search.manual_search', manual_search):
+            RF.releases_worth_grabbing(rows, counts=counts)
+
+        self.assertEqual(counts['unknown'], 1)
+        self.assertEqual(counts['already_held'], 1)
+        return
+
+    def test_an_ambiguous_release_is_not_announced_every_poll(self):
+        """The feed sees the same releases every quarter of an hour. A file
+        someone dropped in the watched folder still gets its line."""
+        from backend.features import watched_folder_import as WFI
+
+        index = MagicMock()
+        index.volume_ids = [1, 2]
+        index.data.return_value = MagicMock(title='Spider-Man')
+        index.issues.return_value = ([], {})
+
+        with patch.object(WFI, 'match_title', return_value=True), \
+                patch.object(WFI, 'file_importing_filter', return_value=True), \
+                patch.object(WFI.LOGGER, 'info') as said:
+            WFI.match_parsed_to_library_volume(
+                {'series': 'Spider-Man'}, index, 'x', quiet=True)
+            said.assert_not_called()
+
+            WFI.match_parsed_to_library_volume(
+                {'series': 'Spider-Man'}, index, 'x')
+            said.assert_called_once()
         return

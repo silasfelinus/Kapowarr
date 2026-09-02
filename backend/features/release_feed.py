@@ -64,7 +64,8 @@ class FeedSyncSummary(dict):
 
 def _empty_summary() -> FeedSyncSummary:
     return FeedSyncSummary(
-        indexers=0, releases=0, matched=0, queued=0
+        indexers=0, releases=0, matched=0, queued=0, unknown=0, ambiguous=0,
+        already_held=0
     )
 
 
@@ -145,7 +146,8 @@ def wanted_issues_of(volume_id: int) -> List[Tuple[int, float]]:
 
 def releases_worth_grabbing(
     releases: List[SearchResultData],
-    index: Union[LibraryIndex, None] = None
+    index: Union[LibraryIndex, None] = None,
+    counts: Union[Dict[str, int], None] = None
 ) -> List[Tuple[str, int, None]]:
     """Work out which of these releases the library actually wants.
 
@@ -154,6 +156,9 @@ def releases_worth_grabbing(
 
         index (Union[LibraryIndex, None], optional): A prepared library index,
             built once for the whole poll. Defaults to None, meaning build one.
+
+        counts (Union[Dict[str, int], None], optional): Filled in with why
+            releases were passed over, for the summary. Defaults to None.
 
     Returns:
         List[Tuple[str, int, None]]: `(link, volume id, None)` for each
@@ -164,6 +169,11 @@ def releases_worth_grabbing(
     if index is None:
         index = LibraryIndex()
 
+    if counts is None:
+        counts = {}
+    for key in ('unknown', 'ambiguous', 'already_held'):
+        counts.setdefault(key, 0)
+
     wanted: Dict[int, List[Tuple[int, float]]] = {}
     to_queue: List[Tuple[str, int, None]] = []
     already: Set[str] = set()
@@ -173,14 +183,16 @@ def releases_worth_grabbing(
         # `FilenameData` -- so match those fields rather than re-deriving
         # them from the display title, which is a different string.
         volume_id = match_parsed_to_library_volume(
-            release, index, release.get('display_title', ''))
+            release, index, release.get('display_title', ''), quiet=True)
         if volume_id is None:
+            counts['unknown'] += 1
             continue
 
         if volume_id not in wanted:
             wanted[volume_id] = wanted_issues_of(volume_id)
         open_issues = wanted[volume_id]
         if not open_issues:
+            counts['already_held'] += 1
             continue
 
         # The ordinary matcher decides, with the release already in hand, so
@@ -199,6 +211,7 @@ def releases_worth_grabbing(
             for _, number in open_issues
         ):
             # It matches the volume but only issues that are already here.
+            counts['already_held'] += 1
             continue
 
         link = matched[0]['link']
@@ -228,9 +241,14 @@ def poll_release_feeds(
     releases, summary['indexers'] = fetch_recent_releases()
     summary['releases'] = len(releases)
     if not releases:
+        # Logged like any other outcome. A feed that comes back empty is the
+        # one most worth saying out loud -- it is what four hours of silent
+        # polls looked like on 2026-09-02 -- so it must not be the one case
+        # that returns before the summary.
+        LOGGER.info('%s', describe_sync(summary))
         return summary
 
-    to_queue = releases_worth_grabbing(releases)
+    to_queue = releases_worth_grabbing(releases, counts=summary)
     summary['matched'] = len(to_queue)
 
     if should_stop is not None and should_stop():
@@ -249,6 +267,7 @@ def poll_release_feeds(
         except Exception:
             LOGGER.exception('Could not queue what the feeds turned up: ')
 
+    LOGGER.info('%s', describe_sync(summary))
     return summary
 
 
@@ -264,7 +283,22 @@ def describe_sync(summary: FeedSyncSummary) -> str:
     if not summary['indexers']:
         return 'No indexers to read a feed from'
 
-    return (
+    described = (
         f"Read {summary['releases']} recent release(s) from "
         f"{summary['indexers']} indexer(s) · {summary['queued']} queued"
     )
+
+    # Why the rest were passed over, so a poll that queues nothing says
+    # whether that is because the library is complete or because nothing it
+    # saw belongs to the library at all.
+    passed_over = [
+        (summary.get('already_held', 0), 'already held'),
+        (summary.get('unknown', 0), 'not in the library'),
+    ]
+    detail = ', '.join(
+        f'{count} {reason}' for count, reason in passed_over if count
+    )
+    if detail:
+        described += f' ({detail})'
+
+    return described

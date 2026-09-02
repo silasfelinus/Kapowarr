@@ -173,7 +173,8 @@ class scanning_files_it_to_the_volume(unittest.TestCase):
                 patch.object(FM, 'WebSocket'), \
                 patch.object(FM, 'RootFolders'), \
                 patch.object(FM, 'delete_empty_child_folders'), \
-                patch.object(FM.FilesDB, 'add_file', return_value=7), \
+                patch.object(FM.FilesDB, 'add_files',
+                             side_effect=lambda fs: {f: 7 for f in fs}), \
                 patch.object(FM.FilesDB, 'delete_unmatched_files'), \
                 patch('backend.implementations.volumes.Volume',
                       return_value=fake_volume):

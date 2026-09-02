@@ -487,15 +487,31 @@ class SearchAll(Task):
         # library covers a different third tomorrow, and everything gets a
         # turn within three days rather than the first third getting all of
         # them forever.
-        cursor.execute("""
+        # Read the whole list before touching anything, rather than walking
+        # the cursor as the sweep goes.
+        #
+        # A cursor left open holds a read transaction on its connection, and
+        # SQLite will not let a connection upgrade one to a write: it would
+        # be a deadlock, so it returns "database is locked" AT ONCE, without
+        # consulting the busy handler and without waiting. Retrying cannot
+        # help, because nothing about the wait changes the read snapshot the
+        # write has to escape.
+        #
+        # This sweep runs for hours and stamps a row per volume as it goes,
+        # so every one of those stamps was a read-to-write upgrade attempt.
+        # On 2026-09-01 they failed instantly and identically, twenty
+        # retries deep, fifty seconds a volume, and the rotation this
+        # ordering exists to provide stopped advancing -- while the log said
+        # only "database is locked", which read like contention and was not.
+        volumes_to_search = cursor.execute("""
             SELECT id, title FROM volumes
             WHERE monitored = 1
             ORDER BY last_auto_search, id;
             """
-        )
+        ).fetchall()
         downloads: List[Tuple[str, int, Union[int, None]]] = []
         ws = WebSocket()
-        for volume_id, volume_title in cursor:
+        for volume_id, volume_title in volumes_to_search:
             if self.stop:
                 break
             self.message = f'Searching for {volume_title}'
@@ -557,9 +573,12 @@ class SearchAll(Task):
                 (result['link'], volume_id, None)
                 for result in results
             ]
-            self._queue(
-                (result['link'], volume_id, None, False)
-                for result in results
+            self._queue_or_log(
+                (
+                    (result['link'], volume_id, None, False)
+                    for result in results
+                ),
+                volume_id, volume_title
             )
 
         # Already queued. Returned for the caller that wants to know what a
@@ -587,6 +606,32 @@ class SearchAll(Task):
                 'Could not record the search time for volume %d; it keeps '
                 'its place in the rotation', volume_id
             )
+
+    @staticmethod
+    def _queue_or_log(entries, volume_id: int, volume_title: str) -> None:
+        """Queue a volume's results, without letting a failure end the sweep.
+
+        Same reasoning as the search itself: one volume must not cost the
+        rest of the library its turn. On 2026-09-01 a single locked write
+        inside the queue insert ended a Search All where it stood, leaving
+        every volume after it unsearched.
+
+        Args:
+            entries: The downloads to queue.
+
+            volume_id (int): The volume they were found for.
+
+            volume_title (str): Its title, for the log.
+        """
+        try:
+            SearchAll._queue(entries)
+        except Exception:
+            LOGGER.exception(
+                'Could not queue what the search found for volume %d (%s); '
+                'continuing with the rest of the library',
+                volume_id, volume_title
+            )
+        return
 
     @staticmethod
     def _queue(entries) -> None:

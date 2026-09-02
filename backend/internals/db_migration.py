@@ -167,9 +167,12 @@ def _migrate_recalculate_issue_number():
     from backend.base.file_extraction import extract_issue_number
 
     cursor = get_db()
-    iter_cursor = get_db(force_new=True)
-    iter_cursor.execute("SELECT id, issue_number FROM issues;")
-    for result in iter_cursor:
+    # Read it all first: a cursor left open holds a read transaction, and a
+    # write on the same connection then has to upgrade one, which SQLite
+    # refuses outright rather than waiting on. See `SearchAll.run`.
+    issues = get_db(force_new=True).execute(
+        "SELECT id, issue_number FROM issues;").fetchall()
+    for result in issues:
         calc_issue_number = extract_issue_number(result[1])
         cursor.execute(
             "UPDATE issues SET calculated_issue_number = ? WHERE id = ?;",

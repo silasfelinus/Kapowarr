@@ -427,6 +427,7 @@ CREATE TABLE IF NOT EXISTS volumes(
     last_cv_fetch INTEGER(8) DEFAULT 0,
     special_version VARCHAR(255),
     special_version_locked BOOL NOT NULL DEFAULT 0,
+    last_auto_search INTEGER(8) NOT NULL DEFAULT 0,
 
     FOREIGN KEY (root_folder) REFERENCES root_folders(id)
 );

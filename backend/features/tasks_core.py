@@ -472,8 +472,26 @@ class SearchAll(Task):
 
     def run(self) -> List[Tuple[str, int, Union[int, None]]]:
         cursor = get_db(force_new=True)
-        cursor.execute(
-            "SELECT id, title FROM volumes WHERE monitored = 1;"
+        # Whoever has waited longest goes first.
+        #
+        # Unordered, SQLite returns rowid order -- the order volumes were
+        # added to the library -- and it returns it that way every day. On a
+        # library whose sweep finishes comfortably that is merely arbitrary.
+        # On one where it does not, the oldest additions are searched every
+        # single day and the newest are never reached at all: exactly the
+        # volumes a pull list puts at the end, and exactly the gaps Silas
+        # had been watching go unfilled for weeks.
+        #
+        # Ordering by when each volume was last searched makes the sweep a
+        # rotation instead of a prefix. A run that covers a third of the
+        # library covers a different third tomorrow, and everything gets a
+        # turn within three days rather than the first third getting all of
+        # them forever.
+        cursor.execute("""
+            SELECT id, title FROM volumes
+            WHERE monitored = 1
+            ORDER BY last_auto_search, id;
+            """
         )
         downloads: List[Tuple[str, int, Union[int, None]]] = []
         ws = WebSocket()
@@ -482,6 +500,14 @@ class SearchAll(Task):
                 break
             self.message = f'Searching for {volume_title}'
             ws.emit(TaskStatusEvent(self.message))
+
+            # Stamped before the search, not after. A volume whose search
+            # fails, or that the user stops the sweep in the middle of, has
+            # still had its turn -- and if the stamp only landed on success
+            # then one reliably-failing volume would be first in the queue
+            # every day forever, which is the problem this ordering exists
+            # to fix.
+            self._mark_searched(volume_id)
 
             try:
                 results = auto_search(volume_id)
@@ -539,6 +565,28 @@ class SearchAll(Task):
         # Already queued. Returned for the caller that wants to know what a
         # sweep found; the runner skips an empty list.
         return []
+
+    @staticmethod
+    def _mark_searched(volume_id: int) -> None:
+        """Record that this volume has had its turn.
+
+        Never raises. A sweep is long, it shares the database with library
+        import and refresh, and a bookkeeping write is not worth a task:
+        losing one stamp costs a volume its place in the rotation for a
+        day, which is a great deal cheaper than losing the sweep.
+        """
+        try:
+            get_db().execute(
+                "UPDATE volumes SET last_auto_search = ? WHERE id = ?;",
+                (round(time()), volume_id)
+            )
+            commit()
+
+        except Exception:
+            LOGGER.warning(
+                'Could not record the search time for volume %d; it keeps '
+                'its place in the rotation', volume_id
+            )
 
     @staticmethod
     def _queue(entries) -> None:

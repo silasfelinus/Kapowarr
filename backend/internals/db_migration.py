@@ -1440,3 +1440,24 @@ def _migrate_allow_provider_native_identities():
             'Provider identity migration left invalid foreign keys: '
             f'{foreign_key_errors[:5]}'
         )
+
+
+@DatabaseMigrationHandler.register_handler(51)
+def _migrate_add_last_auto_search():
+    """Give `Search All` somewhere to record whose turn it has been.
+
+    The sweep read `SELECT id, title FROM volumes WHERE monitored = 1` with
+    no ordering, so SQLite handed the volumes back in rowid order -- the
+    order they were added to the library, every single day. On a library
+    whose sweep does not finish in a day that is not arbitrary but
+    actively unfair: the oldest additions are searched every time and the
+    newest, which is where a pull list lives, are never reached at all.
+
+    Existing rows default to 0, so the first sweep after upgrading takes
+    them in the order it always did and every one of them gets a turn.
+    """
+    get_db().execute("""
+        ALTER TABLE volumes ADD COLUMN
+            last_auto_search INTEGER(8) NOT NULL DEFAULT 0;
+    """)
+    return

@@ -20,7 +20,7 @@ from os.path import basename, dirname, exists, isfile, join
 from re import compile
 from subprocess import run
 from sys import base_exec_prefix, executable, maxsize, platform, version_info
-from threading import current_thread
+from threading import current_thread, local
 from typing import (TYPE_CHECKING, Any, Callable, Collection, Dict, Iterable,
                     Iterator, List, Mapping, Sequence, Tuple, Union)
 from unicodedata import normalize
@@ -1128,6 +1128,7 @@ class Session(RSession):
         stream=None, verify=None,
         cert=None, json=None
     ):
+        _request_tally.made += 1
         ua, cf_cookies = self.fs.get_ua_cookies(url)
         self.headers.update({"User-Agent": ua})
         self.cookies.update(cf_cookies)
@@ -1194,6 +1195,39 @@ def _rate_limit_host(url: str) -> str:
     return urlsplit(url).netloc.lower()
 
 
+class _RequestTally(local):
+    """How many requests a search actually got to make.
+
+    Thread-local because a search runs its whole event loop inside the task
+    thread that started it (`asyncio.run` uses the calling thread), while
+    downloads and the web UI are making their own requests on other threads.
+    A global count would mix them together.
+    """
+
+    made = 0
+    skipped_rate_limited = 0
+
+
+_request_tally = _RequestTally()
+
+
+def reset_request_tally() -> None:
+    "Start counting this thread's requests again from zero."
+    _request_tally.made = 0
+    _request_tally.skipped_rate_limited = 0
+    return
+
+
+def request_tally() -> Tuple[int, int]:
+    """What this thread's requests have done since the last reset.
+
+    Returns:
+        Tuple[int, int]: Requests made, and requests not made because their
+            host was in a rate-limit cooldown.
+    """
+    return _request_tally.made, _request_tally.skipped_rate_limited
+
+
 def rate_limit_cooldown_remaining(url: str) -> float:
     """Seconds left before `url`'s host is worth asking again."""
     until = _rate_limited_until.get(_rate_limit_host(url))
@@ -1210,6 +1244,30 @@ def note_rate_limit(url: str, retry_after: Optional[float] = None) -> float:
     )
     _rate_limited_until[_rate_limit_host(url)] = monotonic() + cooldown
     return cooldown
+
+
+def describe_rate_limits() -> str:
+    """Which hosts are in a cooldown and for how long.
+
+    "Every source is rate limited" is not actionable on its own; which ones,
+    and until when, is.
+
+    Returns:
+        str: A description for the log, or a note that nothing is limited.
+    """
+    now = monotonic()
+    held = sorted(
+        (host, until - now)
+        for host, until in _rate_limited_until.items()
+        if until > now
+    )
+    if not held:
+        return 'no host is in a rate-limit cooldown'
+
+    return '; '.join(
+        f'{host} for another {remaining / 60:.0f} min'
+        for host, remaining in held
+    )
 
 
 def clear_rate_limits() -> None:
@@ -1272,6 +1330,7 @@ class AsyncSession(ClientSession):
         # request is the thing being rationed.
         cooldown = rate_limit_cooldown_remaining(url)
         if cooldown:
+            _request_tally.skipped_rate_limited += 1
             LOGGER.debug(
                 'Skipping %s to %s: rate limited for another %.0fs',
                 method, redact_url(url), cooldown

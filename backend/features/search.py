@@ -11,7 +11,8 @@ from backend.base.definitions import (DownloadType, MatchedSearchResultData,
 from backend.base.file_extraction import refine_special_version
 from backend.base.helpers import (AsyncSession, check_overlapping_issues,
                                   extract_year_from_date, force_range,
-                                  normalise_query_string)
+                                  normalise_query_string, request_tally,
+                                  reset_request_tally)
 from backend.base.logging import LOGGER
 from backend.features.acquisition_preferences import (
     availability_rank, indexer_priority, ordered_download_types,
@@ -542,6 +543,22 @@ def manual_search(
     return []
 
 
+def nothing_could_be_asked() -> bool:
+    """Whether the last search on this thread reached no source at all.
+
+    Every source it would have asked was in a rate-limit cooldown, so the
+    search was not a search: it found nothing because it looked nowhere.
+    Telling that apart from a genuine miss is what stops a sweep marching
+    through the whole library recording turns nobody took -- see
+    `SearchAll.run`.
+
+    Returns:
+        bool: Whether at least one request was skipped and none was made.
+    """
+    made, skipped = request_tally()
+    return not made and skipped > 0
+
+
 def _log_search_cost(volume_data, issue_number, started, found: int) -> None:
     """Say what a search cost, because nothing did.
 
@@ -582,6 +599,11 @@ def auto_search(
     Returns:
         List[MatchedSearchResultData]: List with chosen search results.
     """
+    # Counted across the whole volume -- its own search and one per missing
+    # issue -- so `nothing_could_be_asked()` means no request went out for
+    # this volume at all, not merely that the last issue's did not.
+    reset_request_tally()
+
     volume = Volume(volume_id)
     volume_data = volume.get_data()
     volume_issues = volume.get_issues(_skip_files=True)

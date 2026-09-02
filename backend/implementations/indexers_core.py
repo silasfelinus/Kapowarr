@@ -71,8 +71,7 @@ from backend.base.definitions import (Download, DownloadSource,
                                       SearchResultData)
 from backend.base.file_extraction import (extract_filename_data,
                                           refine_special_version)
-from backend.base.helpers import (AsyncSession, Session,
-                                  extract_year_from_date, normalise_base_url)
+from backend.base.helpers import (AsyncSession, Session, extract_year_from_date, normalise_base_url, rate_limit_cooldown_remaining)
 from backend.base.helpers import redact_url
 from backend.base.logging import LOGGER
 from backend.features.acquisition_preferences import search_delay
@@ -419,7 +418,12 @@ async def search_indexer(
     # and whether that burst is welcome is the indexer's call rather than
     # Kapowarr's. Settings > Download > Usenet Search Delay.
     interval = search_delay('usenet')
-    if interval > 0:
+    # Nothing to pace when the request is not going to be made. An indexer
+    # that has already reported its quota exhausted is skipped inside the
+    # session, so sleeping first spent the delay on a request that never
+    # happened -- which on 2026-09-01 turned every issue of a Search All
+    # sweep into nine seconds of waiting for nothing, for two hours.
+    if interval > 0 and not rate_limit_cooldown_remaining(indexer.base_url):
         lock, starts, key = _request_state(indexer)
         async with lock:
             elapsed = monotonic() - starts.get(key, 0.0)

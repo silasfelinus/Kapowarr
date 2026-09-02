@@ -183,3 +183,50 @@ class matching_without_asking(unittest.TestCase):
 
         self.assertTrue(planned, 'it should have built and run a query plan')
         return
+
+
+class the_rows_handed_on_are_all_of_them(unittest.TestCase):
+    """Star Trek (1967), 2026-09-02: 142 releases came back for the volume,
+    none of them matched *the volume* -- a release naming issue #34 is not a
+    match for a search for the whole run -- and twenty-seven issue searches
+    then went and asked the indexers for those same rows one at a time.
+
+    `match` is answered against what the search asked for, so filtering by it
+    before handing the rows on throws away exactly the ones the issue
+    searches need.
+    """
+
+    def test_rows_that_did_not_match_the_volume_still_reach_the_issues(self):
+        handed_on = []
+
+        def fake_manual_search(volume_id, issue_id=None, already_fetched=None):
+            if already_fetched is not None:
+                handed_on.append(len(already_fetched))
+                # They match once asked about the right issue.
+                return [{**r, 'match': True} for r in already_fetched
+                        if r['issue_number'] == float(issue_id)]
+
+            if issue_id is None:
+                # What the indexers return for the volume: one row per issue,
+                # none of which is a match for the volume as a whole.
+                return [{
+                    'match': False, 'link': f'https://example/{n}',
+                    'issue_number': float(n), 'special_version': None
+                } for n in (1, 2, 3)]
+
+            return []
+
+        with patch.object(SR, 'Volume', return_value=_volume(
+                [(1, 1.0), (2, 2.0), (3, 3.0)])), \
+                patch.object(SR, 'manual_search', fake_manual_search):
+            chosen = SR.auto_search(1)
+
+        self.assertEqual(
+            handed_on, [3, 3, 3],
+            'every issue search should have been given all three rows'
+        )
+        self.assertEqual(
+            sorted(c['link'] for c in chosen),
+            ['https://example/1', 'https://example/2', 'https://example/3']
+        )
+        return

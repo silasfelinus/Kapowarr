@@ -737,22 +737,23 @@ def auto_search(
         LOGGER.debug(f'Auto search results: {result}')
         return result
 
-    search_results = [
-        r
-        for r in manual_search(volume_id, issue_id, already_fetched)
-        if r['match']
-    ]
+    # Kept unfiltered as well as filtered. `match` is answered against what
+    # this search asked for, so a release naming issue #34 does not match a
+    # search for the volume as a whole -- and handing on only the matches
+    # therefore threw away precisely the rows the issue searches were about
+    # to go and fetch again. On 2026-09-02 that was Star Trek (1967): 142
+    # releases came back for the volume, none of them matched it, and
+    # twenty-seven issue searches then re-asked the indexers one at a time.
+    fetched = manual_search(volume_id, issue_id, already_fetched)
+    search_results = [r for r in fetched if r['match']]
 
     if not search_results and already_fetched:
         # Nothing here for this issue. The volume-level fetch is one broad
         # query and an indexer caps how many rows it returns, so a phrasing
         # naming the issue can still surface something that fell off the end
         # of that list. Only now is it worth the request.
-        search_results = [
-            r
-            for r in manual_search(volume_id, issue_id)
-            if r['match']
-        ]
+        fetched = manual_search(volume_id, issue_id)
+        search_results = [r for r in fetched if r['match']]
 
     if issue_id is not None or volume_data.special_version not in (
         SpecialVersion.NORMAL,
@@ -848,10 +849,11 @@ def auto_search(
         # than fetched again -- see `manual_search`.
         fallback_results = auto_search(
             volume_id, missing_issue[0], respect_backoff,
-            # `or None`, not the empty list: a volume search that came back
-            # with nothing has nothing to hand on, and the issue searches
-            # have to go and ask for themselves.
-            already_fetched=search_results or None)
+            # Everything that came back, not just what matched the volume:
+            # see where `fetched` is set. `or None`, not the empty list -- a
+            # volume search that came back with nothing has nothing to hand
+            # on, and the issue searches have to go and ask for themselves.
+            already_fetched=fetched or None)
         for fallback in fallback_results:
             if fallback['link'] not in chosen_links:
                 chosen_downloads.append(fallback)

@@ -200,11 +200,16 @@ def _rank_search_result(
     else:
         # Search was for volume
         if isinstance(result['issue_number'], tuple):
-            issue_fit = (
-                1.0
-                /
-                (result['issue_number'][1] - result['issue_number'][0] + 1)
-            )
+            # A pack covering fewer issues is the better answer to a volume
+            # search, so rank by how much it covers -- defensively, because
+            # the range comes from a parsed release name and need not be
+            # sane. A1 (1992) on 2026-09-02 produced one whose ends were the
+            # wrong way round, which divided by zero and took the whole
+            # volume's search down with it. Sorted, and guarded, a nonsense
+            # range simply ranks like a single issue.
+            low, high = sorted(result['issue_number'])
+            covered = high - low + 1
+            issue_fit = 1.0 / covered if covered > 0 else 1.0
 
         elif isinstance(result['issue_number'], float):
             issue_fit = 1

@@ -1346,6 +1346,21 @@ def describe_rate_limits() -> str:
     )
 
 
+def shortest_rate_limit_cooldown() -> float:
+    """How long until the first host in a cooldown is worth asking again.
+
+    Args:
+        None.
+
+    Returns:
+        float: Seconds, or 0.0 if nothing is in a cooldown.
+    """
+    now = monotonic()
+    remaining = [until - now for until in _rate_limited_until.values()
+                 if until > now]
+    return min(remaining) if remaining else 0.0
+
+
 def clear_rate_limits() -> None:
     """Forget every recorded limit. For tests and for a manual retry."""
     _rate_limited_until.clear()
@@ -1417,6 +1432,13 @@ class AsyncSession(ClientSession):
                 f'(rate limited for another {cooldown:.0f}s)'
             )
 
+        # Counted here as well as in the synchronous session: searches run
+        # through this one, and counting only the skips here while counting
+        # the requests over there made every search that skipped a single
+        # cooled host look like a search that reached nobody. On 2026-09-02
+        # that stopped a sweep at its third volume, one second after a search
+        # came back with seventy-four results.
+        _request_tally.made += 1
         ua, cf_cookies = self.fs.get_ua_cookies(url)
         self.headers.update({"User-Agent": ua})
         self.cookie_jar.update_cookies(cf_cookies)

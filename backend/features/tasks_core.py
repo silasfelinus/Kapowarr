@@ -16,7 +16,8 @@ from flask import Flask
 from backend.base.custom_exceptions import (InvalidComicVineApiKey,
                                             TaskNotDeletable, TaskNotFound)
 from backend.base.helpers import (Singleton, describe_rate_limits,
-                                  get_subclasses, reset_request_tally)
+                                  get_subclasses, reset_request_tally,
+                                  shortest_rate_limit_cooldown)
 from backend.base.logging import LOGGER
 from backend.features.download_queue import DownloadHandler
 from backend.features.pull_list import (check_weekly_pull_list,
@@ -457,6 +458,10 @@ class UpdateAll(Task):
 class SearchAll(Task):
     "Trigger an automatic search for each volume in the library"
 
+    RETRY_MARGIN_SECONDS = 60
+    """Added to a cooldown before trying again, so the sweep does not arrive
+    at the same instant the quota does and find it a second short."""
+
     stop = False
     message = ''
     action = 'search_all'
@@ -588,6 +593,7 @@ class SearchAll(Task):
                     volume_id, volume_title, describe_rate_limits()
                 )
                 ws.emit(TaskStatusEvent(self.message))
+                self._come_back_when_the_quota_does()
                 break
 
             # Its turn is recorded once it has actually had one.
@@ -624,6 +630,51 @@ class SearchAll(Task):
         # Already queued. Returned for the caller that wants to know what a
         # sweep found; the runner skips an empty list.
         return []
+
+    @staticmethod
+    def _come_back_when_the_quota_does() -> None:
+        """Ask to run again once the indexers will answer, not tomorrow.
+
+        A sweep that stops on the third volume has done almost none of its
+        work, but the interval was already pushed a full day forward when the
+        task was queued -- so the library would wait until tomorrow to be
+        told the same thing again. Silas, after a sweep that stopped at
+        volume 156: "surprised it didn't restart automatically."
+
+        Only brought forward, never pushed back, and never past the task's
+        own interval. Nothing needs to be re-armed for this: the interval
+        thread wakes for every task, and the watched-folder import is on a
+        quarter-hourly one, so a lowered time is noticed within fifteen
+        minutes of arriving.
+        """
+        cooldown = shortest_rate_limit_cooldown()
+        if not cooldown:
+            return
+
+        due = round(time() + cooldown + SearchAll.RETRY_MARGIN_SECONDS)
+        try:
+            cursor = get_db()
+            cursor.execute(
+                """
+                UPDATE task_intervals
+                SET next_run = MIN(next_run, ?)
+                WHERE task_name = ?;
+                """,
+                (due, SearchAll.action)
+            )
+            commit()
+        except Exception:
+            LOGGER.warning(
+                'Could not bring the next sweep forward; it will run at its '
+                'normal time', exc_info=True)
+            return
+
+        LOGGER.info(
+            'The next sweep will run in about %d min, when the first quota '
+            'comes back, rather than waiting for its usual turn',
+            round((cooldown + SearchAll.RETRY_MARGIN_SECONDS) / 60)
+        )
+        return
 
     @staticmethod
     def _mark_searched(volume_id: int) -> None:

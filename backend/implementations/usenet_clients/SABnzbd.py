@@ -88,7 +88,8 @@ class SABnzbd(BaseExternalClient):
         base_url: str,
         api_token: Union[str, None],
         mode: str,
-        params: Union[Dict[str, Any], None] = None
+        params: Union[Dict[str, Any], None] = None,
+        tolerate_nothing_matched: bool = False
     ) -> Dict[str, Any]:
         """Make a request against SABnzbd's `<base_url>/api` endpoint.
 
@@ -99,6 +100,12 @@ class SABnzbd(BaseExternalClient):
             mode (str): The `mode` query parameter (e.g. `'queue'`).
             params (Union[Dict[str, Any], None], optional): Extra query
                 parameters. Defaults to None.
+
+            tolerate_nothing_matched (bool, optional): Treat a bare
+                `status: false` -- no error text with it -- as "nothing here
+                matched", rather than as the client failing. For deletes,
+                where nothing matching is the outcome being asked for.
+                Defaults to False.
 
         Raises:
             ClientNotWorking: Can't connect to client, or client returned
@@ -146,6 +153,21 @@ class SABnzbd(BaseExternalClient):
         if result.get('status') is False:
             # SABnzbd's own error shape: {"status": false, "error": "..."}
             error = str(result.get('error', '')).lower()
+
+            if tolerate_nothing_matched and not error:
+                # `{"status": false, "nzo_ids": []}` -- status false, nothing
+                # said. That is SABnzbd's answer when the id names nothing in
+                # the section asked, which for a delete is the state wanted
+                # rather than a failure. Every completed download produced two
+                # of these, sixteen in one run on 2026-09-02, each logged as
+                # an error with a traceback behind it. Real faults were in
+                # there too and had nothing to stand out against.
+                LOGGER.debug(
+                    "SABnzbd had nothing matching in %s; nothing to do",
+                    mode
+                )
+                return result
+
             if 'api key' in error or 'apikey' in error:
                 LOGGER.error(
                     f"Failed to authenticate for SABnzbd instance: {result}"
@@ -305,18 +327,18 @@ class SABnzbd(BaseExternalClient):
             'value': download_id,
             'del_files': 1 if delete_files else 0
         }
-        # A job can be in either the queue or history at deletion time;
-        # SABnzbd ignores a delete-by-id call against the section that
-        # doesn't have it (no error), so calling both is safe and avoids
-        # having to look the job up again first.
-        self._api_request(
-            self.ssn, self.base_url, self.api_token,
-            mode='queue', params=params
-        )
-        self._api_request(
-            self.ssn, self.base_url, self.api_token,
-            mode='history', params=params
-        )
+        # A job can be in either the queue or history at deletion time, so
+        # both are asked. The section that does not have it answers
+        # `{"status": false, "nzo_ids": []}` -- not silence, as this once
+        # assumed, but a bare false that the shared request handler read as
+        # the client having failed. At least one of every pair said that, and
+        # a job SABnzbd has already purged makes it two.
+        for section in ('queue', 'history'):
+            self._api_request(
+                self.ssn, self.base_url, self.api_token,
+                mode=section, params=params,
+                tolerate_nothing_matched=True
+            )
         self.known_ids.discard(download_id)
         return
 

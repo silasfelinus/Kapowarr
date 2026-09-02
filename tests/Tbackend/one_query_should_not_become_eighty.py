@@ -230,3 +230,98 @@ class the_rows_handed_on_are_all_of_them(unittest.TestCase):
             ['https://example/1', 'https://example/2', 'https://example/3']
         )
         return
+
+
+class asking_again_is_probed_once_per_volume(unittest.TestCase):
+    """AC Annual (1990) on 2026-09-02:
+
+        Search finished in 1.2s: AC Annual (1990)     -- 45 result(s)
+        Starting manual search: AC Annual (1990) #2
+        Starting manual search: AC Annual (1990) #2
+        Search finished in 1.8s: AC Annual (1990) #2  -- 45 result(s)
+
+    Seventy-three searches started that run and sixty-five finished: every
+    issue matched the handed-on rows, found nothing for itself, and then paid
+    for a real query that returned the very same forty-five rows.
+
+    Asking per issue is worth it when an indexer truncated the broad query
+    and the wanted release fell off the end. It is worth nothing when the
+    indexers answer the whole run in one go. One probe per volume settles
+    which, instead of paying per issue to be told the same thing.
+    """
+
+    OPEN = [(1, 1.0), (2, 2.0), (3, 3.0)]
+
+    def _run(self, refetch_adds_anything):
+        """Report every manual_search call: (issue, was it handed rows)."""
+        calls = []
+
+        def fake_manual_search(volume_id, issue_id=None, already_fetched=None):
+            calls.append((issue_id, already_fetched is not None))
+
+            if already_fetched is not None:
+                return []                       # never a local match
+
+            if issue_id is None:
+                # The volume's own rows: for issues it does not have.
+                return [{
+                    'match': False, 'link': f'https://example/{n}',
+                    'issue_number': float(n), 'special_version': None
+                } for n in (91, 92, 93)]
+
+            if refetch_adds_anything:
+                return [{
+                    'match': True, 'link': f'https://example/new-{issue_id}',
+                    'issue_number': float(issue_id), 'special_version': None
+                }]
+
+            # The same rows the volume search already brought back.
+            return [{
+                'match': False, 'link': f'https://example/{n}',
+                'issue_number': float(n), 'special_version': None
+            } for n in (91, 92, 93)]
+
+        with patch.object(SR, 'Volume', return_value=_volume(self.OPEN)), \
+                patch.object(SR, 'manual_search', fake_manual_search):
+            SR.auto_search(1)
+
+        return [issue for issue, handed in calls if not handed and issue]
+
+    def test_a_volume_whose_indexers_hold_nothing_more_probes_once(self):
+        asked = self._run(refetch_adds_anything=False)
+
+        self.assertEqual(
+            len(asked), 1,
+            'one probe should settle it for the whole volume'
+        )
+        return
+
+    def test_a_volume_where_asking_helps_keeps_asking(self):
+        "Recall first: if the narrower phrasing finds things, keep using it."
+        asked = self._run(refetch_adds_anything=True)
+
+        self.assertEqual(len(asked), len(self.OPEN))
+        return
+
+    def test_the_budget_reads_as_spent_once_exhausted(self):
+        budget = SR.RefetchBudget()
+
+        self.assertTrue(budget)
+        budget.exhausted = True
+        self.assertFalse(budget)
+        return
+
+    def test_a_direct_issue_search_never_asks_twice(self):
+        """Nobody handed it rows, so there is nothing to fall back from."""
+        calls = []
+
+        def fake_manual_search(volume_id, issue_id=None, already_fetched=None):
+            calls.append(issue_id)
+            return []
+
+        with patch.object(SR, 'Volume', return_value=_volume([(1, 1.0)])), \
+                patch.object(SR, 'manual_search', fake_manual_search):
+            SR.auto_search(1, 1)
+
+        self.assertEqual(calls, [1])
+        return

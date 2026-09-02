@@ -665,11 +665,34 @@ def _log_search_cost(volume_data, issue_number, started, found: int) -> None:
     )
 
 
+class RefetchBudget:
+    """Whether asking an indexer again is still worth it for one volume.
+
+    An issue the volume's own search did not cover may still be findable with
+    a phrasing that names it -- an indexer caps how many rows it returns, so
+    the wanted release can fall off the end of a broad query. But it usually
+    is not: when the indexers answer the whole run in one go, every such
+    request hands back rows already in front of us. One probe per volume
+    settles which of the two this is, and the rest of its issues go the cheap
+    way.
+    """
+
+    __slots__ = ('exhausted',)
+
+    def __init__(self) -> None:
+        self.exhausted = False
+        return
+
+    def __bool__(self) -> bool:
+        return not self.exhausted
+
+
 def auto_search(
     volume_id: int,
     issue_id: Union[int, None] = None,
     respect_backoff: bool = False,
-    already_fetched: Union[List[MatchedSearchResultData], None] = None
+    already_fetched: Union[List[MatchedSearchResultData], None] = None,
+    refetch: Union[RefetchBudget, None] = None
 ) -> List[MatchedSearchResultData]:
     """Search for a volume or issue and automatically choose a result.
 
@@ -689,6 +712,11 @@ def auto_search(
             Releases a search of this volume has already brought back, to be
             matched against this issue before any indexer is asked again.
             Defaults to None.
+
+        refetch (Union[RefetchBudget, None], optional): Whether asking an
+            indexer again, for an issue the handed-on releases do not cover,
+            is still worth doing for this volume. Shared across the volume's
+            issues. Defaults to None, meaning never ask again.
 
     Returns:
         List[MatchedSearchResultData]: List with chosen search results.
@@ -752,12 +780,32 @@ def auto_search(
     fetched = manual_search(volume_id, issue_id, already_fetched)
     search_results = [r for r in fetched if r['match']]
 
-    if not search_results and already_fetched:
+    if not search_results and already_fetched and refetch:
         # Nothing here for this issue. The volume-level fetch is one broad
         # query and an indexer caps how many rows it returns, so a phrasing
         # naming the issue can still surface something that fell off the end
-        # of that list. Only now is it worth the request.
-        fetched = manual_search(volume_id, issue_id)
+        # of that list -- when it does, this is what finds it.
+        #
+        # But when it does not, asking is pure waste, and for a back
+        # catalogue it usually does not: AC Annual on 2026-09-02 returned the
+        # same forty-five rows for the volume and for every one of its
+        # missing issues, so each issue paid for a second search that could
+        # only ever hand back what was already in front of it. So the first
+        # such request per volume is a probe. If it brings back nothing the
+        # volume search had not already, the indexers are answering the whole
+        # run in one go and no later issue of this volume asks again.
+        already_seen = {r['link'] for r in already_fetched}
+        refetched = manual_search(volume_id, issue_id)
+
+        if not {r['link'] for r in refetched} - already_seen:
+            refetch.exhausted = True
+            LOGGER.debug(
+                'Volume %d: asking per issue adds nothing to what the volume '
+                'search returned; the rest of its issues will not ask',
+                volume_id
+            )
+
+        fetched = refetched
         search_results = [r for r in fetched if r['match']]
 
     if issue_id is not None or volume_data.special_version not in (
@@ -835,6 +883,9 @@ def auto_search(
         )
     ]
     chosen_links = {part['link'] for part in chosen_downloads}
+    # One probe per volume decides whether asking per issue is worth
+    # anything here; see where it is spent.
+    refetch_budget = RefetchBudget()
 
     if respect_backoff:
         # Whatever the volume-level search covered has been found, so those
@@ -854,6 +905,7 @@ def auto_search(
         # than fetched again -- see `manual_search`.
         fallback_results = auto_search(
             volume_id, missing_issue[0], respect_backoff,
+            refetch=refetch_budget,
             # Everything that came back, not just what matched the volume:
             # see where `fetched` is set. `or None`, not the empty list -- a
             # volume search that came back with nothing has nothing to hand

@@ -438,15 +438,22 @@ async def search_indexer(
                 await async_sleep(interval - elapsed)
             starts[key] = monotonic()
 
+    params = {
+        "t": "search",
+        "apikey": indexer.api_key,
+        "o": "json",
+        "extended": "1"
+    }
+    # An empty query is a feed request, not a search: Newznab and Torznab
+    # both answer `t=search` with no `q` by returning the indexer's most
+    # recent releases. One request then covers the whole library instead of
+    # one volume. See `backend.features.release_feed`.
+    if query:
+        params["q"] = query
+
     body = await session.get_text(
         newznab_api_url(indexer.base_url),
-        params={
-            "t": "search",
-            "q": query,
-            "apikey": indexer.api_key,
-            "o": "json",
-            "extended": "1"
-        },
+        params=params,
         quiet_fail=True
     )
     if not body:

@@ -182,13 +182,42 @@ def match_file_to_library_volume(
             purpose: guessing between two volumes moves the file into the wrong
             folder, which is exactly the outcome this feature must not produce.
     """
-    file_data: FilenameData = extract_filename_data(filepath)
+    return match_parsed_to_library_volume(
+        extract_filename_data(filepath), index, filepath)
+
+
+def match_parsed_to_library_volume(
+    file_data: FilenameData,
+    index: Union[LibraryIndex, None] = None,
+    described_as: str = ''
+) -> Union[int, None]:
+    """Find the one volume a already-parsed name belongs to.
+
+    The body of `match_file_to_library_volume`, reachable without a file. An
+    indexer release arrives already parsed -- `SearchResultData` extends
+    `FilenameData` -- so the feed sync matches those fields rather than
+    re-deriving them from the display title, which is a different string.
+
+    Args:
+        file_data (FilenameData): The parsed name.
+
+        index (Union[LibraryIndex, None], optional): A prepared index to match
+            against. Defaults to None, meaning build one over the library.
+
+        described_as (str, optional): What to call it in the log. Defaults to
+            the parsed series.
+
+    Returns:
+        Union[int, None]: The volume's ID, or None if none matched, or if more
+            than one did.
+    """
     if not file_data['series']:
         return None
 
     if index is None:
         index = LibraryIndex()
 
+    described_as = described_as or str(file_data['series'])
     matches: List[int] = []
     for volume_id in index.volume_ids:
         volume_data = index.data(volume_id)
@@ -208,9 +237,8 @@ def match_file_to_library_volume(
 
         if len(matches) > 1:
             LOGGER.info(
-                'Watched folder: %s matches more than one volume in the '
-                'library; leaving it for manual import',
-                filepath
+                '%s matches more than one volume in the library; leaving it '
+                'alone', described_as
             )
             return None
 

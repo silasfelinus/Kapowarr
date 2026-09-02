@@ -22,6 +22,7 @@ from backend.features.download_queue import DownloadHandler
 from backend.features.pull_list import (check_weekly_pull_list,
                                         process_publisher_subscriptions)
 from backend.features.search import auto_search, nothing_could_be_asked
+from backend.features.release_feed import describe_sync, poll_release_feeds
 from backend.features.orphaned_downloads import (describe_recovery,
                                                   recover_orphaned_downloads)
 from backend.features.watched_folder_import import (describe_summary,
@@ -775,6 +776,41 @@ class OrphanedDownloadRecovery(Task):
         summary = recover_orphaned_downloads(lambda: self.stop)
 
         self.message = describe_recovery(summary)
+        WebSocket().emit(TaskStatusEvent(self.message))
+        return
+
+
+class ReleaseFeedSync(Task):
+    "Queue anything the indexers have just published that the library wants"
+
+    stop = False
+    message = ''
+    action = 'release_feed_sync'
+    display_title = 'Feed Sync'
+    category = 'download'
+
+    @property
+    def volume_id(self) -> None:
+        return None
+
+    @property
+    def issue_id(self) -> None:
+        return None
+
+    def __init__(self) -> None:
+        return
+
+    def run(self) -> None:
+        # Declared here for the same reason as the other interval tasks: the
+        # interval is seeded for every install, so `task_library` has to find
+        # it without the module being imported first. The work lives in
+        # backend.features.release_feed.
+        self.message = 'Reading the indexer feeds'
+        WebSocket().emit(TaskStatusEvent(self.message))
+
+        summary = poll_release_feeds(lambda: self.stop)
+
+        self.message = describe_sync(summary)
         WebSocket().emit(TaskStatusEvent(self.message))
         return
 

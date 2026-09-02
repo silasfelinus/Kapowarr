@@ -510,10 +510,15 @@ async def search_torznab_indexer(
 ) -> List[SearchResultData]:
     params = {
         't': 'search',
-        'q': query,
         'apikey': indexer.api_key,
         'extended': '1'
     }
+    # An empty query is a feed request, not a search: Newznab and Torznab
+    # both answer `t=search` with no `q` by returning the indexer's most
+    # recent releases. One request then covers the whole library instead of
+    # one volume. See `backend.features.release_feed`.
+    if query:
+        params['q'] = query
     if indexer.category_filter_enabled and indexer.categories:
         params['cat'] = indexer.categories
 

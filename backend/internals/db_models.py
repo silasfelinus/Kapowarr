@@ -140,6 +140,58 @@ class FilesDB:
         ))
 
     @staticmethod
+    def add_files(
+        filepaths: Iterable[str]
+    ) -> Dict[str, int]:
+        """Register many files at once and get all of their IDs back.
+
+        One write instead of one per file. That matters more than it sounds:
+        SQLite has a single writer for the whole database, so every separate
+        write is a lock the rest of the application has to wait behind, and
+        `scan_files` runs in up to one process per core. Registering a
+        folder's files one at a time made a scan of a large library a storm
+        of write-lock acquisitions that starved every other writer -- on
+        2026-09-01 a Search All sweep lost its rotation timestamps to it for
+        minutes at a stretch.
+
+        Args:
+            filepaths (Iterable[str]): The files to register.
+
+        Returns:
+            Dict[str, int]: The ID of every one of them, registered here or
+                already known. A file that has gone away since it was listed
+                is left out rather than failing the batch.
+        """
+        # `stat` is filesystem I/O and has no business inside a transaction
+        # that everything else is waiting on, so size them all up first.
+        sized = []
+        for filepath in filepaths:
+            try:
+                sized.append((filepath, stat(filepath).st_size))
+            except OSError:
+                LOGGER.debug(f'File went away before it was registered: {filepath}')
+
+        if not sized:
+            return {}
+
+        cursor = get_db()
+        cursor.executemany(
+            "INSERT OR IGNORE INTO files(filepath, size) VALUES (?,?)",
+            sized
+        )
+
+        found: Dict[str, int] = {}
+        for start in range(0, len(sized), 500):
+            batch = [f for f, _ in sized[start:start + 500]]
+            placeholders = ','.join('?' for _ in batch)
+            found.update(cursor.execute(
+                f"SELECT filepath, id FROM files WHERE filepath IN ({placeholders});",
+                batch
+            ).fetchall())
+
+        return found
+
+    @staticmethod
     def add_file(
         filepath: str
     ) -> int:

@@ -66,6 +66,14 @@ class scan_files_reports_what_it_declines(unittest.TestCase):
         self.addCleanup(FM.LOGGER.setLevel, previous_level)
         self.addCleanup(FM.LOGGER.removeHandler, handler)
 
+        # `scan_files` registers in one batch now, so what matters is which
+        # files it decided to register, not whether it called at all.
+        registered = []
+
+        def register(filepaths):
+            registered.extend(filepaths)
+            return {f: 7 for f in registered}
+
         with patch.object(FM, 'isdir', return_value=True), \
                 patch.object(FM, 'list_files', return_value=[filename]), \
                 patch.object(FM, 'get_db', return_value=cursor), \
@@ -73,43 +81,44 @@ class scan_files_reports_what_it_declines(unittest.TestCase):
                 patch.object(FM, 'WebSocket'), \
                 patch.object(FM, 'RootFolders'), \
                 patch.object(FM, 'delete_empty_child_folders'), \
-                patch.object(FM.FilesDB, 'add_file', return_value=7) as add, \
+                patch.object(FM.FilesDB, 'add_files',
+                             side_effect=register) as add, \
                 patch.object(FM.FilesDB, 'delete_unmatched_files'):
             with patch('backend.implementations.volumes.Volume',
                        return_value=fake_volume):
                 FM.scan_files(1)
-        return add, '\n'.join(records)
+        return registered, '\n'.join(records)
 
     def test_a_file_of_another_series_is_named(self):
-        add, output = self._scan(
+        registered, output = self._scan(
             f'{self.FOLDER}/Totally Unrelated Manga v02 005 (1998).cbz'
         )
-        add.assert_not_called()
+        self.assertEqual(registered, [])
         self.assertIn('Totally Unrelated Manga v02 005 (1998).cbz', output)
         self.assertIn('does not match the volume', output)
 
     def test_a_file_of_this_series_the_volume_will_not_take_is_named(self):
         # The series is right and the volume still declines it: a
         # one-shot offered to a normal volume.
-        add, output = self._scan(
+        registered, output = self._scan(
             f'{self.FOLDER}/Death of Power One-Shot (2023).cbz'
         )
-        add.assert_not_called()
+        self.assertEqual(registered, [])
         self.assertIn('Death of Power One-Shot', output)
         self.assertIn('does not match the volume', output)
 
     def test_a_one_shot_against_a_normal_volume_is_named(self):
-        add, output = self._scan(
+        registered, output = self._scan(
             f'{self.FOLDER}/Death of Power One-Shot (2023).cbz'
         )
-        add.assert_not_called()
+        self.assertEqual(registered, [])
         self.assertIn('does not match the volume', output)
 
     def test_a_file_the_volume_does_take_is_not_reported_as_declined(self):
-        add, output = self._scan(
+        registered, output = self._scan(
             f'{self.FOLDER}/Death of Power 002 (2023).cbz'
         )
-        add.assert_called_once()
+        self.assertEqual(len(registered), 1)
         self.assertNotIn('does not match the volume', output)
 
 

@@ -32,7 +32,7 @@ from backend.internals.db_migration import DatabaseMigrationHandler
 class the_order_the_sweep_asks_for(unittest.TestCase):
     def test_it_is_least_recently_searched_first(self):
         cursor = MagicMock()
-        cursor.__iter__ = lambda self: iter([])
+        cursor.execute.return_value.fetchall.return_value = []
 
         with patch.object(TC, 'get_db', return_value=cursor), \
                 patch.object(TC, 'WebSocket', MagicMock()):
@@ -57,7 +57,7 @@ class the_order_the_sweep_asks_for(unittest.TestCase):
 class when_the_turn_is_recorded(unittest.TestCase):
     def _sweep(self, volumes, auto_search):
         cursor = MagicMock()
-        cursor.__iter__ = lambda self: iter(volumes)
+        cursor.execute.return_value.fetchall.return_value = volumes
         stamped = []
         task = TC.SearchAll()
 
@@ -103,7 +103,7 @@ class when_the_turn_is_recorded(unittest.TestCase):
 
         def sweep():
             cursor = MagicMock()
-            cursor.__iter__ = lambda self: iter([(1, 'A'), (2, 'B'), (3, 'C')])
+            cursor.execute.return_value.fetchall.return_value = [(1, 'A'), (2, 'B'), (3, 'C')]
             stamped = []
             holder['task'] = task = TC.SearchAll()
 

@@ -11,7 +11,9 @@ from random import uniform
 from sqlite3 import (PARSE_DECLTYPES, Connection, Cursor, OperationalError,
                      ProgrammingError, Row, register_adapter,
                      register_converter)
+from os import getpid
 from threading import current_thread
+from threading import enumerate as enumerate_threads
 from time import monotonic, sleep, time
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Type, Union
 
@@ -49,6 +51,56 @@ def is_lock_error(error: BaseException) -> bool:
         return False
     message = str(error).lower()
     return any(marker in message for marker in LOCK_ERROR_MARKERS)
+
+
+LOCK_HOLDER_REPORT_AFTER = 4
+"""Retries to spend quietly before saying who is holding the writer. Brief
+contention is normal and not worth a line; a wait this long is not."""
+
+
+def describe_writers() -> str:
+    """Say who in this process is currently inside a write transaction.
+
+    SQLite will not name the connection holding the write lock, so this is
+    the only place the answer can come from -- and only for this process.
+    `scan_files` runs in a pool of separate processes, so "no open
+    transaction here" is itself the finding: the holder is one of those, or
+    something outside Kapowarr altogether.
+
+    Returns:
+        str: A description for the log.
+    """
+    try:
+        holders = [
+            f'{name} (open {monotonic() - connection.transaction_started_at:.1f}s)'
+            for name, connection in _connections_by_thread()
+            if connection.transaction_started_at is not None
+        ]
+    except Exception:
+        return 'Could not work out who holds the writer.'
+
+    if not holders:
+        return (
+            f'No thread in this process (pid {getpid()}) holds an open '
+            'transaction, so the writer is held by a scan worker process or '
+            'by something outside Kapowarr.'
+        )
+
+    return f'Held in this process (pid {getpid()}) by: {", ".join(holders)}.'
+
+
+def _connections_by_thread() -> List[Any]:
+    """The live connections of this process, with the thread each belongs to.
+
+    Returns:
+        List[Any]: `(thread name, connection)` pairs.
+    """
+    threads = {t.ident: t.name for t in enumerate_threads()}
+    return [
+        (threads.get(thread_id, f'thread {thread_id}'), connection)
+        for thread_id, connection in list(DBConnectionManager.instances.items())
+        if not connection.closed
+    ]
 
 
 class KapowarrCursor(Cursor):
@@ -120,6 +172,9 @@ class KapowarrCursor(Cursor):
                     'Database is locked; retrying in %.1fs (attempt %d)',
                     delay, attempt
                 )
+                if attempt == LOCK_HOLDER_REPORT_AFTER:
+                    LOGGER.warning(
+                        'Still waiting on the database. %s', describe_writers())
                 sleep(delay)
                 wait = min(wait * 2, Constants.DB_LOCK_RETRY_MAX_WAIT)
 
@@ -199,6 +254,7 @@ class KapowarrCursor(Cursor):
             # IMMEDIATE, not the default DEFERRED -- see
             # `WRITE_TRANSACTION_MODE`.
             self.execute(f"BEGIN {WRITE_TRANSACTION_MODE};")
+            connection.transaction_started_at = monotonic()
         connection.transaction_depth += 1
         return self
 
@@ -220,6 +276,7 @@ class KapowarrCursor(Cursor):
             else:
                 self.execute("COMMIT;")
 
+        connection.transaction_started_at = None
         return
 
 
@@ -328,6 +385,9 @@ class DBConnection(Connection, metaclass=DBConnectionManager):
     """How many `with cursor:` blocks are currently open on this connection.
     Only the outermost one begins and ends the actual transaction."""
 
+    transaction_started_at: Union[float, None] = None
+    "When the open transaction began, for naming the holder to a waiter."
+
     def __init__(
         self, *,
         timeout: float = Constants.DB_TIMEOUT
@@ -348,6 +408,7 @@ class DBConnection(Connection, metaclass=DBConnectionManager):
         )
         self.isolation_level = AUTOCOMMIT
         self.transaction_depth = 0
+        self.transaction_started_at = None
         c = super().cursor()
         for pragma in CONNECTION_PRAGMAS:
             c.execute(pragma)

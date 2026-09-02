@@ -108,8 +108,15 @@ def scan_files(
     ))
     manually_matched_general_files_found: Set[int] = set()
 
-    new_issue_bindings: Set[Tuple[int, int]] = set()
-    new_general_bindings: Dict[int, str] = {}
+    # Keyed by filepath rather than file ID while the loop runs. Asking the
+    # database for an ID mid-loop meant a write per file, and SQLite has one
+    # writer for the whole database: with `scan_files` running in up to one
+    # process per core, a scan of a large library became a storm of write-lock
+    # acquisitions that starved every other writer in the application. The
+    # loop now decides, and one batched write at the end registers whatever
+    # it decided on.
+    matched_issue_bindings: Set[Tuple[str, int]] = set()
+    matched_general_bindings: Dict[str, str] = {}
     folder_contents = list_files(
         folder=volume_data.folder,
         ext=FileConstants.SCANNABLE_EXTENSIONS
@@ -175,24 +182,14 @@ def scan_files(
             and file_data["issue_number"] is None
         ):
             # Volume cover file
-            if file not in current_issue_files:
-                current_issue_files[file] = FilesDB.add_file(file)
-
-            new_general_bindings[current_issue_files[file]] = (
-                GeneralFileType.COVER.value
-            )
+            matched_general_bindings[file] = GeneralFileType.COVER.value
 
         elif (
             file_data['special_version'] == SpecialVersion.METADATA
             and file_data["issue_number"] is None
         ):
             # Volume metadata file
-            if file not in current_issue_files:
-                current_issue_files[file] = FilesDB.add_file(file)
-
-            new_general_bindings[current_issue_files[file]] = (
-                GeneralFileType.METADATA.value
-            )
+            matched_general_bindings[file] = GeneralFileType.METADATA.value
 
         elif (
             volume_data.special_version not in (
@@ -202,22 +199,12 @@ def scan_files(
             and file_data['special_version']
         ):
             # Special Version
-            if file not in current_issue_files:
-                current_issue_files[file] = FilesDB.add_file(file)
-
-            new_issue_bindings.add(
-                (current_issue_files[file], volume_issues[0].id)
-            )
+            matched_issue_bindings.add((file, volume_issues[0].id))
 
         elif collected_edition_of_volume(file_data, volume_data):
             # Belongs to the volume, bound to none of its issues. See
             # `collected_edition_of_volume` for why coverage is not claimed.
-            if file not in current_issue_files:
-                current_issue_files[file] = FilesDB.add_file(file)
-
-            new_general_bindings[current_issue_files[file]] = (
-                GeneralFileType.COLLECTED.value
-            )
+            matched_general_bindings[file] = GeneralFileType.COLLECTED.value
 
         elif file_data["issue_number"] is not None:
             # Normal issue
@@ -232,14 +219,9 @@ def scan_files(
                 if n_start <= issue.calculated_issue_number <= n_end
             ]
 
-            if file not in current_issue_files:
-                current_issue_files[file] = FilesDB.add_file(file)
-
             if matching_issues:
                 for issue in matching_issues:
-                    new_issue_bindings.add(
-                        (current_issue_files[file], issue)
-                    )
+                    matched_issue_bindings.add((file, issue))
 
             else:
                 # The file passed every check for belonging to this volume
@@ -265,9 +247,30 @@ def scan_files(
                     'issue %s, which the volume does not have',
                     file, volume_id, file_data["issue_number"]
                 )
-                new_general_bindings[current_issue_files[file]] = (
+                matched_general_bindings[file] = (
                     GeneralFileType.UNMATCHED_ISSUE.value
                 )
+
+    # One write for every file this scan decided to keep, instead of one per
+    # file as the loop went. Files that were listed and have since gone away
+    # come back unregistered and are simply left unbound.
+    current_issue_files.update(FilesDB.add_files(
+        file
+        for file in (
+            set(matched_general_bindings) | {f for f, _ in matched_issue_bindings}
+        )
+        if file not in current_issue_files
+    ))
+    new_issue_bindings: Set[Tuple[int, int]] = {
+        (current_issue_files[file], issue_id)
+        for file, issue_id in matched_issue_bindings
+        if file in current_issue_files
+    }
+    new_general_bindings: Dict[int, str] = {
+        current_issue_files[file]: file_type
+        for file, file_type in matched_general_bindings.items()
+        if file in current_issue_files
+    }
 
     # Determine old and new bindings, and which issues change in
     # their marking of being downloaded because of the new bindings

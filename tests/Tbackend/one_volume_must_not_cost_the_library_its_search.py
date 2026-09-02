@@ -29,7 +29,7 @@ from backend.features import tasks_core as TC
 def _task(volumes):
     task = TC.SearchAll()
     cursor = MagicMock()
-    cursor.__iter__ = lambda self: iter(volumes)
+    cursor.execute.return_value.fetchall.return_value = volumes
     return task, cursor
 
 
@@ -158,3 +158,32 @@ class what_a_stopped_sweep_keeps(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class a_lost_queue_write(unittest.TestCase):
+    """Queueing is a write, and a write can lose. Losing one volume's
+    results must not cost the rest of the library its turn."""
+
+    def test_the_sweep_continues_past_it(self):
+        cursor = MagicMock()
+        cursor.execute.return_value.fetchall.return_value = [
+            (1, 'A'), (2, 'B'), (3, 'C')]
+        queued = []
+
+        def flaky(entries):
+            entries = list(entries)
+            if entries and entries[0][1] == 1:
+                raise Exception('database is locked')
+            queued.extend(entries)
+
+        with patch.object(TC, 'get_db', return_value=cursor), \
+                patch.object(TC, 'WebSocket', MagicMock()), \
+                patch.object(TC.SearchAll, '_mark_searched'), \
+                patch.object(TC.SearchAll, '_queue', side_effect=flaky), \
+                patch.object(
+                    TC, 'auto_search',
+                    side_effect=lambda v: [{'link': f'l{v}'}]):
+            TC.SearchAll().run()
+
+        self.assertEqual([v for _, v, _, _ in queued], [2, 3])
+        return

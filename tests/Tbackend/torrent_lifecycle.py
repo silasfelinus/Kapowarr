@@ -279,7 +279,7 @@ class RangeSearchTest(unittest.TestCase):
             'special_version': None
         }
 
-        def search_results(_volume_id, issue_id=None):
+        def search_results(_volume_id, issue_id=None, already_fetched=None):
             return [] if issue_id is None else [dict(pack)]
 
         manual_search.side_effect = search_results
@@ -288,7 +288,7 @@ class RangeSearchTest(unittest.TestCase):
 
         self.assertEqual(len(chosen), 1)
         self.assertEqual(chosen[0]['link'], 'https://example/1-5')
-        manual_search.assert_any_call(1, 3)
+        manual_search.assert_any_call(1, 3, None)
         self.assertNotIn(
             ((1, 4),),
             [call.args for call in manual_search.call_args_list]

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from asyncio import Semaphore
 from typing import TYPE_CHECKING, Any, Dict, Mapping, Tuple, Union
+from urllib.parse import urlsplit
 
 from requests import RequestException
 
@@ -16,9 +17,64 @@ if TYPE_CHECKING:
     from backend.base.helpers import AsyncSession
 
 
+def challenge_headers(headers: Mapping[str, str]) -> bool:
+    """Whether a rejected response is Cloudflare asking for a challenge.
+
+    One header decides it, and it is a fairly new one that Cloudflare does not
+    always send. If a 403 arrives from behind Cloudflare without it, this
+    returns False and FlareSolverr never gets asked -- which looks exactly
+    like FlareSolverr being broken. So the near miss is logged, and a real one
+    will say so in the log rather than being silent.
+
+    Args:
+        headers (Mapping[str, str]): The response headers.
+
+    Returns:
+        bool: Whether to hand the URL to FlareSolverr.
+    """
+    name, value = Constants.CF_CHALLENGE_HEADER
+    if headers.get(name) == value:
+        return True
+
+    if 'cloudflare' in str(headers.get('server', '')).lower():
+        LOGGER.warning(
+            'Refused by Cloudflare without a %s: %s header, so FlareSolverr '
+            'was not asked. If this is a challenge, that header is what '
+            'Kapowarr looks for.',
+            name, value
+        )
+
+    return False
+
+
+def cleared_scope(url: str) -> str:
+    """What a FlareSolverr clearance applies to.
+
+    Cloudflare issues `cf_clearance` against a domain, not a page, so that is
+    what the solved cookies and user agent have to be filed under. They were
+    filed under the exact URL including its query string, which meant a
+    clearance won for `getcomics.org/?s=Kaya+36` was never found again for
+    `getcomics.org/?s=Hellboy+11`: every request re-challenged, and every
+    challenge spun up and tore down a fresh FlareSolverr session to redo work
+    that was already done. Solving once per search is indistinguishable from
+    FlareSolverr not working -- Silas, on whether it was even wired up: "I
+    thought that would help some of our issues, but it seems to do nothing."
+
+    Args:
+        url (str): The URL being cleared, or asked about.
+
+    Returns:
+        str: The host the clearance belongs to.
+    """
+    return urlsplit(url).netloc.lower()
+
+
 class FlareSolverr:
     cookie_mapping: Dict[str, Dict[str, str]] = {}
+    "Solved cookies, by host. See `cleared_scope`."
+
     ua_mapping: Dict[str, str] = {}
+    "The user agent each clearance was won with, by host."
 
     def __init__(self) -> None:
         settings = Settings().sv
@@ -118,9 +174,10 @@ class FlareSolverr:
             Tuple[str, Dict[str, str]]: First element is the UA, or default
                 UA. Second element is a mapping of any extra cookies.
         """
+        scope = cleared_scope(url)
         return (
-            self.ua_mapping.get(url, Constants.DEFAULT_USERAGENT),
-            self.cookie_mapping.get(url, {})
+            self.ua_mapping.get(scope, Constants.DEFAULT_USERAGENT),
+            self.cookie_mapping.get(scope, {})
         )
 
     def handle_cf_block(
@@ -141,10 +198,7 @@ class FlareSolverr:
                 couldn't solve the problem, or a dictionary with the FlareSolverr
                 response.
         """
-        if (
-            headers.get(Constants.CF_CHALLENGE_HEADER[0])
-            != Constants.CF_CHALLENGE_HEADER[1]
-        ):
+        if not challenge_headers(headers):
             # Request not failed because of CF block
             return
 
@@ -189,8 +243,9 @@ class FlareSolverr:
                 }
             )
 
-            self.ua_mapping[url] = result["userAgent"]
-            self.cookie_mapping[url] = {
+            scope = cleared_scope(url)
+            self.ua_mapping[scope] = result["userAgent"]
+            self.cookie_mapping[scope] = {
                 cookie["name"]: cookie["value"]
                 for cookie in result["cookies"]
             }
@@ -217,10 +272,7 @@ class FlareSolverr:
                 couldn't solve the problem, or a dictionary with the FlareSolverr
                 response.
         """
-        if (
-            headers.get(Constants.CF_CHALLENGE_HEADER[0])
-            != Constants.CF_CHALLENGE_HEADER[1]
-        ):
+        if not challenge_headers(headers):
             # Request not failed because of CF block
             return
 
@@ -270,8 +322,9 @@ class FlareSolverr:
                 }
             )
 
-        self.ua_mapping[url] = result["userAgent"]
-        self.cookie_mapping[url] = {
+        scope = cleared_scope(url)
+        self.ua_mapping[scope] = result["userAgent"]
+        self.cookie_mapping[scope] = {
             cookie["name"]: cookie["value"]
             for cookie in result["cookies"]
         }

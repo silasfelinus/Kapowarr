@@ -73,7 +73,7 @@ class an_empty_query_is_a_feed_request(unittest.TestCase):
         return
 
     @staticmethod
-    def _params_of(module, search, query):
+    def _params_of(module, search, query, categories='', enabled=False):
         from asyncio import run
 
         captured = {}
@@ -85,8 +85,8 @@ class an_empty_query_is_a_feed_request(unittest.TestCase):
         indexer = MagicMock()
         indexer.base_url = 'https://indexer.example.com'
         indexer.api_key = 'k'
-        indexer.category_filter_enabled = False
-        indexer.categories = ''
+        indexer.category_filter_enabled = enabled
+        indexer.categories = categories
         session = MagicMock()
         session.get_text = capture
 
@@ -97,6 +97,70 @@ class an_empty_query_is_a_feed_request(unittest.TestCase):
             run(search(session, indexer, query))
 
         return captured
+
+
+class a_feed_has_to_be_narrowed_to_comics(unittest.TestCase):
+    """`category_filter_enabled` decides whether a *search* is confined to
+    comics, which is a reasonable thing to turn off: the query does the
+    narrowing. A feed request has no query, so on a general-purpose tracker
+    its hundred most recent items would be films and television and no comic
+    would ever appear in the window. Without this the whole feature is noise
+    on exactly the indexers most people run."""
+
+    CATEGORY = '7030'
+
+    def test_a_torznab_feed_asks_for_comics_even_with_the_filter_off(self):
+        from backend.implementations import torznab as TZ
+        sent = an_empty_query_is_a_feed_request._params_of(
+            TZ, TZ.search_torznab_indexer, '', categories='', enabled=False)
+
+        self.assertEqual(sent['cat'], self.CATEGORY)
+        return
+
+    def test_a_torznab_feed_prefers_the_categories_the_user_configured(self):
+        from backend.implementations import torznab as TZ
+        sent = an_empty_query_is_a_feed_request._params_of(
+            TZ, TZ.search_torznab_indexer, '', categories='8000,8010',
+            enabled=False)
+
+        self.assertEqual(sent['cat'], '8000,8010')
+        return
+
+    def test_a_torznab_search_still_obeys_the_setting(self):
+        "Turning the filter off must still widen an actual search."
+        from backend.implementations import torznab as TZ
+        sent = an_empty_query_is_a_feed_request._params_of(
+            TZ, TZ.search_torznab_indexer, 'Save Now', categories='7030',
+            enabled=False)
+
+        self.assertNotIn('cat', sent)
+        return
+
+    def test_a_torznab_search_narrows_when_the_setting_is_on(self):
+        from backend.implementations import torznab as TZ
+        sent = an_empty_query_is_a_feed_request._params_of(
+            TZ, TZ.search_torznab_indexer, 'Save Now', categories='7030',
+            enabled=True)
+
+        self.assertEqual(sent['cat'], '7030')
+        return
+
+    def test_a_newznab_feed_asks_for_comics(self):
+        "Newznab indexers have no category setting here at all."
+        from backend.implementations import indexers_core as IC
+        sent = an_empty_query_is_a_feed_request._params_of(
+            IC, IC.search_indexer, '')
+
+        self.assertEqual(sent['cat'], self.CATEGORY)
+        return
+
+    def test_a_newznab_search_is_left_wide(self):
+        from backend.implementations import indexers_core as IC
+        sent = an_empty_query_is_a_feed_request._params_of(
+            IC, IC.search_indexer, 'Save Now')
+
+        self.assertNotIn('cat', sent)
+        return
 
 
 class deciding_what_the_library_wants(unittest.TestCase):

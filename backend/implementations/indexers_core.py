@@ -66,9 +66,7 @@ from requests import RequestException
 from backend.base.custom_exceptions import (EnqueuingDownloadFailure,
                                             IndexerNotFound, IssueNotFound,
                                             KeyNotFound)
-from backend.base.definitions import (Download, DownloadSource,
-                                      EnqueuingDownloadFailureReason,
-                                      SearchResultData)
+from backend.base.definitions import (Constants, Download, DownloadSource, EnqueuingDownloadFailureReason, SearchResultData)
 from backend.base.file_extraction import (extract_filename_data,
                                           refine_special_version)
 from backend.base.helpers import (AsyncSession, Session,
@@ -450,6 +448,11 @@ async def search_indexer(
     # one volume. See `backend.features.release_feed`.
     if query:
         params["q"] = query
+    else:
+        # Same reasoning as Torznab: a feed request has no query doing the
+        # narrowing, so without a category a general indexer's most recent
+        # hundred items are films and television and no comic is ever seen.
+        params["cat"] = Constants.COMIC_CATEGORY
 
     body = await session.get_text(
         newznab_api_url(indexer.base_url),

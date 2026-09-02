@@ -115,6 +115,10 @@ class Constants:
     # below and `AsyncSession._request`. A 500 is a hiccup and retrying it
     # is free; a 429 is a quota, and retrying it spends the very thing it
     # is telling you that you have run out of.
+    COMIC_CATEGORY = "7030"
+    """The Newznab/Torznab category for comics. Used to narrow a feed
+    request, which has no query to narrow it instead."""
+
     RATE_LIMIT_STATUS = 429
 
     # A Retry-After this short is a burst limiter catching its breath and is

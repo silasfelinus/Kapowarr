@@ -16,11 +16,21 @@ old values by default: one second for torrents, none for Usenet.
 """
 
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from backend.features import acquisition_preferences as AP
 from backend.implementations import indexers_core as IC
 from backend.implementations import torznab as TZ
+
+
+class _NullLock:
+    "Stands in for the pacing lock without needing a running loop to make it."
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
 
 
 class the_defaults_are_what_they_were(unittest.TestCase):
@@ -108,10 +118,38 @@ class both_protocols_consult_the_setting(unittest.TestCase):
     def test_a_zero_delay_costs_no_lock(self):
         # The default for Usenet, so it must not add a lock acquisition and
         # a clock read to every search that did not ask for one.
-        import inspect
-        source = inspect.getsource(IC.search_indexer)
+        self.assertFalse(self._paced(delay=0.0, cooldown=0.0))
+        self.assertTrue(self._paced(delay=2.0, cooldown=0.0))
 
-        self.assertIn('if interval > 0:', source)
+    def test_a_source_in_cooldown_is_not_paced_either(self):
+        """The request is going to be skipped inside the session, so the
+        delay would be spent waiting to not ask. Two hours of a Search All
+        sweep went that way on 2026-09-01: nine seconds per issue, every
+        source rate limited, nothing asked."""
+        self.assertFalse(self._paced(delay=2.0, cooldown=900.0))
+
+    @staticmethod
+    def _paced(delay, cooldown):
+        "Whether `search_indexer` reached for the pacing lock."
+        from asyncio import run
+
+        indexer = MagicMock()
+        indexer.base_url = 'https://indexer.example.com'
+        session = MagicMock()
+
+        async def no_body(*args, **kwargs):
+            return ''
+
+        session.get_text = no_body
+
+        with patch.object(IC, 'search_delay', return_value=delay), \
+                patch.object(IC, 'rate_limit_cooldown_remaining',
+                             return_value=cooldown), \
+                patch.object(IC, '_request_state',
+                             return_value=(_NullLock(), {}, 'k')) as state:
+            run(IC.search_indexer(session, indexer, 'query'))
+
+        return state.called
 
     def test_the_newznab_pacing_state_is_per_loop(self):
         # Each `asyncio.run` builds a new loop, and a lock made in an

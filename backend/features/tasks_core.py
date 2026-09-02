@@ -15,12 +15,13 @@ from flask import Flask
 
 from backend.base.custom_exceptions import (InvalidComicVineApiKey,
                                             TaskNotDeletable, TaskNotFound)
-from backend.base.helpers import Singleton, get_subclasses
+from backend.base.helpers import (Singleton, describe_rate_limits,
+                                  get_subclasses, reset_request_tally)
 from backend.base.logging import LOGGER
 from backend.features.download_queue import DownloadHandler
 from backend.features.pull_list import (check_weekly_pull_list,
                                         process_publisher_subscriptions)
-from backend.features.search import auto_search
+from backend.features.search import auto_search, nothing_could_be_asked
 from backend.features.orphaned_downloads import (describe_recovery,
                                                   recover_orphaned_downloads)
 from backend.features.watched_folder_import import (describe_summary,
@@ -519,13 +520,10 @@ class SearchAll(Task):
             self.message = f'Searching for {volume_title}'
             ws.emit(TaskStatusEvent(self.message))
 
-            # Stamped before the search, not after. A volume whose search
-            # fails, or that the user stops the sweep in the middle of, has
-            # still had its turn -- and if the stamp only landed on success
-            # then one reliably-failing volume would be first in the queue
-            # every day forever, which is the problem this ordering exists
-            # to fix.
-            self._mark_searched(volume_id)
+            # This sweep owns the window the tally is read over, rather
+            # than trusting whatever ran last on this thread to have reset
+            # it.
+            reset_request_tally()
 
             try:
                 results = auto_search(volume_id)
@@ -553,7 +551,43 @@ class SearchAll(Task):
                     'continuing with the rest of the library',
                     volume_id, volume_title
                 )
+                # It had its turn. A reliably-failing volume must not sit at
+                # the front of the rotation every day forever -- that is the
+                # problem this ordering exists to fix.
+                self._mark_searched(volume_id)
                 continue
+
+            if nothing_could_be_asked():
+                # Not a search. Every source it would have asked is in a
+                # rate-limit cooldown, so it found nothing because it looked
+                # nowhere, and the rest of the library would fare no better.
+                #
+                # On 2026-09-01 a sweep ran for two hours in exactly this
+                # state -- nine seconds an issue, zero results, marching
+                # through Catwoman one issue at a time -- and recorded a turn
+                # for every volume it passed. That is worse than stopping:
+                # tomorrow's sweep skips all of them, so the day a quota is
+                # exhausted costs the rotation a full pass rather than an
+                # hour.
+                #
+                # No stamp, so these volumes keep their place, and stop,
+                # because there is nothing left to ask.
+                self.message = (
+                    'Stopped: every source is rate limited. Nothing was '
+                    'asked for ' + volume_title
+                )
+                LOGGER.warning(
+                    'Stopping the sweep at volume %d (%s): every source is '
+                    'rate limited, so no volume after it could be searched '
+                    'either. It keeps its place in the rotation. Cooldowns: '
+                    '%s.',
+                    volume_id, volume_title, describe_rate_limits()
+                )
+                ws.emit(TaskStatusEvent(self.message))
+                break
+
+            # Its turn is recorded once it has actually had one.
+            self._mark_searched(volume_id)
 
             if not results:
                 continue

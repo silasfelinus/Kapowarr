@@ -20,7 +20,7 @@ from os.path import basename, dirname, exists, isfile, join
 from re import compile
 from subprocess import run
 from sys import base_exec_prefix, executable, maxsize, platform, version_info
-from threading import current_thread
+from threading import current_thread, local
 from typing import (TYPE_CHECKING, Any, Callable, Collection, Dict, Iterable,
                     Iterator, List, Mapping, Sequence, Tuple, Union)
 from unicodedata import normalize
@@ -1128,6 +1128,7 @@ class Session(RSession):
         stream=None, verify=None,
         cert=None, json=None
     ):
+        _request_tally.made += 1
         ua, cf_cookies = self.fs.get_ua_cookies(url)
         self.headers.update({"User-Agent": ua})
         self.cookies.update(cf_cookies)
@@ -1190,8 +1191,117 @@ class RateLimited(ClientError):
     """
 
 
+_rate_limit_scopes: Dict[str, None] = {}
+"""URL prefixes that are rationed separately from the rest of their host.
+
+Prowlarr, Jackett and friends put every indexer behind one hostname and tell
+them apart by a path prefix -- `prowlarr.example.com/38/api`,
+`prowlarr.example.com/9/api`. Keying a cooldown by hostname alone therefore
+silenced every indexer a user has the moment any one of them ran out of
+quota, which is exactly backwards: the one indexer that has nothing left is
+the reason to ask the others.
+
+That is not hypothetical. On 2026-09-01 Prowlarr's indexer 38 reported its
+daily quota gone and asked for seven and a half hours. Silas's Usenet
+indexers -- thousands of requests a day between them, and untouched -- went
+dark with it, and the Search All sweep spent the next two hours asking
+nobody anything.
+"""
+
+
+def register_rate_limit_scope(base_url: str) -> None:
+    """Note that `base_url` is rationed separately from the rest of its host.
+
+    Called by an indexer when it is about to be searched, so the cooldown
+    that one indexer's 429 sets does not reach its neighbours. Idempotent.
+
+    Args:
+        base_url (str): The indexer's own base URL.
+    """
+    _rate_limit_scopes[_scope_of(base_url)] = None
+    return
+
+
+def _scope_of(base_url: str) -> str:
+    """The directory an indexer's URLs live under.
+
+    An indexer's base URL names an endpoint (`/38/api`), while the links it
+    hands back name others beside it (`/38/download`). The directory is what
+    they share, so it is what the cooldown is recorded against.
+
+    Args:
+        base_url (str): The URL to take the scope of.
+
+    Returns:
+        str: The scope, as host plus directory path.
+    """
+    parts = urlsplit(base_url)
+    path = parts.path
+    if not path.endswith('/'):
+        path = path.rsplit('/', 1)[0] + '/'
+    return (parts.netloc + path).lower()
+
+
 def _rate_limit_host(url: str) -> str:
-    return urlsplit(url).netloc.lower()
+    """What a URL's rate limit is recorded against.
+
+    A registered scope if the URL falls inside one -- the longest, so a more
+    specific registration wins -- and the bare hostname otherwise, which is
+    right for a site that rations as a whole rather than per path.
+
+    Args:
+        url (str): The URL being asked about.
+
+    Returns:
+        str: The key.
+    """
+    parts = urlsplit(url)
+    netloc = parts.netloc.lower()
+    if not _rate_limit_scopes:
+        return netloc
+
+    within = (netloc + parts.path).lower()
+    matching = [
+        scope for scope in _rate_limit_scopes
+        if within.startswith(scope)
+    ]
+    if not matching:
+        return netloc
+
+    return max(matching, key=len)
+
+
+class _RequestTally(local):
+    """How many requests a search actually got to make.
+
+    Thread-local because a search runs its whole event loop inside the task
+    thread that started it (`asyncio.run` uses the calling thread), while
+    downloads and the web UI are making their own requests on other threads.
+    A global count would mix them together.
+    """
+
+    made = 0
+    skipped_rate_limited = 0
+
+
+_request_tally = _RequestTally()
+
+
+def reset_request_tally() -> None:
+    "Start counting this thread's requests again from zero."
+    _request_tally.made = 0
+    _request_tally.skipped_rate_limited = 0
+    return
+
+
+def request_tally() -> Tuple[int, int]:
+    """What this thread's requests have done since the last reset.
+
+    Returns:
+        Tuple[int, int]: Requests made, and requests not made because their
+            host was in a rate-limit cooldown.
+    """
+    return _request_tally.made, _request_tally.skipped_rate_limited
 
 
 def rate_limit_cooldown_remaining(url: str) -> float:
@@ -1212,9 +1322,34 @@ def note_rate_limit(url: str, retry_after: Optional[float] = None) -> float:
     return cooldown
 
 
+def describe_rate_limits() -> str:
+    """Which hosts are in a cooldown and for how long.
+
+    "Every source is rate limited" is not actionable on its own; which ones,
+    and until when, is.
+
+    Returns:
+        str: A description for the log, or a note that nothing is limited.
+    """
+    now = monotonic()
+    held = sorted(
+        (host, until - now)
+        for host, until in _rate_limited_until.items()
+        if until > now
+    )
+    if not held:
+        return 'no host is in a rate-limit cooldown'
+
+    return '; '.join(
+        f'{host} for another {remaining / 60:.0f} min'
+        for host, remaining in held
+    )
+
+
 def clear_rate_limits() -> None:
     """Forget every recorded limit. For tests and for a manual retry."""
     _rate_limited_until.clear()
+    _rate_limit_scopes.clear()
 
 
 def parse_retry_after(value: Optional[str]) -> Optional[float]:
@@ -1272,6 +1407,7 @@ class AsyncSession(ClientSession):
         # request is the thing being rationed.
         cooldown = rate_limit_cooldown_remaining(url)
         if cooldown:
+            _request_tally.skipped_rate_limited += 1
             LOGGER.debug(
                 'Skipping %s to %s: rate limited for another %.0fs',
                 method, redact_url(url), cooldown

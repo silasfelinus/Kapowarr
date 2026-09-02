@@ -37,7 +37,10 @@ from backend.base.definitions import (Download, DownloadSource, DownloadState,
 from backend.base.file_extraction import (extract_filename_data,
                                           refine_special_version)
 from backend.base.helpers import (AsyncSession, Session,
-                                  extract_year_from_date, normalise_base_url)
+                                  extract_year_from_date,
+                                  normalise_base_url,
+                                  rate_limit_cooldown_remaining,
+                                  register_rate_limit_scope)
 from backend.base.logging import LOGGER
 from backend.features.grab_size_limits import filter_search_results
 from backend.implementations.download_clients import TorrentDownload
@@ -514,7 +517,18 @@ async def search_torznab_indexer(
     if indexer.category_filter_enabled and indexer.categories:
         params['cat'] = indexer.categories
 
+    # Rationed on its own, not with every other indexer behind the same
+    # Prowlarr/Jackett hostname. See `register_rate_limit_scope`.
+    register_rate_limit_scope(indexer.base_url)
     interval = search_delay('torrent')
+    # Nothing to pace when the request is not going to be made. An indexer
+    # that has already reported its quota exhausted is skipped inside the
+    # session, so sleeping first spent the delay on a request that never
+    # happened -- which on 2026-09-01 turned every issue of a Search All
+    # sweep into nine seconds of waiting for nothing, for two hours.
+    if rate_limit_cooldown_remaining(indexer.base_url):
+        interval = 0.0
+
     lock, starts, key = _request_state(indexer)
     async with lock:
         elapsed = monotonic() - starts.get(key, 0.0)

@@ -558,7 +558,7 @@ def manual_search(
             calculated_issue_number,
             volume_data.title or volume_data.alt_title or ''
         )
-        LOGGER.info(
+        LOGGER.debug(
             'Matched %s against %d release(s) already fetched for this '
             'volume; no indexer was asked',
             f'#{issue_number}' if issue_number else volume_data.title,

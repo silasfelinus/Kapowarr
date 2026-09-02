@@ -189,7 +189,8 @@ def match_file_to_library_volume(
 def match_parsed_to_library_volume(
     file_data: FilenameData,
     index: Union[LibraryIndex, None] = None,
-    described_as: str = ''
+    described_as: str = '',
+    quiet: bool = False
 ) -> Union[int, None]:
     """Find the one volume a already-parsed name belongs to.
 
@@ -206,6 +207,11 @@ def match_parsed_to_library_volume(
 
         described_as (str, optional): What to call it in the log. Defaults to
             the parsed series.
+
+        quiet (bool, optional): Say nothing about an ambiguous name. The feed
+            sync sees the same releases every quarter of an hour and counts
+            them into its summary instead; a file someone dropped in the
+            watched folder is a one-off worth a line. Defaults to False.
 
     Returns:
         Union[int, None]: The volume's ID, or None if none matched, or if more
@@ -236,10 +242,11 @@ def match_parsed_to_library_volume(
             matches.append(volume_id)
 
         if len(matches) > 1:
-            LOGGER.info(
-                '%s matches more than one volume in the library; leaving it '
-                'alone', described_as
-            )
+            if not quiet:
+                LOGGER.info(
+                    '%s matches more than one volume in the library; leaving '
+                    'it alone', described_as
+                )
             return None
 
     if not matches:

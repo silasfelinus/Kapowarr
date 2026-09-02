@@ -71,7 +71,11 @@ from backend.base.definitions import (Download, DownloadSource,
                                       SearchResultData)
 from backend.base.file_extraction import (extract_filename_data,
                                           refine_special_version)
-from backend.base.helpers import (AsyncSession, Session, extract_year_from_date, normalise_base_url, rate_limit_cooldown_remaining)
+from backend.base.helpers import (AsyncSession, Session,
+                                  extract_year_from_date,
+                                  normalise_base_url,
+                                  rate_limit_cooldown_remaining,
+                                  register_rate_limit_scope)
 from backend.base.helpers import redact_url
 from backend.base.logging import LOGGER
 from backend.features.acquisition_preferences import search_delay
@@ -417,6 +421,9 @@ async def search_indexer(
     # coordinator runs several phrasings concurrently against one endpoint,
     # and whether that burst is welcome is the indexer's call rather than
     # Kapowarr's. Settings > Download > Usenet Search Delay.
+    # Rationed on its own, not with every other indexer behind the same
+    # Prowlarr/Jackett hostname. See `register_rate_limit_scope`.
+    register_rate_limit_scope(indexer.base_url)
     interval = search_delay('usenet')
     # Nothing to pace when the request is not going to be made. An indexer
     # that has already reported its quota exhausted is skipped inside the

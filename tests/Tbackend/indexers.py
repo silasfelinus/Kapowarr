@@ -6,13 +6,14 @@ from aiohttp import ClientError
 
 from backend.base.custom_exceptions import (EnqueuingDownloadFailure,
                                             IndexerNotFound, KeyNotFound)
-from backend.base.definitions import (DownloadSource,
+from backend.base.definitions import (Constants, DownloadSource,
                                       EnqueuingDownloadFailureReason,
                                       SpecialVersion, VolumeData)
 from backend.implementations import indexers as indexers_module
 from backend.implementations.indexers import (
-    Indexer, Indexers, _extract_item_link, _parse_content_disposition_filename,
-    create_nzb_download, newznab_api_url, search_indexer)
+    DEFAULT_COMIC_CATEGORIES, Indexer, Indexers, _extract_item_link,
+    _parse_content_disposition_filename, create_nzb_download,
+    newznab_api_url, search_indexer)
 from backend.internals.db import KapowarrCursor
 
 
@@ -126,6 +127,8 @@ class indexer_registry(unittest.TestCase):
                 title VARCHAR(255) NOT NULL,
                 base_url TEXT NOT NULL,
                 api_key VARCHAR(255) NOT NULL,
+                categories VARCHAR(255) NOT NULL DEFAULT '7030,107030',
+                category_filter_enabled BOOL NOT NULL DEFAULT 0,
                 enabled BOOL NOT NULL DEFAULT 1
             );
         """)
@@ -168,6 +171,33 @@ class indexer_registry(unittest.TestCase):
         Indexers.add('Alpha', 'https://a.example.com', 'k')
         titles = [i['title'] for i in Indexers.get_all()]
         self.assertEqual(titles, ['Alpha', 'Zeta'])
+
+    def test_the_list_carries_every_field_the_settings_page_sends_back(self):
+        """The settings page holds these rows and sends one straight back
+        when its enable toggle is pressed, so a field the list leaves out
+        is a field that toggle silently clears.
+        """
+        Indexers.add(
+            'nzb.su', 'https://api.nzb.su', 'k',
+            categories='107030', category_filter_enabled=True
+        )
+
+        listed = Indexers.get_all()[0]
+
+        # Truthiness rather than identity: this harness connects without
+        # the BOOL converter `db.py` registers, so a flag reads back as 1
+        # here and as True in the running app.
+        self.assertEqual(listed, Indexers.get_one(listed['id']).get_data())
+        self.assertEqual(listed['categories'], '107030')
+        self.assertTrue(listed['category_filter_enabled'])
+
+    def test_an_indexer_added_without_categories_gets_the_default(self):
+        Indexers.add('plain', 'https://plain.example.com', 'k')
+
+        added = Indexers.get_all()[0]
+
+        self.assertEqual(added['categories'], DEFAULT_COMIC_CATEGORIES)
+        self.assertFalse(added['category_filter_enabled'])
 
     def test_get_enabled_excludes_disabled(self):
         Indexers.add('On', 'https://on.example.com', 'k', enabled=True)
@@ -237,6 +267,8 @@ def _fake_indexer() -> Indexer:
     indexer._title = 'NZBgeek'
     indexer._base_url = 'https://api.nzbgeek.info'
     indexer._api_key = 'key123'
+    indexer._categories = DEFAULT_COMIC_CATEGORIES
+    indexer._category_filter_enabled = False
     indexer._enabled = True
     return indexer
 
@@ -571,3 +603,100 @@ class create_nzb_download_link_resolution(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class an_indexer_files_comics_where_it_likes(unittest.IsolatedAsyncioTestCase):
+    """7030 is the standard Newznab comics category and the standard is
+    only a suggestion. nzb.su files comics under its own 107030, and
+    Silas, of his three: "all our nzb indexers use that category".
+
+    Torznab feeds have had a per-indexer category since they were added.
+    Newznab ones had a hardcoded 7030 and no way to say otherwise, so a
+    feed poll asked nzb.su for its most recent 7030 -- which is not where
+    its comics are -- and a search asked for every category at once, which
+    on 2026-09-02 returned anime video offered for Afro Samurai.
+    """
+
+    async def _params_for(self, query, **fields):
+        indexer = _fake_indexer()
+        for name, value in fields.items():
+            setattr(indexer, f'_{name}', value)
+        session = _FakeAsyncSession('{"channel": {"item": []}}')
+
+        await search_indexer(session, indexer, query)
+
+        return session.calls[0][1]
+
+    async def test_a_feed_poll_asks_for_the_indexers_own_categories(self):
+        """It has no query doing the narrowing, so the category is the only
+        thing standing between the poll and the site's recent everything.
+        """
+        params = await self._params_for('', categories='107030')
+
+        self.assertEqual(params['cat'], '107030')
+        self.assertNotIn('q', params)
+
+    async def test_a_feed_poll_falls_back_when_none_was_set(self):
+        params = await self._params_for('', categories='')
+
+        self.assertEqual(params['cat'], Constants.COMIC_CATEGORY)
+
+    async def test_a_search_is_unconfined_unless_asked(self):
+        """Off by default, matching Torznab and Prowlarr's own manual
+        search: the query narrows, and a category can only hide a release
+        the indexer filed somewhere unexpected.
+        """
+        params = await self._params_for(
+            'Batman', categories='107030', category_filter_enabled=False
+        )
+
+        self.assertNotIn('cat', params)
+        self.assertEqual(params['q'], 'Batman')
+
+    async def test_a_search_is_confined_when_it_is(self):
+        params = await self._params_for(
+            'Batman', categories='107030', category_filter_enabled=True
+        )
+
+        self.assertEqual(params['cat'], '107030')
+
+    async def test_the_filter_with_nothing_to_filter_by_is_not_a_filter(self):
+        params = await self._params_for(
+            'Batman', categories='', category_filter_enabled=True
+        )
+
+        self.assertNotIn('cat', params)
+
+    def test_the_default_asks_for_both_the_standard_and_the_common_one(self):
+        """An indexer ignores category IDs it does not have, so asking for
+        both costs nothing -- and picking one leaves every indexer that
+        chose the other silently returning nothing.
+        """
+        self.assertIn(Constants.COMIC_CATEGORY, DEFAULT_COMIC_CATEGORIES)
+        self.assertIn('107030', DEFAULT_COMIC_CATEGORIES)
+
+
+class the_search_path_that_runs_is_the_one_that_was_fixed(
+    unittest.IsolatedAsyncioTestCase
+):
+    """`indexers.py` shadows `indexers_core.py`'s `search_indexer` and is
+    the one `search.py` imports, so a fix applied only to the core never
+    runs. That has already happened twice: `create_nzb_download`'s
+    blocklist classification, and the rate-limit scoping below.
+
+    Without the scope registration a Newznab indexer's quota is keyed at
+    the Prowlarr hostname, so one indexer running out silences every other
+    indexer behind it.
+    """
+
+    async def test_a_newznab_search_rations_the_indexer_not_the_host(self):
+        indexer = _fake_indexer()
+        indexer._base_url = 'https://prowlarr.example/33/api'
+        session = _FakeAsyncSession('{"channel": {"item": []}}')
+
+        with patch.object(
+            indexers_module, 'register_rate_limit_scope'
+        ) as register:
+            await search_indexer(session, indexer, 'Batman')
+
+        register.assert_called_once_with('https://prowlarr.example/33/api')

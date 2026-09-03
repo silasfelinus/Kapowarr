@@ -1478,3 +1478,35 @@ def _migrate_add_issue_search_backoff():
             auto_search_misses INTEGER(4) NOT NULL DEFAULT 0;
     """)
     return
+
+
+@DatabaseMigrationHandler.register_handler(53)
+def _migrate_add_newznab_categories():
+    """Newznab indexers gain the categories Torznab ones already had.
+
+    7030 is the standard Newznab comics category, but the standard is only
+    a suggestion: an indexer is free to file comics somewhere else, and the
+    nzb.su family puts them under its own 107030. Without a category a
+    query-less feed request returns that site's most recent everything --
+    which on 2026-09-02 was anime video offered for a comic volume.
+
+    Existing rows get both IDs rather than the standard one alone, because
+    an indexer ignores category IDs it does not have and so asking for both
+    costs nothing, while picking one leaves every indexer that chose the
+    other silently returning nothing.
+
+    The filter defaults off, matching Torznab: on a search the query does
+    the narrowing, and confining it can hide a release an indexer filed
+    somewhere unexpected. A feed request has no query, so it always
+    narrows.
+    """
+    cursor = get_db()
+    cursor.execute("""
+        ALTER TABLE indexers ADD COLUMN
+            categories VARCHAR(255) NOT NULL DEFAULT '7030,107030';
+    """)
+    cursor.execute("""
+        ALTER TABLE indexers ADD COLUMN
+            category_filter_enabled BOOL NOT NULL DEFAULT 0;
+    """)
+    return

@@ -45,7 +45,8 @@ from backend.implementations.external_clients import ExternalClients
 from backend.implementations.file_matching import (adopt_unmatched_files,
                                                    get_file_matching,
                                                    set_file_matching)
-from backend.implementations.indexers import Indexers
+from backend.implementations.indexers import (DEFAULT_COMIC_CATEGORIES,
+                                              Indexers)
 from backend.implementations.naming import (generate_volume_folder_name,
                                             preview_mass_rename)
 from backend.implementations.notifications import Notifications
@@ -1541,7 +1542,9 @@ def api_indexers():
             data.get('title'),
             data.get('base_url'),
             data.get('api_key'),
-            data.get('enabled', True)
+            data.get('enabled', True),
+            data.get('categories', DEFAULT_COMIC_CATEGORIES),
+            data.get('category_filter_enabled', False)
         ).get_data()
         return return_api(result, code=201)
 

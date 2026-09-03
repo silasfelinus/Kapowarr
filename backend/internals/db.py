@@ -844,6 +844,8 @@ CREATE TABLE IF NOT EXISTS indexers(
     title VARCHAR(255) NOT NULL,
     base_url TEXT NOT NULL,
     api_key VARCHAR(255) NOT NULL,
+    categories VARCHAR(255) NOT NULL DEFAULT '7030,107030',
+    category_filter_enabled BOOL NOT NULL DEFAULT 0,
     enabled BOOL NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS pull_list_entries(

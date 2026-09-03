@@ -16,11 +16,13 @@ from weakref import WeakKeyDictionary
 from xml.etree import ElementTree
 
 from backend.base.custom_exceptions import EnqueuingDownloadFailure, IssueNotFound
-from backend.base.definitions import (DownloadSource,
+from backend.base.definitions import (Constants, DownloadSource,
                                       EnqueuingDownloadFailureReason,
                                       SearchResultData)
 from backend.base.file_extraction import extract_filename_data, refine_special_version
-from backend.base.helpers import AsyncSession, extract_year_from_date
+from backend.base.helpers import (AsyncSession, extract_year_from_date,
+                                  rate_limit_cooldown_remaining,
+                                  register_rate_limit_scope)
 from backend.base.logging import LOGGER
 from backend.features.grab_size_limits import filter_search_results
 from backend.implementations import indexers_core as _core
@@ -318,21 +320,57 @@ def _parse_newznab_json(data, indexer) -> list:
 
 
 async def search_indexer(session: AsyncSession, indexer: Indexer, query: str) -> list:
-    """Search one Newznab feed, accepting JSON or canonical RSS/XML."""
-    lock, starts, key = _request_state(indexer)
-    async with lock:
-        elapsed = monotonic() - starts.get(key, 0.0)
-        if elapsed < NEWZNAB_REQUEST_MIN_INTERVAL:
-            await async_sleep(NEWZNAB_REQUEST_MIN_INTERVAL - elapsed)
-        starts[key] = monotonic()
+    """Search one Newznab feed, accepting JSON or canonical RSS/XML.
+
+    This shadows `indexers_core.search_indexer` and is the one production
+    calls -- `search.py` imports from here. It has drifted from the core
+    version before: the rate-limit scoping and cooldown-aware pacing below
+    were added to the core in 2026-09 and never reached the search path
+    that actually runs, which left one Newznab indexer's quota keyed at the
+    Prowlarr hostname and so silencing every other indexer behind it.
+    """
+    # Rationed on its own, not with every other indexer behind the same
+    # Prowlarr/Jackett hostname. See `register_rate_limit_scope`.
+    register_rate_limit_scope(indexer.base_url)
+
+    params = {
+        't': 'search', 'apikey': indexer.api_key,
+        'o': 'json', 'extended': '1'
+    }
+    # An empty query is a feed request, not a search: `t=search` with no
+    # `q` returns the indexer's most recent releases, so one request covers
+    # the whole library. See `backend.features.release_feed`.
+    if query:
+        params['q'] = query
+        if indexer.category_filter_enabled and indexer.categories:
+            params['cat'] = indexer.categories
+    else:
+        # Nothing here is doing the narrowing, so without a category the
+        # most recent hundred items are whatever the indexer carries most
+        # of -- on 2026-09-02, anime video offered for a comic volume.
+        params['cat'] = indexer.categories or Constants.COMIC_CATEGORY
+
+    # Nothing to pace when the request is not going to be made: an indexer
+    # already known to be out of quota is skipped inside the session, so
+    # sleeping first spends the delay on a request that never happens.
+    if rate_limit_cooldown_remaining(indexer.base_url):
         body = await session.get_text(
             newznab_api_url(indexer.base_url),
-            params={
-                't': 'search', 'q': query, 'apikey': indexer.api_key,
-                'o': 'json', 'extended': '1'
-            },
+            params=params,
             quiet_fail=True
         )
+    else:
+        lock, starts, key = _request_state(indexer)
+        async with lock:
+            elapsed = monotonic() - starts.get(key, 0.0)
+            if elapsed < NEWZNAB_REQUEST_MIN_INTERVAL:
+                await async_sleep(NEWZNAB_REQUEST_MIN_INTERVAL - elapsed)
+            starts[key] = monotonic()
+            body = await session.get_text(
+                newznab_api_url(indexer.base_url),
+                params=params,
+                quiet_fail=True
+            )
 
     if not body:
         return []

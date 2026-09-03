@@ -36,18 +36,18 @@
 					<th><label for="add-api-key-input">API Key</label></th>
 					<td><input type="password" id="add-api-key-input" autocomplete="off" spellcheck="false" required></td>
 				</tr>
-				<tr class="add-torznab-option hidden">
+				<tr>
 					<th><label for="add-categories-input">Categories</label></th>
 					<td>
-						<input type="text" id="add-categories-input" value="7030">
-						<p class="description">Comma-separated Torznab category IDs. 7030 is the standard comics category.</p>
+						<input type="text" id="add-categories-input" value="7030,107030">
+						<p class="description">Comma-separated category IDs. 7030 is the standard comics category; some indexers file comics under their own ID instead, such as nzb.su's 107030. An indexer ignores IDs it doesn't have, so listing both is safe.</p>
 					</td>
 				</tr>
-				<tr class="add-torznab-option hidden">
+				<tr>
 					<th><label for="add-category-filter-input">Filter Categories</label></th>
 					<td>
 						<input type="checkbox" id="add-category-filter-input">
-						<p class="description">Off searches every category, matching Prowlarr's manual search. Turn on to enforce the IDs above.</p>
+						<p class="description">Off searches every category, matching Prowlarr's manual search. Turn on to enforce the IDs above. Feed sync always uses them, since it has no query to narrow with.</p>
 					</td>
 				</tr>
 				<tr>
@@ -98,15 +98,18 @@
 					<th><label for="edit-api-key-input">API Key</label></th>
 					<td><input type="password" id="edit-api-key-input" autocomplete="off" spellcheck="false" required></td>
 				</tr>
-				<tr class="edit-torznab-option hidden">
+				<tr>
 					<th><label for="edit-categories-input">Categories</label></th>
-					<td><input type="text" id="edit-categories-input"></td>
+					<td>
+						<input type="text" id="edit-categories-input">
+						<p class="description">Comma-separated category IDs. 7030 is the standard comics category; some indexers use their own, such as nzb.su's 107030.</p>
+					</td>
 				</tr>
-				<tr class="edit-torznab-option hidden">
+				<tr>
 					<th><label for="edit-category-filter-input">Filter Categories</label></th>
 					<td>
 						<input type="checkbox" id="edit-category-filter-input">
-						<p class="description">Off searches every category, matching Prowlarr's manual search.</p>
+						<p class="description">Off searches every category, matching Prowlarr's manual search. Feed sync always uses them.</p>
 					</td>
 				</tr>
 				<tr>

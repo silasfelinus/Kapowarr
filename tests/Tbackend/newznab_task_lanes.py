@@ -25,6 +25,8 @@ def _indexer(base_url='https://prowlarr.example/39/api'):
     result._title = 'NZB Geek'
     result._base_url = base_url
     result._api_key = 'secret'
+    result._categories = '7030,107030'
+    result._category_filter_enabled = False
     result._enabled = True
     return result
 

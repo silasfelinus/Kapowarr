@@ -38,10 +38,8 @@ function toggleIndexer(api_key, key, button) {
 			enabled: !indexer.enabled
 		};
 
-	if (indexer.protocol === 'torznab') {
-		data.categories = indexer.categories;
-		data.category_filter_enabled = indexer.category_filter_enabled;
-	};
+	data.categories = indexer.categories;
+	data.category_filter_enabled = indexer.category_filter_enabled;
 
 	button.disabled = true;
 	sendAPI('PUT', `${indexer.endpoint}/${indexer.id}`, api_key, {}, data)
@@ -114,12 +112,6 @@ function loadIndexers(api_key) {
 	});
 };
 
-function toggleTorznabFields(prefix, protocol) {
-	document.querySelectorAll(`.${prefix}-torznab-option`).forEach(row => {
-		row.classList.toggle('hidden', protocol !== 'torznab');
-	});
-};
-
 function showAddIndexer() {
 	hide([document.querySelector('#add-error')]);
 	document.querySelector('#test-indexer-add').classList.remove(
@@ -129,11 +121,10 @@ function showAddIndexer() {
 	document.querySelector('#add-title-input').value = '';
 	document.querySelector('#add-base-url-input').value = '';
 	document.querySelector('#add-api-key-input').value = '';
-	document.querySelector('#add-categories-input').value = '7030';
+	document.querySelector('#add-categories-input').value = '7030,107030';
 	document.querySelector('#add-category-filter-input').checked = false;
 	document.querySelector('#add-priority-input').value = 50;
 	document.querySelector('#add-enabled-input').checked = true;
-	toggleTorznabFields('add', 'newznab');
 
 	showWindow('add-indexer-window');
 };
@@ -175,10 +166,8 @@ function saveAddIndexer() {
 			api_key: document.querySelector('#add-api-key-input').value,
 			enabled: document.querySelector('#add-enabled-input').checked
 		};
-		if (protocol === 'torznab') {
-			data.categories = document.querySelector('#add-categories-input').value;
-			data.category_filter_enabled = document.querySelector('#add-category-filter-input').checked;
-		};
+		data.categories = document.querySelector('#add-categories-input').value;
+		data.category_filter_enabled = document.querySelector('#add-category-filter-input').checked;
 
 		sendAPI('POST', endpointFor(protocol), api_key, {}, data)
 		.then(response => response.json())
@@ -219,11 +208,10 @@ function loadEditIndexer(api_key, key) {
 		document.querySelector('#edit-title-input').value = data.title;
 		document.querySelector('#edit-base-url-input').value = data.base_url;
 		document.querySelector('#edit-api-key-input').value = data.api_key;
-		document.querySelector('#edit-categories-input').value = data.categories || '7030';
+		document.querySelector('#edit-categories-input').value = data.categories || '7030,107030';
 		document.querySelector('#edit-category-filter-input').checked = data.category_filter_enabled || false;
 		document.querySelector('#edit-priority-input').value = data.priority;
 		document.querySelector('#edit-enabled-input').checked = data.enabled;
-		toggleTorznabFields('edit', data.protocol);
 
 		showWindow('edit-indexer-window');
 	});
@@ -268,10 +256,8 @@ function saveEditIndexer() {
 			api_key: document.querySelector('#edit-api-key-input').value,
 			enabled: document.querySelector('#edit-enabled-input').checked
 		};
-		if (protocol === 'torznab') {
-			data.categories = document.querySelector('#edit-categories-input').value;
-			data.category_filter_enabled = document.querySelector('#edit-category-filter-input').checked;
-		};
+		data.categories = document.querySelector('#edit-categories-input').value;
+		data.category_filter_enabled = document.querySelector('#edit-category-filter-input').checked;
 
 		sendAPI('PUT', `${endpointFor(protocol)}/${id}`, api_key, {}, data)
 		.then(() => {
@@ -315,8 +301,6 @@ usingApiKey()
 	document.querySelector('#test-indexer-add').onclick = e => testAddIndexer(api_key);
 	document.querySelector('#test-indexer-edit').onclick = e => testEditIndexer(api_key);
 	document.querySelector('#delete-indexer-edit').onclick = e => deleteIndexer(api_key);
-	document.querySelector('#add-protocol-input').onchange = e =>
-		toggleTorznabFields('add', e.target.value);
 });
 
 document.querySelector('#add-indexer-form').action = 'javascript:saveAddIndexer()';

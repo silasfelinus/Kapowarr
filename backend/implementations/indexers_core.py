@@ -186,6 +186,20 @@ def _test_bounded(base_url: str, api_key: str) -> bool:
         executor.shutdown(wait=False)
 
 
+# 7030 is the standard Newznab comics category, but the standard is only
+# a suggestion: an indexer files its releases wherever it likes, and the
+# nzb.su family of sites puts comics under its own 107030. Silas, of his
+# three: "all our nzb indexers use that category".
+#
+# So the default is both. `cat` takes a comma-separated list and an
+# indexer ignores the IDs it does not have, which makes asking for both
+# free -- and much better than picking one and silently seeing nothing on
+# every indexer that chose the other. Per-indexer because no single answer
+# is right for everyone; see `Constants.COMIC_CATEGORY` for the fallback
+# when an indexer has been given none at all.
+DEFAULT_COMIC_CATEGORIES = f"{Constants.COMIC_CATEGORY},107030"
+
+
 class Indexer:
     required_fields = ('title', 'base_url', 'api_key')
 
@@ -206,13 +220,22 @@ class Indexer:
         return self._api_key
 
     @property
+    def categories(self) -> str:
+        return self._categories
+
+    @property
+    def category_filter_enabled(self) -> bool:
+        return self._category_filter_enabled
+
+    @property
     def enabled(self) -> bool:
         return self._enabled
 
     def __init__(self, indexer_id: int) -> None:
         data = get_db().execute(
             """
-            SELECT id, title, base_url, api_key, enabled
+            SELECT id, title, base_url, api_key, categories,
+                   category_filter_enabled, enabled
             FROM indexers
             WHERE id = ?
             LIMIT 1;
@@ -227,6 +250,8 @@ class Indexer:
         self._title = data['title']
         self._base_url = data['base_url']
         self._api_key = data['api_key']
+        self._categories = data['categories']
+        self._category_filter_enabled = bool(data['category_filter_enabled'])
         self._enabled = bool(data['enabled'])
         return
 
@@ -236,6 +261,8 @@ class Indexer:
             'title': self._title,
             'base_url': self._base_url,
             'api_key': self._api_key,
+            'categories': self._categories,
+            'category_filter_enabled': self._category_filter_enabled,
             'enabled': self._enabled
         }
 
@@ -249,6 +276,8 @@ class Indexer:
                 title = :title,
                 base_url = :base_url,
                 api_key = :api_key,
+                categories = :categories,
+                category_filter_enabled = :category_filter_enabled,
                 enabled = :enabled
             WHERE id = :id;
             """,
@@ -257,6 +286,9 @@ class Indexer:
         self._title = formatted_data['title']
         self._base_url = formatted_data['base_url']
         self._api_key = formatted_data['api_key']
+        self._categories = formatted_data['categories']
+        self._category_filter_enabled = formatted_data[
+            'category_filter_enabled']
         self._enabled = formatted_data['enabled']
         return
 
@@ -284,10 +316,20 @@ class Indexers:
             if not data.get(key):
                 raise KeyNotFound(key)
 
+        categories = data.get('categories', DEFAULT_COMIC_CATEGORIES)
+        if categories is None:
+            categories = ''
+        if not isinstance(categories, str):
+            categories = str(categories)
+
         return {
             'title': data['title'],
             'base_url': normalise_base_url(data['base_url']),
             'api_key': data['api_key'],
+            'categories': categories.strip(),
+            'category_filter_enabled': bool(
+                data.get('category_filter_enabled', False)
+            ),
             'enabled': bool(data.get('enabled', True))
         }
 
@@ -310,7 +352,9 @@ class Indexers:
         title: str,
         base_url: str,
         api_key: str,
-        enabled: bool = True
+        enabled: bool = True,
+        categories: str = DEFAULT_COMIC_CATEGORIES,
+        category_filter_enabled: bool = False
     ) -> Indexer:
         """Add a new indexer.
 
@@ -321,13 +365,21 @@ class Indexers:
             'title': title,
             'base_url': base_url,
             'api_key': api_key,
+            'categories': categories,
+            'category_filter_enabled': category_filter_enabled,
             'enabled': enabled
         })
 
         indexer_id = get_db().execute(
             """
-            INSERT INTO indexers(title, base_url, api_key, enabled)
-            VALUES (:title, :base_url, :api_key, :enabled);
+            INSERT INTO indexers(
+                title, base_url, api_key, categories,
+                category_filter_enabled, enabled
+            )
+            VALUES (
+                :title, :base_url, :api_key, :categories,
+                :category_filter_enabled, :enabled
+            );
             """,
             formatted_data
         ).lastrowid
@@ -336,10 +388,17 @@ class Indexers:
 
     @staticmethod
     def get_all() -> List[Dict[str, Any]]:
-        "Get every configured indexer"
+        """Get every configured indexer.
+
+        The same shape `get_data()` returns, columns included: the settings
+        page keeps these rows and sends one straight back when a row's
+        enable toggle is pressed, so a field missing here is a field wiped
+        by that toggle.
+        """
         return get_db().execute(
             """
-            SELECT id, title, base_url, api_key, enabled
+            SELECT id, title, base_url, api_key, categories,
+                   category_filter_enabled, enabled
             FROM indexers
             ORDER BY title, id;
             """
@@ -450,11 +509,13 @@ async def search_indexer(
     # one volume. See `backend.features.release_feed`.
     if query:
         params["q"] = query
+        if indexer.category_filter_enabled and indexer.categories:
+            params["cat"] = indexer.categories
     else:
         # Same reasoning as Torznab: a feed request has no query doing the
         # narrowing, so without a category a general indexer's most recent
         # hundred items are films and television and no comic is ever seen.
-        params["cat"] = Constants.COMIC_CATEGORY
+        params["cat"] = indexer.categories or Constants.COMIC_CATEGORY
 
     body = await session.get_text(
         newznab_api_url(indexer.base_url),

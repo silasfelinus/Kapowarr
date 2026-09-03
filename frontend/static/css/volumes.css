@@ -186,12 +186,21 @@ main:has(#massedit-toggle:checked) #library-container {
 	background-color: var(--foreground-color);
 	border-radius: 1px;
 
-	/* The full poster index can contain thousands of lightweight shells. Keep
-	   their geometry in layout, but let supporting browsers skip paint/style work
-	   for shells far outside the viewport. The intrinsic size is only a fallback
-	   estimate; normal flex sizing still determines the actual card dimensions. */
-	content-visibility: auto;
-	contain-intrinsic-size: auto 15rem;
+	/* No `content-visibility: auto` here, deliberately. It was added when the
+	   grid held a shell for every volume -- thousands of them -- and skipping
+	   style and paint on the far ones was worth a great deal. Windowing
+	   replaced that: about a hundred and thirty cards exist at once now, and
+	   skipping paint on the handful outside the viewport saves almost
+	   nothing.
+
+	   What it cost was correctness. A skipped card is laid out at
+	   `contain-intrinsic-size` rather than its real height -- 15rem against a
+	   real 14rem here -- and takes its true height only when it nears the
+	   viewport. So every row that came into view shrank by a rem, sliding
+	   everything below it up: 95px of drift over six rows, which is how the
+	   alphabet rail landed on the K's when it said M. Cards that are all the
+	   same height make the spacers, the scrollbar and the rail all tell the
+	   truth. */
 
 	transition: box-shadow 200ms ease-in;
 }

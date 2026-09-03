@@ -134,11 +134,13 @@ test('a short library gets no rail at all', () => {
 	assert.ok(ALPHABET_RAIL_MINIMUM >= 20, 'a rail needs a library to move');
 });
 
-test('jumping is computed, not found', () => {
+test('jumping is estimated and then measured', () => {
 	// The row for a letter almost certainly has no element -- that is what
-	// windowing means -- so there is nothing to scrollIntoView. The spacers
-	// make the scroll height real, and the same arithmetic that sizes them
-	// gives the position.
+	// windowing means -- so there is nothing to scrollIntoView, and the
+	// arithmetic that sizes the spacers has to stand in. But it is an
+	// average over rows that are not all the same height, so it only ever
+	// gets close: the jump has to look at where it actually landed and
+	// correct, or it arrives at the K's having said M.
 	const jump = source.slice(
 		source.indexOf('scrollToIndex(index) {'),
 		source.indexOf('start(sample_end) {')
@@ -146,9 +148,52 @@ test('jumping is computed, not found', () => {
 	assert.notEqual(jump.length, 0, 'scrollToIndex not found');
 
 	assert.doesNotMatch(jump, /scrollIntoView/);
-	assert.match(jump, /target_row \* row_height/);
+	assert.match(jump, /nudgeToward/);
+	assert.match(jump, /settleOnto/);
 	// And it refuses rather than guessing before anything has been measured.
 	assert.match(jump, /row_height <= 0/);
+});
+
+test('the correction happens after the repaint, not before', () => {
+	// A correction queued with a bare requestAnimationFrame runs before the
+	// repaint it is meant to follow, and the repaint then slides the
+	// library out from under it -- 95px, in the run that found this.
+	const virt = source.slice(
+		source.indexOf('function virtualiseLibraryView'),
+		source.indexOf('const ALPHABETICAL_SORTS')
+	);
+	assert.match(virt, /after_paint/);
+	// Spent at the end of `update`, which is what has just painted.
+	assert.match(virt, /for \(const fn of settle\)/);
+});
+
+test('a drag does not leave earlier letters still correcting', () => {
+	// A finger down the rail asks for a dozen letters in a second. An
+	// earlier one's correction firing last would pull the library back to
+	// where the finger used to be.
+	const virt = source.slice(
+		source.indexOf('function virtualiseLibraryView'),
+		source.indexOf('const ALPHABETICAL_SORTS')
+	);
+	assert.match(virt, /token !== jump/);
+});
+
+test('a repaint holds its place instead of sliding the library', () => {
+	const paint = source.slice(
+		source.indexOf('function paint(start, end) {'),
+		source.indexOf('function update() {')
+	);
+	assert.notEqual(paint.length, 0, 'paint not found');
+
+	assert.match(paint, /topmostRendered/);
+	assert.match(paint, /scrollBy/);
+});
+
+test('rendered rows say where in the library they are', () => {
+	// Arithmetic cannot settle a jump on its own, so the jump has to be
+	// able to find the row it asked for and measure it.
+	assert.match(source, /dataset\.libraryIndex = at\+\+/);
+	assert.match(source, /elementAt: index => container\.querySelector/);
 });
 
 test('the drag is tracked by position on the rail, not by letter', () => {
@@ -165,6 +210,43 @@ test('the drag is tracked by position on the rail, not by letter', () => {
 	assert.match(at, /proportion \* alphabet_index\.length/);
 	// And it clamps, so a finger dragged past either end stays in bounds.
 	assert.match(at, /Math\.min\(alphabet_index\.length - 1, Math\.max\(0,/);
+});
+
+test('the letters are measured, not the box they sit in', () => {
+	// The container is padded. Spreading the alphabet across padding it
+	// does not occupy shifts every letter by a fraction of one, so a finger
+	// on the visible "#" reported A and a finger on "Z" reported Y.
+	const at = source.slice(
+		source.indexOf('function letterAtPointer'),
+		source.indexOf('function setupAlphabetRail')
+	);
+	assert.match(at, /letters\[0\]\.getBoundingClientRect/);
+	assert.match(at, /last\.bottom - first\.top/);
+});
+
+test('a click on the rail finds its letter without pointer events', () => {
+	// The letters take no pointer events -- that is what keeps a drag from
+	// snagging on them -- so a click arrives with the container as its
+	// target and `closest` finds nothing at all. Asking which letter is at
+	// the click's position works for the mouse, and the `closest` branch
+	// still catches a keyboard Enter, whose event carries the button.
+	const setup = source.slice(
+		source.indexOf('function setupAlphabetRail'),
+		source.indexOf('// The live window')
+	);
+	assert.match(setup, /letterAtPointer\(event\.clientY\)/);
+});
+
+test('the letters are reachable by keyboard', () => {
+	// A button nobody can focus is not a keyboard target, and the rail was
+	// shipped claiming to be one while every letter carried tabIndex -1.
+	const render = source.slice(
+		source.indexOf('function renderAlphabetRail'),
+		source.indexOf('function jumpToAlphabetIndex')
+	);
+	assert.notEqual(render.length, 0, 'renderAlphabetRail not found');
+	assert.doesNotMatch(render, /tabIndex/);
+	assert.match(render, /aria-label/);
 });
 
 test('the pointer is captured so a finger can leave the rail', () => {

@@ -40,8 +40,8 @@ from __future__ import annotations
 
 from os.path import getmtime, isdir, isfile
 from time import time
-from typing import (Callable, Container, Dict, List, Optional, Tuple,
-                    Union)
+from typing import (Callable, Container, Dict, Iterable, List, Optional,
+                    Tuple, Union)
 
 from backend.base.definitions import (FileConstants, FilenameData,
                                       IssueData, VolumeData)
@@ -160,7 +160,8 @@ class LibraryIndex:
 
 def match_file_to_library_volume(
     filepath: str,
-    index: Union[LibraryIndex, None] = None
+    index: Union[LibraryIndex, None] = None,
+    ambiguous: Union[Dict[str, str], None] = None
 ) -> Union[int, None]:
     """Find the one volume in the library that a file belongs to.
 
@@ -183,14 +184,16 @@ def match_file_to_library_volume(
             folder, which is exactly the outcome this feature must not produce.
     """
     return match_parsed_to_library_volume(
-        extract_filename_data(filepath), index, filepath)
+        extract_filename_data(filepath), index, filepath,
+        ambiguous=ambiguous)
 
 
 def match_parsed_to_library_volume(
     file_data: FilenameData,
     index: Union[LibraryIndex, None] = None,
     described_as: str = '',
-    quiet: bool = False
+    quiet: bool = False,
+    ambiguous: Union[Dict[str, str], None] = None
 ) -> Union[int, None]:
     """Find the one volume a already-parsed name belongs to.
 
@@ -212,6 +215,12 @@ def match_parsed_to_library_volume(
             sync sees the same releases every quarter of an hour and counts
             them into its summary instead; a file someone dropped in the
             watched folder is a one-off worth a line. Defaults to False.
+
+        ambiguous (Union[Dict[str, str], None], optional): Collects the
+            competing volumes, keyed by what the file was called, instead of
+            logging each one. A folder scan sees the same stuck files on
+            every pass -- 4,155 lines of it on 2026-09-03 -- and wants to
+            say it once. Defaults to None.
 
     Returns:
         Union[int, None]: The volume's ID, or None if none matched, or if more
@@ -242,10 +251,20 @@ def match_parsed_to_library_volume(
             matches.append(volume_id)
 
         if len(matches) > 1:
-            if not quiet:
+            if ambiguous is not None:
+                ambiguous[described_as] = _name_volumes(index, matches)
+            elif not quiet:
+                # Named, because "more than one" is not something anyone can
+                # act on. Silas's 2026-09-03 log was 4,155 lines of this
+                # message covering 997 stuck files, and not one of them said
+                # which volumes were competing -- so the reason they were
+                # stuck could not be worked out from the log at all.
                 LOGGER.info(
-                    '%s matches more than one volume in the library; leaving '
-                    'it alone', described_as
+                    '%s matches more than one volume in the library, so it '
+                    'is being left alone. Competing: %s. Only one of them '
+                    'can be right -- removing or renaming the others lets '
+                    'this import through.',
+                    described_as, _name_volumes(index, matches)
                 )
             return None
 
@@ -253,6 +272,15 @@ def match_parsed_to_library_volume(
         return None
 
     return matches[0]
+
+
+def _name_volumes(index: LibraryIndex, volume_ids: Iterable[int]) -> str:
+    """Say which volumes these are, well enough to find them in the UI."""
+    named = []
+    for volume_id in volume_ids:
+        data = index.data(volume_id)
+        named.append(f'{data.title} ({data.year}) [id {volume_id}]')
+    return '; '.join(named)
 
 
 def find_importable_files(
@@ -379,6 +407,41 @@ def run_watched_folder_import(
         watched_folder, should_stop, description='Watched folder')
 
 
+# How many stuck files to name before saying how many more there are. A
+# scan that reports every one of them says the same thing on every pass:
+# 2026-09-03's log was 4,155 such lines across two hours, 97% of the file,
+# for 997 files that had been stuck for days.
+AMBIGUOUS_SAMPLE = 5
+
+
+def _report_ambiguous(description: str, ambiguous: Dict[str, str]) -> None:
+    """Say what could not be filed, once, with enough of it to act on.
+
+    Args:
+        description (str): What to call this pass in the log.
+        ambiguous (Dict[str, str]): The competing volumes, by file.
+    """
+    if not ambiguous:
+        return
+
+    LOGGER.warning(
+        '%s: %d file(s) could not be imported because their name matches '
+        'more than one volume in the library. They will be found again on '
+        'every pass, and re-downloaded, until the library stops offering '
+        'two homes for them.',
+        description, len(ambiguous)
+    )
+    for described_as, competing in list(ambiguous.items())[:AMBIGUOUS_SAMPLE]:
+        LOGGER.warning('%s:   %s -> %s', description, described_as, competing)
+
+    if len(ambiguous) > AMBIGUOUS_SAMPLE:
+        LOGGER.warning(
+            '%s:   ...and %d more',
+            description, len(ambiguous) - AMBIGUOUS_SAMPLE
+        )
+    return
+
+
 def import_loose_files(
     folder: str,
     should_stop: Union[Callable[[], bool], None] = None,
@@ -454,12 +517,15 @@ def import_loose_files(
 
     index = LibraryIndex()
     per_volume: Dict[int, List[str]] = {}
+    ambiguous: Dict[str, str] = {}
     for filepath in ready:
-        volume_id = match_file_to_library_volume(filepath, index)
+        volume_id = match_file_to_library_volume(filepath, index, ambiguous)
         if volume_id is None:
             summary['unmatched'] += 1
             continue
         per_volume.setdefault(volume_id, []).append(filepath)
+
+    _report_ambiguous(description, ambiguous)
 
     moved_anything = False
     for volume_id, filepaths in per_volume.items():

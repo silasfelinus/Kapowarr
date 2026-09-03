@@ -1,3 +1,4 @@
+import inspect
 import os
 import tempfile
 import time
@@ -179,6 +180,27 @@ class matching_a_file_to_a_library_volume(unittest.TestCase):
 
         self.assertIsNone(matched)
 
+    def test_an_ambiguous_file_says_which_volumes_are_competing(self):
+        """"More than one" is not something anyone can act on. Silas's
+        2026-09-03 log was 4,155 lines of that message covering 997 stuck
+        files, and not one of them named the volumes -- so why they were
+        stuck could not be worked out from the log at all.
+        """
+        self.volumes[2] = _FakeVolume(2, 'Batman', 1940, 1, '/library/Batman2')
+        collected = {}
+
+        matched = match_file_to_library_volume(
+            '/inbound/Batman (1940) Volume 1 Issue 3.cbz', self._index(),
+            collected
+        )
+
+        self.assertIsNone(matched)
+        competing = collected['/inbound/Batman (1940) Volume 1 Issue 3.cbz']
+        self.assertIn('Batman (1940)', competing)
+        # Findable in the UI, which is where the fixing happens.
+        self.assertIn('id 1', competing)
+        self.assertIn('id 2', competing)
+
     def test_an_unparseable_name_is_left_alone(self):
         with patch.object(
             wfi, 'extract_filename_data', return_value={
@@ -250,7 +272,7 @@ class running_a_watched_folder_pass(unittest.TestCase):
         patcher = patch.object(
             wfi,
             'match_file_to_library_volume',
-            side_effect=lambda path, ids=None: mapping.get(
+            side_effect=lambda path, ids=None, ambiguous=None: mapping.get(
                 os.path.basename(path)
             )
         )
@@ -617,3 +639,56 @@ class task_registration(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class a_folder_of_stuck_files_is_reported_once(unittest.TestCase):
+    """A file that matches two volumes is left alone, correctly -- and then
+    found again on the next pass, and the next.
+
+    Silas's 2026-09-03 log: 4,291 lines, of which 4,155 were this one
+    message, covering 997 files. 97% of a log saying the same thing about
+    the same files, hourly, since they got stuck. And 667 of those files
+    carried a `.1`/`.2` suffix from the download client, because the issue
+    stayed wanted and the same release was fetched again -- Wonder Woman
+    033 twelve times over.
+    """
+
+    def test_the_scan_says_it_once_with_a_count(self):
+        ambiguous = {
+            f'/downloads/Wonder Woman {n:03d}.cbz': 'Wonder Woman (2026) '
+            f'[id 1]; Wonder Woman (2026) [id 2]'
+            for n in range(1, 21)
+        }
+
+        with self.assertLogs(wfi.LOGGER, level='WARNING') as captured:
+            wfi._report_ambiguous('Orphans', ambiguous)
+
+        joined = '\n'.join(captured.output)
+        self.assertIn('20 file(s) could not be imported', joined)
+        # A sample to act on, not twenty lines of it.
+        self.assertIn('...and 15 more', joined)
+        self.assertEqual(len(captured.output), wfi.AMBIGUOUS_SAMPLE + 2)
+
+    def test_a_short_list_is_given_in_full(self):
+        with self.assertLogs(wfi.LOGGER, level='WARNING') as captured:
+            wfi._report_ambiguous('Orphans', {'/downloads/a.cbz': 'A; B'})
+
+        joined = '\n'.join(captured.output)
+        self.assertIn('1 file(s) could not be imported', joined)
+        self.assertIn('/downloads/a.cbz -> A; B', joined)
+        self.assertNotIn('...and', joined)
+        self.assertEqual(len(captured.output), 2)
+
+    def test_nothing_stuck_says_nothing(self):
+        with patch.object(wfi.LOGGER, 'warning') as warn:
+            wfi._report_ambiguous('Orphans', {})
+
+        warn.assert_not_called()
+
+    def test_a_scan_collects_instead_of_logging_per_file(self):
+        """The per-file line is still there for a one-off someone drops in
+        the watched folder; a folder scan takes the collector instead.
+        """
+        source = inspect.getsource(wfi.import_loose_files)
+        self.assertIn('ambiguous: Dict[str, str] = {}', source)
+        self.assertIn('_report_ambiguous(description, ambiguous)', source)

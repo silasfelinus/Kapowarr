@@ -63,7 +63,16 @@ test('a card reserves its space before the cover arrives', () => {
 	assert.match(css, /\.list-img \{[^}]*width: 100%/);
 });
 
-test('off-screen poster shells opt into browser rendering containment', () => {
-	assert.match(css, /content-visibility: auto/);
-	assert.match(css, /contain-intrinsic-size: auto 15rem/);
+test('a poster card is the height it says it is', () => {
+	// `content-visibility: auto` used to sit on `.list-entry`, from when the
+	// grid held a shell for every volume. Windowing replaced that -- about a
+	// hundred and thirty cards exist now -- and what it left behind was a
+	// card laid out at `contain-intrinsic-size` (15rem) until it neared the
+	// viewport and became its real 14rem. Every row that came into view
+	// shrank by a rem and slid everything below it up, which is what the
+	// spacers, the scrollbar and the alphabet rail were all computed from.
+	// Declarations only -- the comment above the rule says both names.
+	const declarations = css.replace(/\/\*[\s\S]*?\*\//g, '');
+	assert.doesNotMatch(declarations, /content-visibility:\s*auto/);
+	assert.doesNotMatch(declarations, /contain-intrinsic-size/);
 });

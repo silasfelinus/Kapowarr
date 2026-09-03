@@ -361,6 +361,12 @@ const MAX_GEOMETRY_CORRECTIONS = 3;
 // for what is rendered and waiting for a scroll to try again.
 const MEASURE_ATTEMPTS = 5;
 
+// How many times a jump may estimate, repaint and re-measure. Two is
+// usually enough -- the first pass gets the target rendered, the second
+// aligns it exactly -- and the third covers a row whose height changed
+// under the first correction.
+const SCROLL_SETTLE_PASSES = 4;
+
 // Kept with the spacer rows that have to span the table.
 const TABLE_COLUMN_COUNT = 6;
 
@@ -386,7 +392,8 @@ const TABLE_COLUMN_COUNT = 6;
 // arrives with the monitored state, progress and download status it would
 // have had all along.
 function virtualiseLibraryView(config) {
-	const {anchor, total, setSpacers, renderRange, itemsPerRow} = config;
+	const {anchor, total, setSpacers, renderRange, itemsPerRow, elementAt}
+		= config;
 	let row_height = 0;
 	let per_row = 1;
 	let resize_timer = null;
@@ -394,6 +401,15 @@ function virtualiseLibraryView(config) {
 	let corrections = 0;
 	let rendered = null;
 	let frame = null;
+	// Run once the window has actually been repainted. A correction queued
+	// with a bare rAF runs *before* the repaint it is meant to follow --
+	// which is how a jump ended up 95px above where it had just aligned.
+	let after_paint = [];
+	// A drag down the rail asks for a dozen letters in a second, each
+	// leaving corrections queued behind it. Only the last one asked for is
+	// still wanted; an earlier letter's correction firing afterwards would
+	// pull the library back to where the finger used to be.
+	let jump = 0;
 
 	// Measured against the viewport rather than against any one scroller's
 	// `scrollTop`. Which element actually scrolls is not fixed here: outside
@@ -418,9 +434,38 @@ function virtualiseLibraryView(config) {
 		];
 	}
 
+	// The row to keep still across a repaint: whichever rendered one is at
+	// the top of the scrolling area, named by its place in the library so it
+	// can be found again once the window has been rebuilt.
+	function topmostRendered(el) {
+		if (!elementAt)
+			return null;
+
+		const top = viewportTop(el);
+		let best = null;
+		for (const node of anchor.querySelectorAll('[data-library-index]')) {
+			const offset = node.getBoundingClientRect().top - top;
+			if (offset >= -1 && (best === null || offset < best.offset))
+				best = {index: Number(node.dataset.libraryIndex), offset: offset};
+		};
+		return best;
+	}
+
 	function paint(start, end) {
 		if (rendered && rendered[0] === start && rendered[1] === end)
 			return;
+
+		// `row_height` is one number for rows that are not all the same
+		// height -- a card carrying a progress bar or a download status is
+		// taller than one that is not -- so the spacers are an estimate,
+		// and every repaint that changes them slides the library under
+		// whoever is reading it. Ordinary scrolling shows this as drift;
+		// a jump shows it as landing on the wrong letter.
+		//
+		// So hold one row still: note where it is, repaint, and give back
+		// however far it moved.
+		const el = scroller();
+		const keep = topmostRendered(el);
 
 		const rows_before = Math.floor(start / per_row);
 		const rows_after = Math.max(
@@ -429,10 +474,24 @@ function virtualiseLibraryView(config) {
 		setSpacers(rows_before * row_height, rows_after * row_height);
 		renderRange(start, end);
 		rendered = [start, end];
+
+		if (keep === null)
+			return;
+
+		const again = elementAt(keep.index);
+		if (again === null)
+			return;
+
+		const moved = again.getBoundingClientRect().top - viewportTop(el)
+			- keep.offset;
+		if (Math.abs(moved) >= 1)
+			el.scrollBy({top: moved, behavior: 'instant'});
 	}
 
 	function update() {
 		frame = null;
+		const settle = after_paint;
+		after_paint = [];
 
 		if (row_height <= 0) {
 			// Never measured, or measured while the view was hidden. A
@@ -461,6 +520,9 @@ function virtualiseLibraryView(config) {
 		} else {
 			corrections = 0;
 		};
+
+		for (const fn of settle)
+			fn();
 	}
 
 	function schedule() {
@@ -530,24 +592,89 @@ function virtualiseLibraryView(config) {
 		return document.scrollingElement || document.documentElement;
 	}
 
+	// Where the top of the scrolling area is on screen, which is where a
+	// row being jumped to should end up. Not zero: outside mass edit the
+	// scroller is `#library-container`, which starts partway down the page.
+	function viewportTop(el) {
+		return el === document.scrollingElement || el === document.documentElement
+			? 0
+			: el.getBoundingClientRect().top + el.clientTop;
+	}
+
+	// Move `index` towards the top of the scrolling area, and report how far
+	// out it still was. Measured off the element when the window happens to
+	// hold it, estimated from the average row otherwise.
+	function nudgeToward(el, index) {
+		const top = viewportTop(el);
+		const found = elementAt ? elementAt(index) : null;
+		const delta = found
+			? found.getBoundingClientRect().top - top
+			: Math.floor(index / per_row) * row_height
+				+ anchor.getBoundingClientRect().top - top;
+
+		// A sub-pixel remainder is the browser's own rounding, not
+		// something another pass can improve.
+		if (Math.abs(delta) >= 1)
+			el.scrollBy({top: delta, behavior: 'instant'});
+
+		return delta;
+	}
+
+	// Keep nudging after each repaint until the row stays where it was put.
+	function settleOnto(el, index, tries, token) {
+		if (tries <= 0)
+			return;
+
+		after_paint.push(() => {
+			if (token !== jump)
+				return;
+			if (Math.abs(nudgeToward(el, index)) >= 1)
+				settleOnto(el, index, tries - 1, token);
+		});
+		schedule();
+	}
+
 	return {
-		// Put the row holding `index` at the top of the viewport.
+		// Put the row holding `index` at the top of the scrolling area.
 		//
-		// Computed rather than found: the element for that index almost
-		// certainly does not exist -- that is the whole point of the window
-		// -- so there is nothing to call `scrollIntoView` on. The spacers
-		// make the scroll height real, so the arithmetic that sizes them
-		// gives the position too.
+		// Arithmetic gets close and then the DOM settles it. The estimate
+		// has to exist at all because the element for that index almost
+		// certainly does not -- that is what windowing means, and there is
+		// nothing to call `scrollIntoView` on. But `row_height` is one
+		// number for rows that are not all the same height: a wrapped title
+		// makes a taller card, and the same library measured 240 at rest
+		// and 256 two seconds later. Every row of difference is an
+		// accumulating error, so a jump computed from it alone lands short,
+		// and lands shorter the further it goes -- which is how the rail
+		// arrived at the K's when it said M, and at the C's when it said O.
+		//
+		// So: estimate, paint, and look. Once the target row has been
+		// rendered its true position is a fact rather than a product, and
+		// the last step is measured. `update` is called rather than
+		// scheduled because each pass needs the paint the previous one
+		// asked for; a rAF here would return before anything moved.
 		scrollToIndex(index) {
 			if (row_height <= 0)
 				return false;
 
-			const target_row = Math.floor(index / per_row);
-			const anchor_top = anchor.getBoundingClientRect().top;
-			// Where the row sits now, relative to the viewport top.
-			const delta = target_row * row_height + anchor_top;
-			scroller().scrollBy({top: delta, behavior: 'auto'});
-			schedule();
+			const el = scroller();
+			const token = ++jump;
+			for (let pass = 0; pass < SCROLL_SETTLE_PASSES; pass++) {
+				if (Math.abs(nudgeToward(el, index)) < 1)
+					break;
+				// The window has to be rebuilt where we now are, or the
+				// next pass reads the rows belonging to where we were.
+				rendered = null;
+				update();
+			};
+
+			// And then keep correcting after each repaint until it stops
+			// moving. The spacers are sized from that same average row
+			// height, so every repaint shifts the content under us by
+			// whatever the average is wrong by -- including the repaints
+			// the scroll itself provokes, which would otherwise quietly
+			// undo the alignment just achieved.
+			settleOnto(el, index, SCROLL_SETTLE_PASSES, token);
 			return true;
 		},
 
@@ -651,7 +778,6 @@ function renderAlphabetRail() {
 		button.className = 'alphabet-letter';
 		button.textContent = entry.letter;
 		button.dataset.index = entry.index;
-		button.tabIndex = -1;
 		button.setAttribute(
 			'aria-label', `Jump to ${entry.letter === '#'
 				? 'numbers and symbols' : entry.letter}`);
@@ -680,18 +806,31 @@ function hideAlphabetBubble() {
 
 // Which letter a pointer at `client_y` is over.
 //
-// By proportion of the rail rather than by hit-testing an element, so a
-// finger that slides off the side of a rail two characters wide -- which on
-// a phone it does constantly -- goes on scrubbing instead of stopping dead.
+// By proportion along the letters rather than by hit-testing an element, so
+// a finger that slides off the side of a rail two characters wide -- which
+// on a phone it does constantly -- goes on scrubbing instead of stopping
+// dead.
+//
+// Measured from the first letter's top to the last one's bottom, not from
+// the container's box. The container is padded, and spreading the alphabet
+// across padding it does not occupy shifts every letter by a fraction of
+// one: a finger on the visible "#" reported A, and a finger on "Z"
+// reported Y.
 function letterAtPointer(client_y) {
 	if (!alphabet_index.length)
 		return null;
 
-	const rail = library_els.alphabet.letters.getBoundingClientRect();
-	if (rail.height <= 0)
+	const letters = library_els.alphabet.letters.children;
+	if (!letters.length)
 		return null;
 
-	const proportion = (client_y - rail.top) / rail.height;
+	const first = letters[0].getBoundingClientRect();
+	const last = letters[letters.length - 1].getBoundingClientRect();
+	const span = last.bottom - first.top;
+	if (span <= 0)
+		return null;
+
+	const proportion = (client_y - first.top) / span;
 	const position = Math.floor(proportion * alphabet_index.length);
 	return alphabet_index[
 		Math.min(alphabet_index.length - 1, Math.max(0, position))
@@ -741,11 +880,23 @@ function setupAlphabetRail() {
 
 	// Keyboard and assistive technology never see the drag, so the letters
 	// stay ordinary buttons underneath it.
+	//
+	// The letters take no pointer events -- that is what keeps a drag from
+	// snagging on them -- so a click arrives with the container as its
+	// target and `closest` finds nothing. Asking which letter is at the
+	// click's position works for both, and for a keyboard `Enter`, whose
+	// event carries the button itself.
 	els.letters.addEventListener('click', event => {
-		const button = event.target.closest('.alphabet-letter');
-		if (button === null)
+		const entry = event.target.closest('.alphabet-letter')
+			? {
+				index: Number(event.target.closest('.alphabet-letter')
+					.dataset.index),
+				letter: event.target.closest('.alphabet-letter').textContent
+			}
+			: letterAtPointer(event.clientY);
+		if (!entry)
 			return;
-		jumpToAlphabetIndex(Number(button.dataset.index), button.textContent);
+		jumpToAlphabetIndex(entry.index, entry.letter);
 		setTimeout(hideAlphabetBubble, 600);
 	});
 };
@@ -908,7 +1059,22 @@ function buildLibraryView(view, api_key, generation, on_first_batch=null) {
 					),
 					spacer_after
 				);
-			}
+
+				// Stamped so `scrollToIndex` can find out where it really
+				// landed. Row heights are not uniform -- a wrapped title
+				// makes a taller card -- so arithmetic alone only ever
+				// gets close.
+				let at = start;
+				for (
+					let el = spacer_before.nextSibling;
+					el !== spacer_after;
+					el = el.nextSibling
+				)
+					el.dataset.libraryIndex = at++;
+			},
+			elementAt: index => container.querySelector(
+				`[data-library-index="${index}"]`
+			)
 		});
 
 		// Shown *before* the window measures itself. `showLibraryPage` is

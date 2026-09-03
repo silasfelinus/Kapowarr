@@ -7,6 +7,7 @@ Also handling startup types and the websocket.
 
 from __future__ import annotations
 
+import select
 from multiprocessing import SimpleQueue
 from os import urandom
 from threading import Thread, Timer
@@ -188,11 +189,42 @@ class Server(metaclass=Singleton):
             _dispatcher=dispatcher,
             host=host,
             port=port,
-            threads=Constants.HOSTING_THREADS
+            threads=Constants.HOSTING_THREADS,
+            # `select()` cannot see a descriptor numbered 1024 or higher --
+            # that is FD_SETSIZE, a compile-time constant of the platform's C
+            # library, and nothing to do with how many descriptors are open.
+            # So one busy moment is enough to poison the server for good: a
+            # socket handed a high number makes every later loop raise
+            #
+            #     ValueError: filedescriptor out of range in select()
+            #
+            # which is not caught anywhere, so it comes out of `run()` and
+            # takes the process with it. Silas, 2026-09-03, with downloads
+            # running and six tabs open: the web interface stopped loading
+            # and the container died.
+            #
+            # `poll()` has no such ceiling. Waitress supports it and it is
+            # the documented answer to that exact error. Not on Windows,
+            # where `select.poll` does not exist -- there the ceiling stands
+            # and `select` is the only option.
+            asyncore_use_poll=hasattr(select, 'poll')
         )
 
         LOGGER.info(f'Kapowarr running on http://{host}:{port}{self.url_base}')
-        self.server.run()
+        try:
+            self.server.run()
+        except Exception:
+            # A dead serving loop is fatal -- there is no web interface and
+            # no API without it -- but it should say so. This used to come
+            # out as a bare traceback from `waitress/wasyncore.py` with
+            # nothing naming Kapowarr, at which point the process ended and
+            # the downloads and tasks went with it, unexplained.
+            LOGGER.exception(
+                'The web server stopped serving and Kapowarr cannot '
+                'continue. Restarting it is the fix; if this repeats, the '
+                'traceback above is the thing to report.'
+            )
+            raise
 
         return self.__start_type
 

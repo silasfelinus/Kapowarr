@@ -8,7 +8,8 @@ from backend.base.custom_exceptions import ClientNotWorking, CredentialInvalid
 from backend.base.definitions import DownloadState, DownloadType
 from backend.implementations.external_clients import ExternalClients
 from backend.implementations.usenet_clients import SABnzbd as SABnzbd_module
-from backend.implementations.usenet_clients.SABnzbd import SABnzbd
+from backend.implementations.usenet_clients.SABnzbd import (SABnzbd,
+                                                            forget_snapshots)
 
 
 class sabnzbd_registration(unittest.TestCase):
@@ -101,6 +102,12 @@ class sabnzbd_connection_test(unittest.TestCase):
 
 
 class sabnzbd_client_instance(unittest.TestCase):
+    def setUp(self):
+        # One look at the queue serves every download waiting on it, so it
+        # outlives a single call -- and, without this, a single test.
+        forget_snapshots()
+        self.addCleanup(forget_snapshots)
+
     """Exercises add_download/get_download/delete_download against an
     already-constructed SABnzbd instance, bypassing BaseExternalClient's
     DB-backed __init__ (covered separately for other clients' constructors;
@@ -165,7 +172,10 @@ class sabnzbd_client_instance(unittest.TestCase):
             with self.subTest(sab_status=sab_status):
                 # Fresh client per case: get_download() caches self.ssn
                 # once set, so a shared client across cases would keep
-                # reusing the first case's patched session.
+                # reusing the first case's patched session. And a fresh
+                # snapshot, for the same reason one case must not answer
+                # the next -- each of these is a separate poll.
+                forget_snapshots()
                 client = self._make_client()
                 client.known_ids.add('nzo_1')
                 fake = FakeSession({

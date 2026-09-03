@@ -700,3 +700,48 @@ class the_search_path_that_runs_is_the_one_that_was_fixed(
             await search_indexer(session, indexer, 'Batman')
 
         register.assert_called_once_with('https://prowlarr.example/33/api')
+
+
+class an_indexer_that_will_not_serve_is_left_alone(
+    unittest.IsolatedAsyncioTestCase
+):
+    """NZB Planet answered HTTP 510 -- what a Newznab indexer says when the
+    day's downloads are spent -- 216 times in twenty minutes on 2026-09-03,
+    once for every release the sweep reached.
+
+    Naming the status (which is why the log said so at all) was enough to
+    see that the answer was never going to be about the release. Backing
+    off is the same courtesy an explicit 429 already gets from the session.
+    """
+
+    async def _fetch(self, status):
+        with patch.object(
+            indexers_module, 'AsyncSession',
+            return_value=_FakeResolveSession(
+                _FakeResponse(ok=False, status=status)
+            )
+        ), patch.object(
+            indexers_module.Indexers, 'find_by_link', return_value=None
+        ), patch.object(
+            indexers_module, 'note_rate_limit', return_value=900.0
+        ) as noted:
+            with self.assertRaises(EnqueuingDownloadFailure):
+                await create_nzb_download(
+                    'https://idx.example/get/1', 1, None, force_match=True
+                )
+        return noted
+
+    async def test_a_refusal_puts_the_indexer_in_cooldown(self):
+        for status in (510, 500, 403, 429):
+            with self.subTest(status=status):
+                noted = await self._fetch(status)
+                noted.assert_called_once_with('https://idx.example/get/1')
+
+    async def test_a_release_that_is_gone_says_nothing_about_the_indexer(self):
+        """404 is about this release only. Standing the whole indexer down
+        for one dead NZB would be the opposite mistake.
+        """
+        for status in (404, 410):
+            with self.subTest(status=status):
+                noted = await self._fetch(status)
+                noted.assert_not_called()

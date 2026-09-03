@@ -34,6 +34,27 @@ class Constants:
     "Seconds to wait after interrupt until subprocess is killed"
 
     HOSTING_THREADS = 10
+
+    # How many connections the web server will hold at once.
+    #
+    # Waitress defaults to 100 and, on reaching it, stops accepting new ones
+    # entirely -- the browser then sits there with no response and no error,
+    # which is what a "website freeze" is. Silas, 2026-09-03, hit it with the
+    # library import page open: the request never reached the handler at all,
+    # so nothing about it appears in the log except waitress's own
+    #
+    #     total open connections reached the connection limit,
+    #     no longer accepting new connections
+    #
+    # A hundred is not many. A browser opens up to six connections per host
+    # and keeps them alive; several tabs, each with a Socket.IO connection and
+    # a page that polls, get there without anything being wrong. Reproduced
+    # with 140 held connections, at which point the server stops answering.
+    #
+    # Raising it is only safe because the serving loop uses `poll()` rather
+    # than `select()` (see `server.py`): under `select()` this many
+    # descriptors is what broke it in the first place.
+    HOSTING_CONNECTION_LIMIT = 1000
     "Amount of threads for the webserver"
 
     HOSTING_REVERT_TIME = 60.0 # seconds

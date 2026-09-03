@@ -112,6 +112,35 @@ class the_server_asks_for_the_loop_without_a_ceiling(unittest.TestCase):
 
         self.assertIn("asyncore_use_poll=hasattr(select, 'poll')", source)
 
+    def test_it_holds_more_than_a_hundred_connections(self):
+        """Waitress defaults to 100 and then stops accepting outright --
+        the browser sits there with no response and no error, which is what
+        a "website freeze" is. Silas hit it on 2026-09-03 with the library
+        import page open, and the giveaway was that the request never
+        reached the handler: `propose_library_import` logs "Loading library
+        import" on entry and that line is nowhere in the log.
+
+        A hundred is not many. A browser opens up to six connections per
+        host and keeps them alive; a few tabs, each with a Socket.IO
+        connection and a page that polls, get there with nothing wrong.
+        """
+        captured = {}
+
+        def fake_create_server(app, **kwargs):
+            captured.update(kwargs)
+            raise RuntimeError('stop here')
+
+        instance = server_module.Server.__new__(server_module.Server)
+        instance.app = server_module.Flask(__name__)
+
+        with patch.object(
+            server_module, 'create_server', fake_create_server
+        ), patch.object(server_module, 'ThreadedTaskDispatcher'):
+            with self.assertRaises(RuntimeError):
+                instance.run('0.0.0.0', 5656, '')
+
+        self.assertGreaterEqual(captured.get('connection_limit', 0), 500)
+
     def test_a_dead_serving_loop_says_so(self):
         """It used to come out as a bare traceback from waitress with
         nothing in it naming Kapowarr, and the process ended there --

@@ -21,6 +21,7 @@ from backend.base.definitions import (Constants, DownloadSource,
                                       SearchResultData)
 from backend.base.file_extraction import extract_filename_data, refine_special_version
 from backend.base.helpers import (AsyncSession, extract_year_from_date,
+                                  note_rate_limit,
                                   rate_limit_cooldown_remaining,
                                   register_rate_limit_scope)
 from backend.base.logging import LOGGER
@@ -404,11 +405,25 @@ async def create_nzb_download(
                         'Indexer answered HTTP %d for a release of %s',
                         response.status, source_name
                     )
-                    raise EnqueuingDownloadFailure(
-                        EnqueuingDownloadFailureReason.for_fetch_status(
-                            response.status
-                        )
+                    reason = EnqueuingDownloadFailureReason.for_fetch_status(
+                        response.status
                     )
+                    if reason is not EnqueuingDownloadFailureReason.LINK_BROKEN:
+                        # It is not this release, so it will not be the next
+                        # one either. Naming the status was enough to see
+                        # that: on 2026-09-03 NZB Planet answered 510 --
+                        # what a Newznab indexer says when the day's
+                        # downloads are spent -- 216 times in twenty
+                        # minutes, once for every release the sweep reached.
+                        # Backing off is the same courtesy an explicit 429
+                        # already gets.
+                        held = note_rate_limit(link)
+                        LOGGER.warning(
+                            '%s is not serving downloads; not asking it for '
+                            'another %.0fs rather than once per release',
+                            source_name, held
+                        )
+                    raise EnqueuingDownloadFailure(reason)
                 title = _parse_content_disposition_filename(
                     response.headers.get('Content-Disposition', '')
                 )

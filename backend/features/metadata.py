@@ -8,7 +8,7 @@ without orphaning volumes or issues.
 """
 
 from abc import ABC, abstractmethod
-from asyncio import gather
+from asyncio import TimeoutError as AsyncioTimeoutError, gather, wait_for
 from enum import Enum
 from functools import wraps
 from importlib import import_module
@@ -463,6 +463,13 @@ def is_metadata_provider_configured(provider_id: str) -> bool:
         return False
 
 
+# How long one metadata provider gets to answer a search before the others
+# go on without it. A search normally takes a second or two; twenty is
+# generous for a provider having a bad day and short enough that the dialog
+# comes back rather than sitting there.
+METADATA_SEARCH_TIMEOUT = 20.0
+
+
 async def search_metadata_with_fallback(query: str) -> List[VolumeMetadata]:
     """Search every configured provider while keeping identities explicit.
 
@@ -476,7 +483,22 @@ async def search_metadata_with_fallback(query: str) -> List[VolumeMetadata]:
         # Constructing inside the coroutine keeps a provider whose credentials
         # are rejected at construction time an error of *that* provider's
         # search, not of the whole fan-out.
-        return await get_metadata_provider(provider_id).search_volumes(query)
+        #
+        # Bounded, because nothing else bounds it. `AsyncSession` sets
+        # `connect` and `sock_read` but no `total`, so a provider that
+        # answers slowly enough never trips either, and five retries with
+        # backoff on top can hold one search for minutes. `gather` below
+        # then waits for the slowest of them.
+        #
+        # That is what a frozen Kapowarr looks like from a browser: the
+        # Edit Metadata Match dialog sits on "Searching metadata
+        # providers…", and because a browser opens only about six
+        # connections per host, a few such requests are enough to make
+        # every other page on the site unreachable too. Silas, 2026-09-03.
+        return await wait_for(
+            get_metadata_provider(provider_id).search_volumes(query),
+            timeout=METADATA_SEARCH_TIMEOUT
+        )
 
     provider_ids = configured_metadata_provider_ids(
         MetadataCapability.SEARCH_VOLUMES
@@ -502,10 +524,20 @@ async def search_metadata_with_fallback(query: str) -> List[VolumeMetadata]:
             results.extend(outcome)
             continue
 
-        if not MetadataProviderRegistry.provider_class(
+        if isinstance(outcome, AsyncioTimeoutError):
+            # Not answering is a way of being unavailable. The others'
+            # results are still worth having, and saying which one went
+            # quiet is worth more than a search that never returns.
+            LOGGER.warning(
+                'Metadata provider %s did not answer within %.0fs; '
+                'searching without it',
+                provider_id, METADATA_SEARCH_TIMEOUT
+            )
+        elif not MetadataProviderRegistry.provider_class(
             provider_id
         ).is_unavailable_error(outcome):
             raise outcome
+
         if first_error is None:
             first_error = outcome
 

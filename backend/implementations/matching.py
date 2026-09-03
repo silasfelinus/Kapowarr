@@ -469,6 +469,61 @@ def collected_edition_of_volume(
     )
 
 
+# How far past everything a volume knows about a file may still be dated
+# and belong to it. A catalogue that has not caught up is behind by months,
+# sometimes a year; it is never behind by a decade. Wide enough that a new
+# release is never refused for arriving before ComicVine did, narrow enough
+# that a 1972 series cannot claim a 2026 file.
+CATALOGUE_HEADROOM_YEARS = 2
+
+
+def _last_known_year(
+    number_to_year: Mapping[float, Union[int, None]]
+) -> Union[int, None]:
+    """The most recent year this volume has an issue for.
+
+    Args:
+        number_to_year (Mapping[float, Union[int, None]]): Issue numbers to
+            the year each was published.
+
+    Returns:
+        Union[int, None]: The latest year, or None if none are dated.
+    """
+    years = [year for year in number_to_year.values() if year is not None]
+    return max(years) if years else None
+
+
+def _year_fits_volume(
+    file_year: int,
+    volume_year: int,
+    issue_year: Union[int, None],
+    last_known_year: Union[int, None]
+) -> bool:
+    """Whether a file's year is one this volume could have produced.
+
+    Where the volume has the issue, its year is known and both ends of the
+    window are certain. Where it does not, the near end still is -- a file
+    cannot predate the volume it belongs to -- and the far end is however
+    far past the volume's newest issue a catalogue might lag.
+
+    Args:
+        file_year (int): The year on the file.
+        volume_year (int): The year the volume began.
+        issue_year (Union[int, None]): The year of the issue the file names,
+            if the volume has it.
+        last_known_year (Union[int, None]): The newest year the volume has
+            an issue for.
+
+    Returns:
+        bool: Whether the file could belong to this volume.
+    """
+    if issue_year is not None:
+        return match_year(volume_year, file_year, issue_year)
+
+    end = (last_known_year or volume_year) + CATALOGUE_HEADROOM_YEARS
+    return volume_year - 1 <= file_year <= end
+
+
 def file_importing_filter(
     file_data: FilenameData,
     volume_data: VolumeData,
@@ -546,8 +601,53 @@ def file_importing_filter(
     # that this gate never let it reach.
     collected = collected_edition_of_volume(file_data, volume_data)
 
+    # A year the file states is real information, and it was being thrown
+    # away entirely.
+    #
+    # `extract_filename_data` defaults `volume_number` to 1 when the name
+    # does not say -- which is almost every file -- and almost every volume
+    # in a comics library is volume 1. So `matching_volume_number` was true
+    # for all of them, and `or` meant `matching_year` could never rule
+    # anything out. "Wonder Woman 033 (2026)" matched Wonder Woman (1942)
+    # exactly as readily as Wonder Woman (2023); Green Lantern (1960) and
+    # Detective Comics (1937) claimed 2026 files the same way. Two volumes
+    # claiming a file means it is left alone, so on 2026-09-03 Silas had 997
+    # downloaded issues that could not be filed, 667 of them re-downloaded
+    # because the issue stayed wanted -- Wonder Woman 033 twelve times.
+    #
+    # Only where there is something to be sure about, though. Where the
+    # volume has the issue, its year is known and both ends of the window
+    # can be checked. Where it does not -- an ongoing series whose newest
+    # issue is not in the catalogue yet -- only the near end can: a file
+    # cannot predate the volume it belongs to, but it can perfectly well
+    # postdate everything Kapowarr has heard about. Refusing those would
+    # break exactly the case that matters most, new releases.
+    #
+    # A collected edition is exempt throughout: its year is the
+    # collection's, not the series', which is the whole reason `collected`
+    # exists.
+    #
+    # And not where the catalogue entry is already known to be wrong.
+    # `inferred_single_issue` above marks a volume the app *guessed* holds
+    # one issue; Witch Hammer's entry says one issue from 2018 while the
+    # series ran to at least #3 in 2024. A guess must not outrank the files
+    # it was guessing about -- which is the rule that branch exists for, and
+    # the year is no more entitled to break it than the classification was.
+    issue_year = number_to_year.get(force_range(issue_number)[-1])
+    year_rules_it_out = (
+        not collected
+        and not inferred_single_issue
+        and file_data['year'] is not None
+        and volume_data.year is not None
+        and not _year_fits_volume(
+            file_data['year'], volume_data.year, issue_year,
+            _last_known_year(number_to_year)
+        )
+    )
+
     is_match = (
         (matching_special_version or inferred_single_issue)
+        and not year_rules_it_out
         and (
             matching_volume_number
             or matching_year
@@ -556,6 +656,7 @@ def file_importing_filter(
     )
 
     return is_match
+
 
 
 def download_group_filter(

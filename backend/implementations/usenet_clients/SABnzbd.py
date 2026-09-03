@@ -30,7 +30,9 @@ public API and are exercised here against representative fixtures in
 against a live SABnzbd instance (none was reachable in this sandbox).
 """
 
-from typing import Any, Dict, List, Union
+from threading import Lock
+from time import monotonic
+from typing import Any, Dict, List, Tuple, Union
 
 from requests.exceptions import RequestException
 
@@ -40,6 +42,47 @@ from backend.base.definitions import (BrokenClientReason, Constants,
 from backend.base.helpers import Session
 from backend.base.logging import LOGGER
 from backend.implementations.external_clients import BaseExternalClient
+
+# How long one look at SABnzbd's queue stands in for the next.
+#
+# SABnzbd has no per-job status call: `mode=queue` and `mode=history` each
+# return everything, and asking about one download means fetching the lot
+# and finding it. Every download had its own thread doing that on its own
+# five-second timer, so the cost of watching N downloads was N full dumps
+# of the same list.
+#
+# On 2026-09-03 that was around 470 usenet downloads pointed at one
+# SABnzbd -- roughly ninety requests a second, every one of them asking
+# for the same thing. SABnzbd stopped answering within the thirty-second
+# read timeout, `requests` retried each of them four times, and the log
+# filled with `ReadTimeoutError` from threads 2844 through 3312. The
+# instance looked broken; it was being asked the same question ninety
+# times a second.
+#
+# Two seconds against a five-second poll keeps a progress bar honest while
+# making the request count a property of the interval rather than of how
+# many comics are downloading.
+SNAPSHOT_TTL = 2.0
+
+_SNAPSHOTS: Dict[Tuple[str, str], Tuple[float, Any]] = {}
+_SNAPSHOT_LOCKS: Dict[Tuple[str, str], Lock] = {}
+_SNAPSHOT_GUARD = Lock()
+
+
+def forget_snapshots() -> None:
+    """Drop every remembered look at a SABnzbd instance.
+
+    `ExternalClients.get_client` builds a fresh client object per call, so
+    the snapshots cannot live on the instance and are process-wide. That
+    makes them outlive a test, and a stale queue answering the next one is
+    a confusing way to find out -- eleven existing tests failed that way
+    when this was added.
+    """
+    with _SNAPSHOT_GUARD:
+        _SNAPSHOTS.clear()
+        _SNAPSHOT_LOCKS.clear()
+    return
+
 
 # States a job can carry while still in SABnzbd's active queue (i.e. before
 # SABnzbd has finished fetching + assembling the raw articles).
@@ -208,44 +251,76 @@ class SABnzbd(BaseExternalClient):
         self.known_ids.add(nzo_id)
         return nzo_id
 
+    def _slots(self, mode: str) -> List[Any]:
+        """Every job SABnzbd currently has under `mode`, shared.
+
+        `mode=queue` and `mode=history` each return the whole list; there
+        is no per-job call. One snapshot therefore answers every download
+        waiting on it, and the lock makes concurrent askers wait for the
+        one request rather than each making their own.
+
+        Args:
+            mode (str): `'queue'` or `'history'`.
+
+        Returns:
+            List[Any]: The slots SABnzbd reported.
+        """
+        key = (self.base_url, mode)
+        with _SNAPSHOT_GUARD:
+            lock = _SNAPSHOT_LOCKS.setdefault(key, Lock())
+
+        with lock:
+            cached = _SNAPSHOTS.get(key)
+            if cached is not None and monotonic() - cached[0] < SNAPSHOT_TTL:
+                if isinstance(cached[1], Exception):
+                    raise cached[1]
+                return cached[1]
+
+            if not self.ssn:
+                self.ssn = Session()
+
+            try:
+                result = self._api_request(
+                    self.ssn, self.base_url, self.api_token, mode=mode
+                )
+            except Exception as error:
+                # Shared too. Without this, an instance that is down turns
+                # every waiting download into its own doomed request, one
+                # after another, each waiting out the full read timeout.
+                _SNAPSHOTS[key] = (monotonic(), error)
+                raise
+
+            # `.get(mode, {})` alone doesn't defend against a present-but-
+            # `null` key (the default only applies when the key is
+            # *absent*), and a slot itself could in principle not be a
+            # mapping -- both are unlikely from a real SABnzbd instance but
+            # not worth an unhandled AttributeError killing the polling
+            # loop over.
+            slots = (result.get(mode) or {}).get('slots') or []
+            _SNAPSHOTS[key] = (monotonic(), slots)
+            return slots
+
+    def _find_in(
+        self,
+        mode: str,
+        download_id: str
+    ) -> Union[Dict[str, Any], None]:
+        for slot in self._slots(mode):
+            if isinstance(slot, dict) and slot.get('nzo_id') == download_id:
+                return slot
+        return None
+
     def _find_in_queue(
         self,
         download_id: str
     ) -> Union[Dict[str, Any], None]:
-        if not self.ssn:
-            self.ssn = Session()
-
-        result = self._api_request(
-            self.ssn, self.base_url, self.api_token,
-            mode='queue'
-        )
-        # `.get('queue', {})` alone doesn't defend against a present-but-
-        # `null` key (the default only applies when the key is *absent*),
-        # and a slot itself could in principle not be a mapping -- both
-        # are unlikely from a real SABnzbd instance but not worth an
-        # unhandled AttributeError killing the polling loop over.
-        queue_slots = (result.get('queue') or {}).get('slots') or []
-        for slot in queue_slots:
-            if isinstance(slot, dict) and slot.get('nzo_id') == download_id:
-                return slot
-        return None
+        return self._find_in('queue', download_id)
 
     def _find_in_history(
         self,
         download_id: str
     ) -> Union[Dict[str, Any], None]:
-        if not self.ssn:
-            self.ssn = Session()
-
-        result = self._api_request(
-            self.ssn, self.base_url, self.api_token,
-            mode='history'
-        )
-        history_slots = (result.get('history') or {}).get('slots') or []
-        for slot in history_slots:
-            if isinstance(slot, dict) and slot.get('nzo_id') == download_id:
-                return slot
-        return None
+        return self._find_in('history', download_id)
 
     def get_download(self, download_id: str) -> Union[dict, None]:
         queue_slot = self._find_in_queue(download_id)

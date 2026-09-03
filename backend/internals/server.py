@@ -190,6 +190,10 @@ class Server(metaclass=Singleton):
             host=host,
             port=port,
             threads=Constants.HOSTING_THREADS,
+            # Reaching this makes waitress stop accepting connections
+            # outright, which reads as the site having frozen. See
+            # `Constants.HOSTING_CONNECTION_LIMIT`.
+            connection_limit=Constants.HOSTING_CONNECTION_LIMIT,
             # `select()` cannot see a descriptor numbered 1024 or higher --
             # that is FD_SETSIZE, a compile-time constant of the platform's C
             # library, and nothing to do with how many descriptors are open.

@@ -1,39 +1,39 @@
 #!/usr/bin/env python3
-"""library_conflicts.py — volumes whose folders disagree with themselves.
+"""library_conflicts.py — folders holding comics from unrelated series.
 
-Two volumes of one series are normal. Batman has runs from 1940, 2011,
-2016 and 2025; Daredevil has nine. Listing every series with more than one
-entry says almost nothing, and acting on that list deletes real comics --
-`Batman (1940)` shows no files not because it is a duplicate but because
-none of its 716 issues have been imported yet.
+Two volumes of one series is normal, and so is a folder holding several of
+them: `/content/ElfQuest` deliberately holds thirteen ElfQuest series,
+`/content/Catwoman` every Catwoman run, `/content/Batman` the 1966 and 2016
+Batmans and All Star Batman and Robin. A library is organised by franchise,
+and neither "these volumes share a title" nor "this folder does not mention
+this volume's title" says anything about it -- against Silas's real library
+on 2026-09-04 those two questions produced 250 and 426 findings, and almost
+every one was the library working exactly as intended.
 
-What *is* mechanically wrong, and what this finds:
+What is left when those go is one question that survives: does a folder
+hold volumes with *no word in common at all*? Thirteen ElfQuests share
+"elfquest" and four Batmans share "batman", but
 
-  shared-folder     Two or more volumes point at the same directory, so
-                    each one's scan sees the other's comics. Four volumes
-                    sit in `/content/Batman/Batman (2016)`.
+    /content/WildC.A.T.S/WildCATS Covert Action Teams
+        One Piece (1997) · Hercules (1998) · Grimm Tales of Terror (2018)
 
-  misfiled-folder   The volume's folder mentions a different series
-                    entirely. `One Piece (1997)` points at
-                    `/content/WildC.A.T.S/WildCATS Covert Action Teams`,
-                    and `Grimm Tales of Terror (2018)` at a release folder
-                    underneath it. Both are real, both from Silas's
-                    library on 2026-09-04.
+    /content/Black Hammer/Black Hammer Omnibus (2022)
+        Black Hammer Omnibus · Superman: The Man of Steel (116 files)
 
-Neither is a judgement call, and both have the same fix: ask Kapowarr to
-regenerate the folder from its own naming scheme, which moves the volume's
-own files there and leaves every other volume's where they are.
+share nothing, and each of those is a folder one volume's comics were
+written into under another volume's name. That is how eight Grimm Tales of
+Terror files came to import into the WildCATS path.
+
+A volume whose folder sits *inside* another volume's folder counts as part
+of that folder's group, which is what catches the third row above.
 
     python scripts/library_conflicts.py --host http://192.168.7.172:5656 \
 --api-key KEY
 
-Nothing moves without `--fix-folders`, and that only touches the misfiled
-ones -- a shared folder can be two entries that both belong there, and
-untangling it is a decision, not a repair.
-
-It deliberately offers no way to delete a volume. A volume holding no
-files is not evidence of anything: most of the empty ones here are real
-series nobody has imported yet.
+This only reports. Which volume in such a group is the misplaced one, and
+where it should go instead, is a judgement about a library nobody but its
+owner can make -- and moving a folder moves comics. There is no way to
+delete a volume here either.
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ import json
 import os
 import sys
 from collections import defaultdict
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Set
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -51,117 +51,143 @@ from urllib.request import Request, urlopen
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend.base.file_extraction import extract_filename_data  # noqa: E402
-from backend.implementations.matching import match_title  # noqa: E402
+
+# Punctuation that separates words in a comic title rather than belonging
+# to one. `Batman/Catwoman`, `W.E.B. of Spider-Man` and `Hack/Slash: Body
+# Bags` all have to come apart the same way the folder name they were
+# written into did.
+SEPARATORS = '-.:/,&\'"!?()[]_'
 
 
-def call(host: str, api_key: str, path: str, method: str = 'GET',
-         body: Any = None) -> Any:
+def call(host: str, api_key: str, path: str) -> Any:
     """One API call, returning the `result` the app wrapped its answer in."""
     url = f"{host.rstrip('/')}/api{path}"
     url += ('&' if '?' in url else '?') + urlencode({'api_key': api_key})
 
-    data = None
-    headers = {}
-    if body is not None:
-        data = json.dumps(body).encode('utf-8')
-        headers['Content-Type'] = 'application/json'
-
-    request = Request(url, data=data, headers=headers, method=method)
     try:
-        with urlopen(request, timeout=120) as response:
+        with urlopen(Request(url), timeout=120) as response:
             return json.loads(response.read().decode('utf-8')).get('result')
     except HTTPError as e:
         raise SystemExit(
-            f'{method} {path} failed: HTTP {e.code} {e.reason}. A 401 means '
-            f'the API key is wrong; find it under Settings -> General.'
+            f'GET {path} failed: HTTP {e.code} {e.reason}. A 401 means the '
+            f'API key is wrong; find it under Settings -> General.'
         )
     except URLError as e:
         raise SystemExit(f'Could not reach {host}: {e.reason}')
 
 
-def series_of(name: str) -> str:
-    """The series a name is about, with a year, volume or issue stripped.
+def title_words(title: str) -> Set[str]:
+    """The words a title is made of, however it punctuates them.
 
-    Uses `extract_filename_data`, so `Amazing Spider-Man, The (1963)` and
-    `Howard the Duck v4 (2015)` come back as the series they name rather
-    than as themselves. Applied to the volume's title as well as to the
-    folder, so a title the parser mangles is mangled identically on both
-    sides and still compares equal -- `Gen 13` loses its 13 either way.
+    Args:
+        title (str): A volume title.
+
+    Returns:
+        Set[str]: Its words, lowercased. `Batman/Catwoman` and
+            `Batman - Catwoman` give the same two.
     """
-    return extract_filename_data(name)['series'] or name
+    cleaned = title
+    for character in SEPARATORS:
+        cleaned = cleaned.replace(character, ' ')
+    return {word for word in cleaned.lower().split() if word}
 
 
-def folder_names_the_volume(title: str, folder: str) -> bool:
-    """Whether any part of the path is about the volume's own series.
+# Words too common to mean anything. "George R.R. Martin's A Clash of
+# Kings" and "Game of Thrones" share "of", and that is not evidence they
+# are the same series.
+NOISE = frozenset((
+    'a', 'an', 'and', 'the', 'of', 'to', 'in', 'on', 'at', 'for', 'vs',
+    'versus', 'presents', 'comics', 'comic', 'magazine', 'annual',
+    'omnibus', 'collection', 'complete', 'deluxe', 'edition', 'special',
+    'volume', 'vol', 'book', 'books', 'series', 'saga', 'tales', 'new'
+))
 
-    A volume folder can sit under a publisher, a franchise or a collection
-    -- `/content/Batman/Detective Comics (1937)`, `/content/Moon Knight
-    Omnibus (2022)/Moon Knight (1980)` -- so one matching segment anywhere
-    in the path is enough. None matching means the path is about something
-    else entirely.
-    """
-    if not folder:
-        return False
 
-    wanted = series_of(title)
-    return any(
-        match_title(wanted, series_of(segment))
-        for segment in folder.replace('\\', '/').split('/') if segment
-    )
+def meaningful(title: str) -> Set[str]:
+    """The words of a title that could identify a series."""
+    return title_words(title) - NOISE
 
 
 def shared_folders(
     volumes: List[Dict[str, Any]]
 ) -> List[List[Dict[str, Any]]]:
-    """The sets of volumes that were given the same directory.
+    """The folders holding volumes with no meaningful word in common.
 
     Args:
         volumes (List[Dict[str, Any]]): Every volume in the library.
 
     Returns:
-        List[List[Dict[str, Any]]]: One list per shared directory, the
-            fullest first.
+        List[List[Dict[str, Any]]]: One list per such folder, the fullest
+            first. Thirteen ElfQuests share "elfquest" and four Batmans
+            share "batman", so a library organised by franchise produces
+            nothing here.
     """
-    by_folder: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    grouped: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for volume in volumes:
         if volume.get('folder'):
-            by_folder[volume['folder']].append(volume)
+            grouped[normalise(volume['folder'])].append(volume)
 
-    return sorted(
-        (group for group in by_folder.values() if len(group) > 1),
-        key=lambda g: -len(g)
-    )
+    found = []
+    for members in grouped.values():
+        if len(members) < 2:
+            continue
+
+        shared = meaningful(members[0]['title'])
+        for volume in members[1:]:
+            shared &= meaningful(volume['title'])
+        if shared:
+            continue
+
+        found.append(sorted(
+            members, key=lambda v: -(v.get('issues_downloaded') or 0)
+        ))
+
+    return sorted(found, key=lambda g: -len(g))
 
 
-def misfiled(volumes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """The volumes whose folder is about a different series.
+def wrongly_named(volumes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The volumes whose own folder is named after a different series.
+
+    Only the folder's last part is compared, and only for a word in
+    common. A volume under a franchise, author or publisher folder keeps
+    its own name in its own directory -- `ElfQuest: New Blood` in
+    `/content/ElfQuest`, `Marvel Previews` in `/content/Marvel Universe`
+    -- so those are not findings. `Golden Kamuy` in
+    `/content/Art of, The/Art of Atari (2016)` is.
 
     Args:
         volumes (List[Dict[str, Any]]): Every volume in the library.
 
     Returns:
-        List[Dict[str, Any]]: The ones to regenerate, most files first --
-            a volume with comics in the wrong place is more urgent than an
-            empty one pointing somewhere odd.
+        List[Dict[str, Any]]: The ones to look at, most files first.
     """
     return sorted(
         (
             v for v in volumes
             if v.get('folder')
-            and not folder_names_the_volume(v['title'], v['folder'])
+            and not (
+                meaningful(v['title'])
+                & meaningful(normalise(v['folder']).rsplit('/', 1)[-1])
+            )
         ),
         key=lambda v: -(v.get('issues_downloaded') or 0)
     )
 
 
+def normalise(folder: str) -> str:
+    """One spelling of a path, whatever the platform wrote it as."""
+    return folder.replace('\\', '/').rstrip('/')
+
+
 def describe(volume: Dict[str, Any]) -> str:
     """One line for one volume, with the numbers a decision needs."""
-    return (
+    line = (
         f"    id {volume['id']:<6} {volume['title']} ({volume['year']})  "
         f"{volume.get('issues_downloaded') or 0}/"
-        f"{volume.get('issue_count') or 0} on disk\n"
-        f"        {volume.get('folder')}"
+        f"{volume.get('issue_count') or 0} on disk"
     )
+    own = (volume.get('folder') or '').replace('\\', '/').rstrip('/')
+    return line + f'\n        {own}'
 
 
 def main() -> int:
@@ -178,11 +204,6 @@ def main() -> int:
         '--api-key', default=os.environ.get('KAPOWARR_API_KEY'),
         help='From Settings -> General. Or set KAPOWARR_API_KEY.'
     )
-    parser.add_argument(
-        '--fix-folders', action='store_true',
-        help='Regenerate the folder of every misfiled volume from the '
-             'naming scheme, moving that volume\'s own files into it.'
-    )
     args = parser.parse_args()
 
     if not args.api_key:
@@ -190,45 +211,34 @@ def main() -> int:
 
     volumes = call(args.host, args.api_key, '/volumes')
     shared = shared_folders(volumes)
-    wrong = misfiled(volumes)
+    wrong = wrongly_named(volumes)
 
-    print(f'{len(volumes)} volumes · {len(shared)} shared folder(s) · '
-          f'{len(wrong)} misfiled folder(s)\n')
+    print(f'{len(volumes)} volumes · {len(shared)} folder(s) holding '
+          f'unrelated series · {len(wrong)} folder(s) named after a '
+          f'different series\n')
 
     if shared:
-        print('=== shared-folder: each of these scans the others\' comics '
-              '===\n')
-        for group in shared:
-            print(f'  {group[0]["folder"]}')
-            for volume in group:
+        print('=== one folder, unrelated series: each scans the others\' '
+              'comics ===\n')
+        for members in shared:
+            print(f'  {normalise(members[0]["folder"])}')
+            for volume in members:
                 print(describe(volume))
             print()
 
     if wrong:
-        print('=== misfiled-folder: the path is about a different series '
-              '===\n')
+        print('=== the folder is named after a different series ===\n')
         for volume in wrong:
             print(describe(volume))
         print()
 
-    if not wrong:
-        return 0
-
-    if not args.fix_folders:
-        print(f'Re-run with --fix-folders to regenerate {len(wrong)} folder'
-              f'(s). Each volume\'s own files move with it; nothing else '
-              f'is touched.')
-        return 0
-
-    for volume in wrong:
-        call(
-            args.host, args.api_key, f"/volumes/{volume['id']}",
-            method='PUT', body={'volume_folder': None}
-        )
-        print(f"Regenerated id {volume['id']} "
-              f"{volume['title']} ({volume['year']})")
-
-    print(f'\n{len(wrong)} folder(s) regenerated.')
+    if shared or wrong:
+        print('Which volume is the misplaced one, and where it belongs, is '
+              'a judgement about your library -- and moving a folder moves '
+              'comics. Fix one from the UI, or with:')
+        print('  curl -X PUT "$KAP/volumes/<id>?api_key=$KEY" \\')
+        print('       -H \'Content-Type: application/json\' \\')
+        print('       -d \'{"volume_folder": null}\'')
     return 0
 
 

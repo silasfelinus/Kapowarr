@@ -48,6 +48,8 @@ the library stays exactly where it is.
 
 from __future__ import annotations
 
+from os.path import basename, dirname, splitext
+from re import compile
 from typing import Any, Callable, Dict, List, Set, Union
 
 from backend.base.logging import LOGGER
@@ -111,12 +113,30 @@ def still_missing(
     if index is None:
         index = LibraryIndex()
 
+    try:
+        fetched_for = downloads_by_job_name()
+    except Exception:
+        LOGGER.exception(
+            'Could not read what these downloads were fetched for; '
+            'narrowing on filenames alone: '
+        )
+        fetched_for = {}
+
     wanted: Dict[int, List[Any]] = {}
     keep: List[str] = []
     for filepath in filepaths:
         try:
             parsed = extract_filename_data(filepath)
-            volume_id = match_parsed_to_library_volume(parsed, index, filepath)
+            # `quiet`: the import pass right after this one matches every
+            # one of these files again and reports what it could not place,
+            # grouped by the volumes competing for it. Saying it here too
+            # put a line per stuck file back in the log that the grouped
+            # report exists to replace.
+            volume_id = match_parsed_to_library_volume(
+                parsed, index, filepath, quiet=True
+            )
+            if volume_id is None:
+                volume_id = volume_it_was_fetched_for(filepath, fetched_for)
         except Exception:
             LOGGER.exception(
                 'Could not work out what %s is; leaving it to the import: ',
@@ -148,6 +168,82 @@ def still_missing(
     return keep
 
 
+# SABnzbd appends `.1`, `.2` and so on to a job folder whose name is
+# already taken, which is exactly what happens when the same release is
+# fetched again -- Flash Gordon 017 was in the download folder eight times
+# on 2026-09-04, as `...-Empire]`, `...-Empire].1` and so on up to `.7`.
+# The job's name is what history recorded, so the suffix comes off before
+# the lookup.
+RETRY_SUFFIX = compile(r'\.\d+$')
+
+
+def downloads_by_job_name() -> Dict[str, Union[int, None]]:
+    """What each recorded download was fetched on behalf of, by job name.
+
+    Args:
+        None.
+
+    Returns:
+        Dict[str, Union[int, None]]: Job name to volume ID. A name two
+            different volumes were both recorded against maps to None: the
+            record does not settle it either, and a guess here would be no
+            better than a guess from the filename.
+    """
+    from backend.internals.db import get_db
+
+    fetched_for: Dict[str, Union[int, None]] = {}
+    for job_name, volume_id in get_db().execute("""
+        SELECT DISTINCT file_title, volume_id
+        FROM download_history
+        WHERE file_title IS NOT NULL
+            AND volume_id IS NOT NULL;
+    """):
+        if fetched_for.setdefault(job_name, volume_id) != volume_id:
+            fetched_for[job_name] = None
+
+    return fetched_for
+
+
+def volume_it_was_fetched_for(
+    filepath: str,
+    fetched_for: Dict[str, Union[int, None]]
+) -> Union[int, None]:
+    """Which volume Kapowarr asked for this file, if it asked for it at all.
+
+    A release Kapowarr grabbed was grabbed on behalf of one volume, and
+    that was written down at the time. The importer then throws it away and
+    re-derives the volume from the filename, which is why a file whose name
+    fits two runs of a series sits in the download folder for days while
+    the issue stays wanted and the same release is fetched again.
+
+    Args:
+        filepath (str): The file in the download folder.
+
+        fetched_for (Dict[str, Union[int, None]]): The recorded downloads,
+            from `downloads_by_job_name`.
+
+    Returns:
+        Union[int, None]: The volume's ID, or None if nothing was recorded
+            for it -- a file that arrived some other way, or one whose job
+            name two volumes share.
+    """
+    # The job name is the folder SABnzbd made for it; a client that wrote
+    # the file straight into the download folder leaves the file's own
+    # name as the only candidate.
+    candidates = [
+        basename(dirname(filepath)),
+        splitext(basename(filepath))[0]
+    ]
+    for name in candidates:
+        if not name:
+            continue
+        for attempt in (name, RETRY_SUFFIX.sub('', name)):
+            if attempt in fetched_for:
+                return fetched_for[attempt]
+
+    return None
+
+
 def recover_orphaned_downloads(
     should_stop: Union[Callable[[], bool], None] = None
 ) -> WatchedFolderImportSummary:
@@ -177,6 +273,17 @@ def recover_orphaned_downloads(
             errors=0
         )
 
+    try:
+        fetched_for = downloads_by_job_name()
+    except Exception:
+        # Worth continuing without: the filename still places most files,
+        # and the ones it cannot place were already being left alone.
+        LOGGER.exception(
+            'Could not read what these downloads were fetched for; falling '
+            'back to filenames alone: '
+        )
+        fetched_for = {}
+
     return import_loose_files(
         download_folder,
         should_stop,
@@ -186,7 +293,12 @@ def recover_orphaned_downloads(
         leave_original=True,
         # And never re-import what the library already has: see
         # `still_missing`.
-        narrow=still_missing
+        narrow=still_missing,
+        # These are Kapowarr's own downloads, so when a name fits two runs
+        # of a series there is a record of which one it was asked for.
+        resolve=lambda filepath: volume_it_was_fetched_for(
+            filepath, fetched_for
+        )
     )
 
 

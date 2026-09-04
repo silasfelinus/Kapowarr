@@ -177,3 +177,137 @@ class linking_leaves_the_original_where_it_was(unittest.TestCase):
             # ...and still where the torrent client left it.
             self.assertTrue(os.path.isfile(filepath))
         return
+
+
+class kapowarr_remembers_what_it_fetched(unittest.TestCase):
+    """A release Kapowarr grabbed was grabbed on behalf of one volume, and
+    that was written down at the moment it was grabbed. The importer then
+    threw it away and re-derived the volume from the filename -- which is
+    why "Flash Gordon 017 (2026)" sat in the download folder while Flash
+    Gordon (2024) and Flash Gordon (2023) both claimed it, the issue stayed
+    wanted, and SABnzbd fetched the same release eight times over
+    (`...-Empire]`, then `.1` through `.7`).
+
+    The record is not a guess between two candidates. It is the answer.
+    """
+
+    def test_the_job_folder_names_the_volume(self):
+        fetched_for = {'Flash.Gordon.017.[2026].[digital].[Empire]': 57}
+
+        self.assertEqual(
+            od.volume_it_was_fetched_for(
+                '/downloads/Flash.Gordon.017.[2026].[digital].[Empire]/'
+                'Flash Gordon 017 (2026).cbr',
+                fetched_for
+            ),
+            57
+        )
+
+    def test_a_refetch_suffix_comes_off(self):
+        """SABnzbd appends `.1`, `.2` to a job folder whose name is taken,
+        which is what a re-download looks like on disk."""
+        fetched_for = {'Flash.Gordon.017.[2026].[digital].[Empire]': 57}
+
+        for attempt in range(1, 8):
+            self.assertEqual(
+                od.volume_it_was_fetched_for(
+                    f'/downloads/Flash.Gordon.017.[2026].[digital].'
+                    f'[Empire].{attempt}/Flash Gordon 017 (2026).cbr',
+                    fetched_for
+                ),
+                57,
+                msg=f'attempt .{attempt} is the same job'
+            )
+
+    def test_a_job_name_that_really_ends_in_a_number_still_matches(self):
+        fetched_for = {'Morning Glories Vol.2': 3682}
+
+        self.assertEqual(
+            od.volume_it_was_fetched_for(
+                '/downloads/Morning Glories Vol.2/issue.cbr', fetched_for
+            ),
+            3682
+        )
+
+    def test_a_file_written_straight_into_the_folder_uses_its_own_name(self):
+        fetched_for = {'Adam Strange 001 (2004)': 208}
+
+        self.assertEqual(
+            od.volume_it_was_fetched_for(
+                '/downloads/Adam Strange 001 (2004).cbr', fetched_for
+            ),
+            208
+        )
+
+    def test_a_file_nobody_recorded_is_left_to_the_filename(self):
+        self.assertIsNone(
+            od.volume_it_was_fetched_for(
+                '/downloads/Something Someone Dropped In/issue.cbr', {}
+            )
+        )
+
+    def test_two_volumes_against_one_job_name_settle_nothing(self):
+        """The record is only worth more than the filename where it is
+        unambiguous. Where it is not, it is not a tie-break either."""
+        rows = [('Detective Comics 949', 774), ('Detective Comics 949', 1671)]
+
+        with patch.object(od, 'LOGGER'):
+            with patch(
+                'backend.internals.db.get_db',
+                return_value=MagicMock(execute=MagicMock(return_value=rows))
+            ):
+                fetched_for = od.downloads_by_job_name()
+
+        self.assertIsNone(fetched_for['Detective Comics 949'])
+        self.assertIsNone(
+            od.volume_it_was_fetched_for(
+                '/downloads/Detective Comics 949/issue.cbz', fetched_for
+            )
+        )
+
+    def test_one_volume_against_one_job_name_is_the_answer(self):
+        rows = [
+            ('Flash.Gordon.017', 57),
+            ('Flash.Gordon.017', 57),
+            ('Adam Strange 001', 208)
+        ]
+
+        with patch(
+            'backend.internals.db.get_db',
+            return_value=MagicMock(execute=MagicMock(return_value=rows))
+        ):
+            fetched_for = od.downloads_by_job_name()
+
+        self.assertEqual(fetched_for['Flash.Gordon.017'], 57)
+        self.assertEqual(fetched_for['Adam Strange 001'], 208)
+
+    def test_the_recovery_pass_hands_the_record_to_the_importer(self):
+        """Orphan recovery supplies it and the watched folder does not: a
+        folder someone drops files into has no such record to consult."""
+        import inspect
+
+        from backend.features import watched_folder_import as wfi
+
+        self.assertIn(
+            'resolve=lambda filepath: volume_it_was_fetched_for',
+            inspect.getsource(od.recover_orphaned_downloads)
+        )
+        self.assertNotIn(
+            'resolve=',
+            inspect.getsource(wfi.run_watched_folder_import)
+        )
+
+
+class the_narrowing_pass_does_not_repeat_the_report(unittest.TestCase):
+    """`still_missing` matches every file, then `import_loose_files` matches
+    them all again and reports what it could not place, grouped by the
+    volumes competing for it. The narrowing pass logging its own line per
+    stuck file put 82 lines back into the 2026-09-04 log that the grouped
+    report exists to replace.
+    """
+
+    def test_it_matches_quietly(self):
+        import inspect
+
+        source = inspect.getsource(od.still_missing)
+        self.assertIn('quiet=True', source)

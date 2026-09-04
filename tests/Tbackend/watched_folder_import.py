@@ -804,6 +804,92 @@ class the_volume_that_has_the_issue_wins(unittest.TestCase):
         )
 
 
+class a_file_can_be_placed_by_what_it_was_fetched_for(unittest.TestCase):
+    """Some files two runs of a series both claim, and no reading of the
+    filename will ever separate them. But Kapowarr fetched most of them
+    itself, on behalf of exactly one volume, and wrote that down at the
+    time -- so for those, the importer can stop guessing and go and look.
+
+    Only orphan recovery has such a record to offer; the watched folder
+    passes no resolver and behaves exactly as before.
+    """
+
+    def _run(self, folder, resolve=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, folder)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, 'wb') as f:
+                f.write(b'x')
+            stamp = time.time() - 10_000
+            os.utime(path, (stamp, stamp))
+
+            calls = {}
+
+            def record(volume_id, files, **kwargs):
+                calls[volume_id] = files
+                return {'imported': files, 'skipped': [], 'errors': []}
+
+            with patch.object(wfi, 'LibraryIndex'), \
+                    patch.object(
+                        wfi, 'match_file_to_library_volume',
+                        side_effect=lambda fp, index, ambiguous: (
+                            ambiguous.update({fp: 'A (2011); A (2012)'})
+                            or None
+                        )
+                    ), \
+                    patch.object(
+                        wfi, 'manual_import_files', side_effect=record
+                    ), \
+                    patch.object(wfi, 'mass_rename'), \
+                    patch.object(wfi, 'mass_convert'), \
+                    patch.object(wfi, 'mass_process_files'), \
+                    patch.object(wfi, 'delete_empty_child_folders'), \
+                    self.assertLogs(wfi.LOGGER, level='INFO') as captured:
+                summary = wfi.import_loose_files(
+                    tmp, description='Orphans', resolve=resolve
+                )
+
+            return summary, calls, '\n'.join(captured.output)
+
+    def test_the_record_places_a_file_the_name_could_not(self):
+        summary, calls, log = self._run(
+            'Flash.Gordon.017/Flash Gordon 017 (2026).cbr',
+            resolve=lambda filepath: 57
+        )
+
+        self.assertEqual(list(calls), [57])
+        self.assertEqual(summary['unmatched'], 0)
+        self.assertIn('placed by what Kapowarr downloaded them for', log)
+
+    def test_a_file_placed_that_way_is_not_reported_as_stuck(self):
+        _, _, log = self._run(
+            'Flash.Gordon.017/Flash Gordon 017 (2026).cbr',
+            resolve=lambda filepath: 57
+        )
+
+        self.assertNotIn('could not be imported', log)
+
+    def test_without_a_record_it_is_stuck_exactly_as_before(self):
+        summary, calls, log = self._run(
+            'Flash.Gordon.017/Flash Gordon 017 (2026).cbr',
+            resolve=lambda filepath: None
+        )
+
+        self.assertEqual(calls, {})
+        self.assertEqual(summary['unmatched'], 1)
+        self.assertIn('could not be imported', log)
+
+    def test_a_pass_with_no_resolver_is_untouched(self):
+        summary, calls, log = self._run(
+            'Flash.Gordon.017/Flash Gordon 017 (2026).cbr'
+        )
+
+        self.assertEqual(calls, {})
+        self.assertEqual(summary['unmatched'], 1)
+        self.assertIn('could not be imported', log)
+        self.assertNotIn('placed by what Kapowarr downloaded', log)
+
+
 class the_run_that_dates_the_issue_takes_it(unittest.TestCase):
     """Two runs of a series can both list the issue number a file names, and
     then no amount of reading the filename separates them -- unless the two

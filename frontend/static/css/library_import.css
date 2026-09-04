@@ -289,3 +289,37 @@ main {
 	color: var(--text-color);
 	background-color: var(--foreground-color);
 }
+
+/*  */
+/* Which providers the match search asks */
+/* A search is only as quick as its slowest provider, so the choice belongs
+   next to the query rather than buried in settings. Hidden entirely when
+   there is only one provider configured -- a toggle with nothing to toggle
+   between is furniture. */
+#match-search-providers {
+	display: flex;
+	flex-wrap: wrap;
+	gap: .5rem 1rem;
+	margin: .5rem 0 0 0;
+	padding: .5rem .75rem;
+	border: 2px solid var(--border-color);
+	border-radius: 4px;
+}
+
+.provider-toggle {
+	display: flex;
+	align-items: center;
+	gap: .35rem;
+	/* Comfortable for a thumb; the label is part of the target. */
+	min-height: 2rem;
+	cursor: pointer;
+	font-size: .9rem;
+	white-space: nowrap;
+}
+
+.provider-toggle input {
+	cursor: pointer;
+	/* Big enough to hit on a phone, where this dialog is most often used. */
+	width: 1.1rem;
+	height: 1.1rem;
+}

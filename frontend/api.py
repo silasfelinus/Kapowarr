@@ -24,7 +24,8 @@ from backend.features.download_queue import (DownloadHandler,
 from backend.features.library_import import (import_library,
                                              propose_library_import)
 from backend.features.mass_edit import run_mass_editor_action
-from backend.features.metadata import search_metadata_with_fallback
+from backend.features.metadata import (search_metadata_with_fallback,
+                                       searchable_metadata_providers)
 from backend.features.pull_list import (act_on_release,
                                         delete_publisher_subscription,
                                         get_publishers, get_pull_list,
@@ -750,13 +751,30 @@ def api_library_import():
 # =====================
 
 
+@api.route('/volumes/search/providers', methods=['GET'])
+@error_handler
+@auth
+def api_volumes_search_providers():
+    "Which metadata providers a search can be pointed at."
+    return return_api(searchable_metadata_providers())
+
+
 @api.route('/volumes/search', methods=['GET', 'POST'])
 @error_handler
 @auth
 def api_volumes_search():
     if request.method == 'GET':
         query = extract_key(request, 'query')
-        search_results = run(search_metadata_with_fallback(query))
+        # A search is only as quick as its slowest provider, and the person
+        # looking at the Edit Metadata Match dialog knows which ones they
+        # want. Comma-separated ids, as `/volumes/search/providers` lists
+        # them; absent means all of them, as before.
+        providers = extract_key(request, 'providers', check_existence=False)
+        search_results = run(search_metadata_with_fallback(
+            query,
+            [p for p in str(providers).split(',') if p.strip()]
+            if providers else None
+        ))
         for r in search_results:
             del r["cover"] # type: ignore
         return return_api(search_results)

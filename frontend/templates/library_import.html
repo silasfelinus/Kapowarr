@@ -48,6 +48,13 @@
 				<img src="{{url_base}}/static/img/search.svg" alt="">
 			</button>
 		</form>
+		<!-- One toggle per configured metadata provider. A search is only as
+		     quick as its slowest provider, and the person looking at this
+		     dialog knows which ones they want. Filled in by
+		     library_import_match_search.js, and hidden when there is only
+		     one provider to choose between. -->
+		<fieldset id="match-search-providers" class="hidden"
+			aria-label="Which metadata providers to search"></fieldset>
 		<div class="search-results-container">
 			<table>
 				<thead>

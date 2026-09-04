@@ -40,6 +40,7 @@ from backend.features.metadata import (MetadataIdentityStore,
                                        get_metadata_provider)
 from backend.implementations.file_matching import scan_files
 from backend.implementations.file_processing import mass_process_files
+from backend.base.file_extraction import extract_filename_data
 from backend.implementations.matching import match_title
 from backend.implementations.root_folders import RootFolders
 from backend.internals.db import commit, get_db
@@ -802,6 +803,31 @@ class Volume:
                 "moving the rest without them. Rescan the volume to clear "
                 "them. First: %s",
                 self.id, len(missing), missing[0]
+            )
+
+        # Say when the volume is carrying files that are not its own.
+        # Superman: The Man of Steel's folder was a landing zone -- its
+        # 116 files included seven Web of Spider-Man issues, two German
+        # Catwoman collections and a One-Punch Man volume, all linked to
+        # its issues by some earlier import. Moving the volume moved them
+        # too, deeper into the wrong series, and said nothing (2026-09-04).
+        #
+        # They still move: they are linked to this volume's issues, and
+        # leaving them behind would strand them outside any volume folder
+        # at all. But nobody can act on what they are not told, and this
+        # is the moment the mistake is visible.
+        strangers = []
+        for filepath in present:
+            series = extract_filename_data(filepath)['series']
+            if series and not match_title(volume_data.title, series):
+                strangers.append(filepath)
+
+        if strangers:
+            LOGGER.warning(
+                "Volume %d (%s) has %d file(s) that name a different "
+                "series; they move with it. Check whether they belong to "
+                "this volume at all. First: %s",
+                self.id, volume_data.title, len(strangers), strangers[0]
             )
 
         file_changes = change_basefolder(

@@ -10,7 +10,7 @@ from asyncio import run
 from datetime import datetime, timedelta
 from functools import lru_cache
 from io import BytesIO
-from os.path import dirname, exists, isdir, relpath
+from os.path import dirname, exists, isdir, isfile, relpath
 from re import IGNORECASE, compile
 from time import time
 from typing import Any, Dict, List, Mapping, Set, Tuple, Union
@@ -774,9 +774,38 @@ class Volume:
             self.id, current_volume_folder, new_volume_folder
         )
 
-        # Move files
+        # Move files. A file the database knows about may not be on disk
+        # any more -- deleted outside Kapowarr, or moved by a hand that
+        # did not tell it -- and `rename_file` raises on the first one it
+        # cannot find. That aborted the whole move part-way: some files
+        # already in the new folder, the database still naming the old
+        # one, and nothing to say so. Silas's One Piece (1997) had six
+        # such rows, all of them Detective Comics files that had since
+        # gone, and it could not be moved out of the WildCATS folder it
+        # was wrongly sharing (2026-09-04).
+        #
+        # A row with no file behind it has nothing to move, so it is not
+        # a reason to refuse the move. Say what was left behind -- a
+        # volume rescan is what clears those rows -- and carry on with
+        # the files that are really there.
+        present = []
+        missing = []
+        for file in self.get_all_files():
+            if isfile(file["filepath"]):
+                present.append(file["filepath"])
+            else:
+                missing.append(file["filepath"])
+
+        if missing:
+            LOGGER.warning(
+                "Volume %d has %d file(s) on record that are not on disk; "
+                "moving the rest without them. Rescan the volume to clear "
+                "them. First: %s",
+                self.id, len(missing), missing[0]
+            )
+
         file_changes = change_basefolder(
-            (f["filepath"] for f in self.get_all_files()),
+            present,
             current_volume_folder,
             new_volume_folder
         )

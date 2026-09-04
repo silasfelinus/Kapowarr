@@ -16,6 +16,9 @@ mismatch is what the importer calls it.
 
 VERDICTS
 --------
+  hidden-file       A dot-file: a partial, or a FUSE tombstone from a
+                    file deleted while it was open. `scan_files` never
+                    offers one to a volume, so neither does this.
   reader-cache      Another application's thumbnails. Ignored since #155;
                     listed only so the count is visible.
   cover-art         Library decoration. Never was content.
@@ -262,7 +265,19 @@ def diagnose(root: str, tracked: set, volumes: List[Dict[str, Any]]):
             # scanner had in fact refused.
             file_data = extract_filename_data(full)
 
-            if is_reader_cache_file(full):
+            if name.startswith('.'):
+                # A dot-file is not content, and `scan_files` never offers
+                # one to a volume. This tool did, and then reported the
+                # ones a volume would have accepted as though the scanner
+                # had missed them: thirteen of the eighteen
+                # `accepted-but-unrecorded` rows on 2026-09-04 were
+                # `.All-Star.Batman.006...cbr`, `.Black.Science.024...cbr`
+                # and a `.fuse_hidden...rar` -- partials and a FUSE
+                # tombstone from a file deleted while open, none of them
+                # comics anyone is missing.
+                verdict, detail = 'hidden-file', ''
+
+            elif is_reader_cache_file(full):
                 verdict, detail = 'reader-cache', ''
             elif (
                 extension in IMAGES
@@ -357,7 +372,8 @@ def main() -> int:
     shown = [r for r in rows if not args.verdict
              or r['verdict'] == args.verdict]
     for verdict in sorted({r['verdict'] for r in shown}):
-        if verdict in ('reader-cache', 'cover-art', 'page-image-comic'):
+        if verdict in ('reader-cache', 'cover-art', 'page-image-comic',
+                       'hidden-file'):
             continue
         examples = [r for r in shown if r['verdict'] == verdict]
         print(f'\n=== {verdict} ({len(examples)}) ===')

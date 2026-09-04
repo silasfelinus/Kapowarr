@@ -291,3 +291,44 @@ class a_library_with_one_of_everything(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class a_dot_file_is_not_a_missing_comic(unittest.TestCase):
+    """Thirteen of the eighteen `accepted-but-unrecorded` rows on
+    2026-09-04 were dot-files: `.All-Star.Batman.006...cbr`,
+    `.Black.Science.024...cbr`, `.Avengers-Millennium...cbr`, and a
+    `.fuse_hidden0354761400000c78.rar` -- the tombstone Unraid's FUSE
+    layer leaves when a file is deleted while something still has it open.
+
+    `scan_files` never offers a dot-file to a volume, so a volume
+    accepting one says nothing about the scanner having missed it. This
+    tool was reporting them as comics the library had failed to record.
+    """
+
+    def test_a_dot_file_is_its_own_verdict(self):
+        import inspect
+
+        import diagnose_untracked
+
+        source = inspect.getsource(diagnose_untracked.diagnose)
+        self.assertIn("name.startswith('.')", source)
+        self.assertIn("'hidden-file'", source)
+
+    def test_it_is_decided_before_a_volume_is_consulted(self):
+        """Otherwise it is still asked whether a volume would accept the
+        tombstone, which is the question that produced the wrong answer."""
+        import inspect
+
+        source = inspect.getsource(
+            __import__('diagnose_untracked').diagnose
+        )
+        self.assertLess(
+            source.index("name.startswith('.')"),
+            source.index('owning_volume(full, volumes)')
+        )
+
+    def test_it_is_counted_but_not_listed(self):
+        import inspect
+
+        source = inspect.getsource(__import__('diagnose_untracked').main)
+        self.assertIn("'hidden-file'", source)

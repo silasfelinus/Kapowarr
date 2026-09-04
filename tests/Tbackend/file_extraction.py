@@ -165,6 +165,30 @@ class extract_filename_data(unittest.TestCase):
         }
         self.run_cases(cases)
 
+    def test_cover_date_ranges(self):
+        """A cover date is written as a month range as often as a month, and
+        a bracket the year regex could not read was a file with no year at
+        all -- which the importer cannot rule any volume out for. Silas's
+        2026-09-04 log had "Green Lantern 024 (DC) (Feb-Mar 1947)" matching
+        five different Green Lanterns for exactly that reason.
+        """
+        cases = {
+            'Green Lantern 024 (DC) (Feb-Mar 1947) (c2c).cbz':
+                {'series': 'Green Lantern', 'year': 1947, 'volume_number': 1, 'special_version': None, 'issue_number': 24.0, 'annual': False},
+
+            'Green Lantern 024 (Jan. 1947).cbz':
+                {'series': 'Green Lantern', 'year': 1947, 'volume_number': 1, 'special_version': None, 'issue_number': 24.0, 'annual': False},
+
+            'Green Lantern 024 (Sept-Oct 1947).cbz':
+                {'series': 'Green Lantern', 'year': 1947, 'volume_number': 1, 'special_version': None, 'issue_number': 24.0, 'annual': False},
+
+            'Green Lantern 024 (January 1947).cbz':
+                {'series': 'Green Lantern', 'year': 1947, 'volume_number': 1, 'special_version': None, 'issue_number': 24.0, 'annual': False},
+        }
+        self.run_cases(cases)
+    # autopep8: on
+
+    # autopep8: off
     def test_other_languages(self):
         cases = {
             '52 Томa 3 Issue 3-5 (2022)':

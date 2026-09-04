@@ -17,6 +17,11 @@
 	// Which providers this dialog asks. Remembered, because someone who has
 	// switched a slow provider off does not want it back on the next file.
 	const PROVIDER_CHOICE_KEY = 'metadata_search_providers';
+
+	// Comfortably past the server's own per-provider budget, so a search
+	// that is merely slow still gets to finish and only one that is never
+	// coming back is abandoned.
+	const SEARCH_GIVE_UP_MS = 45000;
 	let providers = null;
 
 	function chosenProviders() {
@@ -151,11 +156,41 @@
 		};
 	};
 
+	// The bracketed tail a scene release carries: year, format, scanner,
+	// group. All of it is noise to a metadata provider, and a file that
+	// reached this dialog has no proposed title to use instead -- so the
+	// query starts as the whole filename. "Amnesiac 001 (2025) (ADULT)
+	// (Digital) (Deluxe) (ASO) (Blue Orchid)" is not a search anybody
+	// wants to make; "Amnesiac" is.
+	const RELEASE_TAGS = /[([{][^)\]}]*[)\]}]/g;
+	// A trailing cover date, then a trailing issue number: both belong to
+	// the file rather than to the series. The issue number has to be
+	// preceded by whitespace or "1950-06-00" loses its last two digits and
+	// leaves a hanging hyphen.
+	const TRAILING_DATE = /[\s,]+\d{4}(?:-\d{1,2}){1,2}$/;
+	const TRAILING_ISSUE = /\s+#?\d{1,4}(?:\.\d+)?$/;
+	// Whatever punctuation the removals left dangling.
+	const TRAILING_PUNCTUATION = /[\s,;:.\-–—_]+$/;
+
+	function seriesFrom(text) {
+		const bare = (text || '')
+			.replace(RELEASE_TAGS, ' ')
+			.replace(/\s+/g, ' ')
+			.trim()
+			.replace(TRAILING_DATE, '')
+			.replace(TRAILING_ISSUE, '')
+			.replace(TRAILING_PUNCTUATION, '')
+			.trim();
+		// Stripping everything means the guess was wrong about what the
+		// name is; the whole thing is a better starting point than nothing.
+		return bare || (text || '').trim();
+	};
+
 	function rowSearchQuery(rowid) {
 		const item = rowid_to_filepath[rowid] || {};
 		const row = document.querySelector(`tr[data-rowid="${rowid}"]`);
 		const proposed = stripResultYear(row?.querySelector('a')?.innerText);
-		return proposed || item.file_title || '';
+		return proposed || seriesFrom(item.file_title) || '';
 	};
 
 	function applyMetadataMatch(result, groupNumber=null) {
@@ -210,6 +245,12 @@
 	};
 
 	function describeSearchError(error) {
+		if (error && error.name === 'AbortError')
+			return Promise.resolve(
+				'The metadata providers did not answer. Try again, or switch '
+				+ 'one off above and search the rest.'
+			);
+
 		if (!error || typeof error.json !== 'function')
 			return Promise.resolve('Metadata search failed. Try again or use a broader title.');
 
@@ -252,9 +293,22 @@
 		searchInFlightQuery = query;
 
 		const chosen = chosenProviders();
+		// The browser gives up too, a little after the server would.
+		//
+		// A browser opens about six connections per host, and a search that
+		// never resolves keeps one of them for as long as it lasts. Enough
+		// of those and every other page of Kapowarr is unreachable from
+		// that browser while other sites are fine -- which is what a
+		// "freeze" turned out to be. The server bounds each provider at
+		// twenty seconds; this is the backstop for a response that never
+		// arrives at all.
+		const giveUp = new AbortController();
+		const abandon = setTimeout(() => giveUp.abort(), SEARCH_GIVE_UP_MS);
+
 		searchInFlight = usingApiKey()
 		.then(apiKey => fetchAPI('/volumes/search', apiKey,
-			chosen === null ? {query} : {query, providers: chosen.join(',')}))
+			chosen === null ? {query} : {query, providers: chosen.join(',')},
+			true, {signal: giveUp.signal}))
 		.then(json => {
 			const results = json.result || [];
 			if (!results.length) {
@@ -272,6 +326,7 @@
 			setSearchStatus(message, 'error');
 		}))
 		.finally(() => {
+			clearTimeout(abandon);
 			setSearchBusy(false);
 			searchInFlight = null;
 			searchInFlightQuery = null;
@@ -286,15 +341,23 @@
 		LIEls.search.input.value = rowSearchQuery(rowid);
 		showWindow('cv-window');
 		LIEls.search.input.focus();
-		// The toggles have to be on screen before the automatic search
-		// runs, or the first search of a session ignores the choice the
-		// dialog is about to show as already made.
+		// Selected, so replacing it is one keystroke and keeping it is none.
+		LIEls.search.input.select();
+
+		// It does not search on its own any more. Silas: "we should kill
+		// whatever is auto-searching, it would be better to edit first
+		// anyway." He is right -- opening the dialog fired a query for the
+		// whole release filename, which is the worst question available and
+		// the most expensive one to ask, and it had to finish before the
+		// field could usefully be edited. The guess is offered, not acted
+		// on.
 		loadProviders().then(() => {
 			renderProviderToggles();
-			if (LIEls.search.input.value)
-				searchCV();
-			else
-				setSearchStatus('Enter a title to search.');
+			setSearchStatus(
+				LIEls.search.input.value
+					? 'Edit the title if you need to, then search.'
+					: 'Enter a title to search.'
+			);
 		});
 	};
 

@@ -128,3 +128,115 @@ class a_provider_that_goes_quiet_does_not_hold_the_search(unittest.TestCase):
         self.assertEqual(
             sorted(r['title'] for r in result), ['One', 'Two']
         )
+
+
+class the_search_can_be_pointed_at_chosen_providers(unittest.TestCase):
+    """Silas, on the Edit Metadata Match dialog: "It would be better in that
+    particular screen case if we had toggles to choose which provider(s) to
+    search."
+
+    A search is only as quick as its slowest provider, and the person
+    looking at the dialog knows which one they want.
+    """
+
+    def _search(self, mapping, provider_ids, **kwargs):
+        patches = _providers(mapping, **kwargs)
+        for p in patches:
+            p.start()
+        self.addCleanup(lambda: [p.stop() for p in patches])
+        return asyncio.run(
+            md.search_metadata_with_fallback('Batman', provider_ids)
+        )
+
+    def test_only_the_chosen_provider_is_asked(self):
+        asked = []
+
+        class _Watching(_Quick):
+            def __init__(self, name, title):
+                super().__init__(title)
+                self.name = name
+
+            async def search_volumes(self, query):
+                asked.append(self.name)
+                return await super().search_volumes(query)
+
+        result = self._search(
+            {'comicvine': _Watching('comicvine', 'From CV'),
+             'gcd': _Watching('gcd', 'From GCD')},
+            ['gcd']
+        )
+
+        self.assertEqual(asked, ['gcd'])
+        self.assertEqual([r['title'] for r in result], ['From GCD'])
+
+    def test_no_choice_asks_everyone_as_before(self):
+        result = self._search(
+            {'comicvine': _Quick('One'), 'gcd': _Quick('Two')}, None
+        )
+
+        self.assertEqual(sorted(r['title'] for r in result), ['One', 'Two'])
+
+    def test_a_choice_naming_nothing_configured_asks_everyone(self):
+        """A stale toggle should not silently answer for the provider it
+        names. An empty search would read as "no results".
+        """
+        result = self._search(
+            {'comicvine': _Quick('One'), 'gcd': _Quick('Two')},
+            ['a-provider-that-was-removed']
+        )
+
+        self.assertEqual(sorted(r['title'] for r in result), ['One', 'Two'])
+
+    def test_choosing_every_provider_is_the_same_as_choosing_none(self):
+        result = self._search(
+            {'comicvine': _Quick('One'), 'gcd': _Quick('Two')},
+            ['comicvine', 'gcd']
+        )
+
+        self.assertEqual(sorted(r['title'] for r in result), ['One', 'Two'])
+
+    def test_one_chosen_provider_owns_the_outcome(self):
+        """Narrowed to a single provider, there is no second opinion -- so
+        its failure is the search's failure, exactly as when only one is
+        configured.
+        """
+        class _Broken:
+            async def search_volumes(self, query):
+                raise ValueError('provider is unwell')
+
+        with self.assertRaises(ValueError):
+            self._search(
+                {'comicvine': _Broken(), 'gcd': _Quick()}, ['comicvine']
+            )
+
+
+class the_dialog_is_told_what_it_may_choose_between(unittest.TestCase):
+    def test_providers_are_listed_with_names_a_person_reads(self):
+        class _Named:
+            display_name = 'Grand Comics Database'
+
+        with patch.object(
+            md, 'configured_metadata_provider_ids', lambda cap: ['gcd']
+        ), patch.object(
+            md.MetadataProviderRegistry, 'provider_class',
+            staticmethod(lambda pid: _Named)
+        ):
+            self.assertEqual(
+                md.searchable_metadata_providers(),
+                [{'id': 'gcd', 'name': 'Grand Comics Database'}]
+            )
+
+    def test_a_provider_without_a_name_falls_back_to_its_id(self):
+        class _Anonymous:
+            pass
+
+        with patch.object(
+            md, 'configured_metadata_provider_ids', lambda cap: ['mystery']
+        ), patch.object(
+            md.MetadataProviderRegistry, 'provider_class',
+            staticmethod(lambda pid: _Anonymous)
+        ):
+            self.assertEqual(
+                md.searchable_metadata_providers(),
+                [{'id': 'mystery', 'name': 'mystery'}]
+            )

@@ -470,7 +470,35 @@ def is_metadata_provider_configured(provider_id: str) -> bool:
 METADATA_SEARCH_TIMEOUT = 20.0
 
 
-async def search_metadata_with_fallback(query: str) -> List[VolumeMetadata]:
+def searchable_metadata_providers() -> List[Dict[str, str]]:
+    """The providers a search can be pointed at, named for a person.
+
+    Args:
+        None.
+
+    Returns:
+        List[Dict[str, str]]: `id` and `name` per configured provider, in
+        the order a fan-out would ask them.
+    """
+    return [
+        {
+            'id': provider_id,
+            'name': getattr(
+                MetadataProviderRegistry.provider_class(provider_id),
+                'display_name',
+                provider_id
+            )
+        }
+        for provider_id in configured_metadata_provider_ids(
+            MetadataCapability.SEARCH_VOLUMES
+        )
+    ]
+
+
+async def search_metadata_with_fallback(
+    query: str,
+    provider_ids: Union[Sequence[str], None] = None
+) -> List[VolumeMetadata]:
     """Search every configured provider while keeping identities explicit.
 
     A provider that reports itself unavailable (see
@@ -478,6 +506,19 @@ async def search_metadata_with_fallback(query: str) -> List[VolumeMetadata]:
     provider answered; if every provider is unavailable, the first such error
     is raised.  Anything else propagates immediately — an unavailable provider
     is a degraded search, an unexpected error is a bug.
+
+    Args:
+        query (str): What to search for.
+
+        provider_ids (Union[Sequence[str], None], optional): Ask only these
+            providers. Silas, on the Edit Metadata Match dialog: "It would
+            be better in that particular screen case if we had toggles to
+            choose which provider(s) to search." A search is only as quick
+            as its slowest provider, and the person looking at the dialog
+            knows which one they want. Unknown or unconfigured ids are
+            ignored; asking for none of them falls back to all, because a
+            search that asks nobody is not a search. Defaults to None,
+            meaning every configured provider.
     """
     async def search_provider(provider_id: str) -> List[VolumeMetadata]:
         # Constructing inside the coroutine keeps a provider whose credentials
@@ -500,9 +541,19 @@ async def search_metadata_with_fallback(query: str) -> List[VolumeMetadata]:
             timeout=METADATA_SEARCH_TIMEOUT
         )
 
-    provider_ids = configured_metadata_provider_ids(
+    configured = configured_metadata_provider_ids(
         MetadataCapability.SEARCH_VOLUMES
     )
+    if provider_ids is not None:
+        wanted = set(provider_ids)
+        chosen = [p for p in configured if p in wanted]
+        # Every choice filtered away leaves nothing to ask. Falling back to
+        # the full set beats returning an empty search that looks like "no
+        # results" -- a stale toggle should not silently answer for the
+        # provider it names.
+        configured = chosen or configured
+
+    provider_ids = configured
     if len(provider_ids) <= 1:
         # A lone provider owns the outcome, so its errors are the search's
         # errors — there is no second opinion to fall back to.

@@ -14,6 +14,97 @@
 		return (title || '').replace(/\s+\((?:19|20)\d{2}\)\s*$/, '').trim();
 	};
 
+	// Which providers this dialog asks. Remembered, because someone who has
+	// switched a slow provider off does not want it back on the next file.
+	const PROVIDER_CHOICE_KEY = 'metadata_search_providers';
+	let providers = null;
+
+	function chosenProviders() {
+		if (providers === null)
+			return null;
+		const chosen = providers.filter(p => p.on).map(p => p.id);
+		// All of them selected is the same request as not asking for any in
+		// particular, and the shorter URL is the one worth sending.
+		return chosen.length === providers.length ? null : chosen;
+	};
+
+	function rememberProviderChoice() {
+		try {
+			localStorage.setItem(PROVIDER_CHOICE_KEY, JSON.stringify(
+				providers.filter(p => p.on).map(p => p.id)
+			));
+		} catch (e) {};
+	};
+
+	function recallProviderChoice() {
+		try {
+			const stored = JSON.parse(
+				localStorage.getItem(PROVIDER_CHOICE_KEY) || 'null'
+			);
+			return Array.isArray(stored) ? stored : null;
+		} catch (e) {
+			return null;
+		};
+	};
+
+	function renderProviderToggles() {
+		const row = document.querySelector('#match-search-providers');
+		if (row === null || providers === null)
+			return;
+
+		row.replaceChildren(...providers.map(provider => {
+			const label = document.createElement('label');
+			label.className = 'provider-toggle';
+
+			const box = document.createElement('input');
+			box.type = 'checkbox';
+			box.checked = provider.on;
+			box.onchange = () => {
+				provider.on = box.checked;
+				// Never all off: a search that asks nobody is not a search,
+				// and the backend would quietly fall back to all of them.
+				if (!providers.some(p => p.on)) {
+					provider.on = true;
+					box.checked = true;
+					return;
+				};
+				rememberProviderChoice();
+			};
+
+			label.append(box, document.createTextNode(` ${provider.name}`));
+			return label;
+		}));
+		row.classList.toggle('hidden', providers.length < 2);
+	};
+
+	function loadProviders() {
+		if (providers !== null)
+			return Promise.resolve(providers);
+
+		return usingApiKey()
+		.then(apiKey => fetchAPI('/volumes/search/providers', apiKey))
+		.then(json => {
+			const remembered = recallProviderChoice();
+			providers = (json.result || []).map(p => ({
+				id: p.id,
+				name: p.name,
+				on: remembered === null ? true : remembered.includes(p.id)
+			}));
+			// A remembered set that no longer names any configured provider
+			// would leave the dialog unable to search at all.
+			if (!providers.some(p => p.on))
+				providers.forEach(p => { p.on = true; });
+			renderProviderToggles();
+			return providers;
+		})
+		.catch(() => {
+			// Without the list there are no toggles, and a search that asks
+			// everyone is exactly what it did before.
+			providers = [];
+			return providers;
+		});
+	};
+
 	function getMatchSearchStatus() {
 		let status = document.querySelector('#match-search-status');
 		if (status)
@@ -23,7 +114,11 @@
 		status.id = 'match-search-status';
 		status.className = 'continuous-note';
 		status.setAttribute('role', 'status');
-		LIEls.search.bar.after(status);
+		// Below the provider toggles, not above them: the toggles belong
+		// with the query that uses them, and the status reports on what
+		// came back, so it reads better next to the results.
+		(document.querySelector('#match-search-providers')
+			|| LIEls.search.bar).after(status);
 		return status;
 	};
 
@@ -156,8 +251,10 @@
 		setSearchStatus(`Searching metadata providers for “${query}”…`);
 		searchInFlightQuery = query;
 
+		const chosen = chosenProviders();
 		searchInFlight = usingApiKey()
-		.then(apiKey => fetchAPI('/volumes/search', apiKey, {query}))
+		.then(apiKey => fetchAPI('/volumes/search', apiKey,
+			chosen === null ? {query} : {query, providers: chosen.join(',')}))
 		.then(json => {
 			const results = json.result || [];
 			if (!results.length) {
@@ -189,10 +286,16 @@
 		LIEls.search.input.value = rowSearchQuery(rowid);
 		showWindow('cv-window');
 		LIEls.search.input.focus();
-		if (LIEls.search.input.value)
-			searchCV();
-		else
-			setSearchStatus('Enter a title to search.');
+		// The toggles have to be on screen before the automatic search
+		// runs, or the first search of a session ignores the choice the
+		// dialog is about to show as already made.
+		loadProviders().then(() => {
+			renderProviderToggles();
+			if (LIEls.search.input.value)
+				searchCV();
+			else
+				setSearchStatus('Enter a title to search.');
+		});
 	};
 
 	window.buildProposalRow = function(result, rowid) {

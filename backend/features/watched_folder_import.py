@@ -620,7 +620,8 @@ def import_loose_files(
     leave_alone: Union[Container[str], None] = None,
     description: str = 'Loose files',
     leave_original: bool = False,
-    narrow: Union[Callable[[List[str]], List[str]], None] = None
+    narrow: Union[Callable[[List[str]], List[str]], None] = None,
+    resolve: Union[Callable[[str], Union[int, None]], None] = None
 ) -> WatchedFolderImportSummary:
     """Import whatever finished files in a folder belong to a known volume.
 
@@ -658,6 +659,12 @@ def import_loose_files(
             linking a file in leaves the original behind to be found again.
             Defaults to None, meaning import whatever matched.
 
+        resolve (Union[Callable[[str], Union[int, None]], None], optional):
+            Asked which volume a file belongs to when its name cannot say.
+            Orphan recovery supplies one, because Kapowarr fetched those
+            files itself and wrote down what it fetched them for; a watched
+            folder has no such record and does not. Defaults to None.
+
     Returns:
         WatchedFolderImportSummary: What the pass did.
     """
@@ -690,12 +697,32 @@ def import_loose_files(
     index = LibraryIndex()
     per_volume: Dict[int, List[str]] = {}
     ambiguous: Dict[str, str] = {}
+    resolved_from_record = 0
     for filepath in ready:
         volume_id = match_file_to_library_volume(filepath, index, ambiguous)
+
+        if volume_id is None and resolve is not None:
+            # The name could not say, so ask whoever put the file here. A
+            # download Kapowarr asked for was asked for on behalf of one
+            # volume, and that is not a guess between two candidates -- it
+            # is the answer, recorded at the moment the release was
+            # grabbed.
+            volume_id = resolve(filepath)
+            if volume_id is not None:
+                ambiguous.pop(filepath, None)
+                resolved_from_record += 1
+
         if volume_id is None:
             summary['unmatched'] += 1
             continue
         per_volume.setdefault(volume_id, []).append(filepath)
+
+    if resolved_from_record:
+        LOGGER.info(
+            '%s: %d file(s) were placed by what Kapowarr downloaded them '
+            'for, rather than by their name',
+            description, resolved_from_record
+        )
 
     _report_ambiguous(description, ambiguous)
 

@@ -40,8 +40,8 @@ from __future__ import annotations
 
 from os.path import getmtime, isdir, isfile
 from time import time
-from typing import (Callable, Container, Dict, Iterable, List, Optional,
-                    Tuple, Union)
+from typing import (Any, Callable, Container, Dict, Iterable, List,
+                    Mapping, Optional, Tuple, Union)
 
 from backend.base.definitions import (FileConstants, FilenameData,
                                       IssueData, VolumeData)
@@ -234,6 +234,11 @@ def match_parsed_to_library_volume(
 
     described_as = described_as or str(file_data['series'])
     matches: List[int] = []
+    lists_the_issue: List[int] = []
+    # `.get`, not `[...]`: `FilenameData` is a TypedDict and not every
+    # caller fills every key -- the feed sync hands in what an indexer
+    # gave it.
+    wanted = file_data.get('issue_number')
     for volume_id in index.volume_ids:
         volume_data = index.data(volume_id)
 
@@ -249,29 +254,67 @@ def match_parsed_to_library_volume(
             number_to_year
         ):
             matches.append(volume_id)
-
-        if len(matches) > 1:
-            if ambiguous is not None:
-                ambiguous[described_as] = _name_volumes(index, matches)
-            elif not quiet:
-                # Named, because "more than one" is not something anyone can
-                # act on. Silas's 2026-09-03 log was 4,155 lines of this
-                # message covering 997 stuck files, and not one of them said
-                # which volumes were competing -- so the reason they were
-                # stuck could not be worked out from the log at all.
-                LOGGER.info(
-                    '%s matches more than one volume in the library, so it '
-                    'is being left alone. Competing: %s. Only one of them '
-                    'can be right -- removing or renaming the others lets '
-                    'this import through.',
-                    described_as, _name_volumes(index, matches)
-                )
-            return None
+            if _lists_issue(number_to_year, wanted):
+                lists_the_issue.append(volume_id)
 
     if not matches:
         return None
 
+    if len(matches) > 1:
+        # A volume that lists the issue is a better home for it than one
+        # that does not. Nightwing (2021) and Nightwing (2016) both pass the
+        # year check for a file numbered 87 -- 2021 is the one volume's
+        # first year and the other's eighty-seventh issue -- but only one of
+        # them has ever published an issue 87.
+        #
+        # Only when it settles the question outright. Two volumes both
+        # listing the issue is still a choice nobody can make from the
+        # filename, and guessing puts a comic in the wrong folder, which is
+        # what this whole path exists to avoid.
+        if len(lists_the_issue) == 1:
+            return lists_the_issue[0]
+
+        if ambiguous is not None:
+            ambiguous[described_as] = _name_volumes(index, matches)
+        elif not quiet:
+            # Named, because "more than one" is not something anyone can
+            # act on. Silas's 2026-09-03 log was 4,155 lines of this
+            # message covering 997 stuck files, and not one of them said
+            # which volumes were competing -- so the reason they were
+            # stuck could not be worked out from the log at all.
+            LOGGER.info(
+                '%s matches more than one volume in the library, so it '
+                'is being left alone. Competing: %s. Only one of them '
+                'can be right -- removing or renaming the others lets '
+                'this import through.',
+                described_as, _name_volumes(index, matches)
+            )
+        return None
+
     return matches[0]
+
+
+def _lists_issue(
+    number_to_year: Mapping[float, Union[int, None]],
+    issue_number: Any
+) -> bool:
+    """Whether this volume has an issue by that number at all.
+
+    Args:
+        number_to_year (Mapping[float, Union[int, None]]): The volume's
+            issue numbers.
+        issue_number (Any): What the file says it is. A range counts if
+            either end is in the volume; a file that names no issue tells
+            us nothing either way.
+
+    Returns:
+        bool: Whether the volume lists it.
+    """
+    if issue_number is None:
+        return False
+
+    ends = issue_number if isinstance(issue_number, tuple) else (issue_number,)
+    return any(end in number_to_year for end in ends)
 
 
 def _name_volumes(index: LibraryIndex, volume_ids: Iterable[int]) -> str:

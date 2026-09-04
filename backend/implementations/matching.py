@@ -497,7 +497,8 @@ def _year_fits_volume(
     file_year: int,
     volume_year: int,
     issue_year: Union[int, None],
-    last_known_year: Union[int, None]
+    last_known_year: Union[int, None],
+    only_the_near_end: bool = False
 ) -> bool:
     """Whether a file's year is one this volume could have produced.
 
@@ -513,15 +514,30 @@ def _year_fits_volume(
             if the volume has it.
         last_known_year (Union[int, None]): The newest year the volume has
             an issue for.
+        only_the_near_end (bool, optional): Check that the file is not older
+            than the volume, and nothing else. For a catalogue entry known
+            to be wrong about how much the volume holds, where anything said
+            about its later years is a guess. Defaults to False.
 
     Returns:
         bool: Whether the file could belong to this volume.
     """
+    if only_the_near_end:
+        return volume_year - 1 <= file_year
+
     if issue_year is not None:
         return match_year(volume_year, file_year, issue_year)
 
-    end = (last_known_year or volume_year) + CATALOGUE_HEADROOM_YEARS
-    return volume_year - 1 <= file_year <= end
+    if last_known_year is None:
+        # Not one dated issue, so nothing is known about how long the volume
+        # ran -- only that it did not run before it began. Treating its
+        # start year as its end would refuse every file of a volume whose
+        # catalogue entry happens to carry no dates.
+        return volume_year - 1 <= file_year
+
+    return volume_year - 1 <= file_year <= (
+        last_known_year + CATALOGUE_HEADROOM_YEARS
+    )
 
 
 def file_importing_filter(
@@ -627,21 +643,28 @@ def file_importing_filter(
     # collection's, not the series', which is the whole reason `collected`
     # exists.
     #
-    # And not where the catalogue entry is already known to be wrong.
+    # A catalogue entry already known to be wrong gets the near end only.
     # `inferred_single_issue` above marks a volume the app *guessed* holds
     # one issue; Witch Hammer's entry says one issue from 2018 while the
     # series ran to at least #3 in 2024. A guess must not outrank the files
-    # it was guessing about -- which is the rule that branch exists for, and
-    # the year is no more entitled to break it than the classification was.
+    # it was guessing about -- but what that case needs is room *after* the
+    # entry, not before it. A series that outran its catalogue produces
+    # newer files, never older ones, and "a file cannot predate the volume
+    # it belongs to" holds however thin the entry is.
+    #
+    # Exempting the whole check was too generous by six decades: Strange
+    # Adventures (2021), classified from a single listed issue, took a file
+    # dated 1955 -- 240 of them, in the run of 2026-09-04, all of which
+    # belong to Strange Adventures (1950).
     issue_year = number_to_year.get(force_range(issue_number)[-1])
     year_rules_it_out = (
         not collected
-        and not inferred_single_issue
         and file_data['year'] is not None
         and volume_data.year is not None
         and not _year_fits_volume(
             file_data['year'], volume_data.year, issue_year,
-            _last_known_year(number_to_year)
+            _last_known_year(number_to_year),
+            only_the_near_end=inferred_single_issue
         )
     )
 

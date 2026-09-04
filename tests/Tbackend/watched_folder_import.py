@@ -20,8 +20,10 @@ class _FakeVolume:
     a title/year/volume-number to match against and a folder to move into.
     """
 
-    def __init__(self, volume_id, title, year, volume_number, folder):
+    def __init__(self, volume_id, title, year, volume_number, folder,
+                 issues=range(1, 6)):
         self.id = volume_id
+        self._issues = list(issues)
         self._data = SimpleNamespace(
             title=title,
             year=year,
@@ -36,7 +38,7 @@ class _FakeVolume:
     def get_issues(self, _skip_files=False):
         return [
             SimpleNamespace(calculated_issue_number=float(n), date=None)
-            for n in range(1, 6)
+            for n in self._issues
         ]
 
 
@@ -692,3 +694,79 @@ class a_folder_of_stuck_files_is_reported_once(unittest.TestCase):
         source = inspect.getsource(wfi.import_loose_files)
         self.assertIn('ambiguous: Dict[str, str] = {}', source)
         self.assertIn('_report_ambiguous(description, ambiguous)', source)
+
+
+class the_volume_that_has_the_issue_wins(unittest.TestCase):
+    """Two runs of a series can both survive the year check for a file whose
+    number only one of them ever published. Nightwing (2021) and Nightwing
+    (2016) both fit a file dated 2021 -- it is one volume's first year and
+    the other's eighty-seventh issue -- but only one of them has an issue
+    87.
+
+    So when several volumes match, one that lists the issue beats one that
+    does not. Only when it settles the question outright: two volumes both
+    listing it is still a choice nobody can make from a filename, and
+    guessing puts a comic in the wrong folder, which is what this path
+    exists to avoid.
+    """
+
+    def _match(self, filename, volumes, ambiguous=None):
+        with patch.object(wfi, 'Volume', side_effect=lambda vid: volumes[vid]):
+            return wfi.match_file_to_library_volume(
+                filename, LibraryIndex(list(volumes)), ambiguous
+            )
+
+    def test_the_one_that_published_it_takes_it(self):
+        volumes = {
+            1: _FakeVolume(1, 'Nightwing', 2016, 1, '/l/1', range(1, 101)),
+            2: _FakeVolume(2, 'Nightwing', 2021, 1, '/l/2', range(1, 21))
+        }
+
+        self.assertEqual(
+            self._match('/inbound/Nightwing 087 (2021).cbz', volumes), 1
+        )
+
+    def test_both_publishing_it_is_still_nobody_to_choose(self):
+        volumes = {
+            1: _FakeVolume(1, 'Nightwing', 2016, 1, '/l/1', range(1, 101)),
+            2: _FakeVolume(2, 'Nightwing', 2021, 1, '/l/2', range(1, 101))
+        }
+        ambiguous = {}
+
+        self.assertIsNone(self._match(
+            '/inbound/Nightwing 087 (2021).cbz', volumes, ambiguous
+        ))
+        self.assertEqual(len(ambiguous), 1)
+
+    def test_neither_publishing_it_is_left_alone_too(self):
+        volumes = {
+            1: _FakeVolume(1, 'Nightwing', 2016, 1, '/l/1', range(1, 6)),
+            2: _FakeVolume(2, 'Nightwing', 2021, 1, '/l/2', range(1, 6))
+        }
+
+        self.assertIsNone(
+            self._match('/inbound/Nightwing 087 (2021).cbz', volumes)
+        )
+
+    def test_one_match_is_unaffected(self):
+        volumes = {1: _FakeVolume(1, 'Batman', 1940, 1, '/l/1', range(1, 101))}
+
+        self.assertEqual(
+            self._match('/inbound/Batman 087 (1946).cbz', volumes), 1
+        )
+
+
+class knowing_whether_a_volume_lists_an_issue(unittest.TestCase):
+    def test_a_number_it_has(self):
+        self.assertTrue(wfi._lists_issue({1.0: 2020, 2.0: 2020}, 2.0))
+
+    def test_a_number_it_does_not(self):
+        self.assertFalse(wfi._lists_issue({1.0: 2020}, 87.0))
+
+    def test_a_range_counts_if_either_end_is_there(self):
+        "A collected edition names a span; owning part of it is enough."
+        self.assertTrue(wfi._lists_issue({5.0: 2020}, (1.0, 5.0)))
+        self.assertFalse(wfi._lists_issue({9.0: 2020}, (1.0, 5.0)))
+
+    def test_a_file_naming_no_issue_says_nothing_either_way(self):
+        self.assertFalse(wfi._lists_issue({1.0: 2020}, None))

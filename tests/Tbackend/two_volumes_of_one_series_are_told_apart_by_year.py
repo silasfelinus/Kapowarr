@@ -156,3 +156,74 @@ class a_year_only_refuses_what_it_can_be_sure_of(unittest.TestCase):
         for name in ('Witch Hammer 02 (2023).cbz', 'Witch Hammer 03 (2024).cbz'):
             with self.subTest(name=name):
                 self.assertTrue(_imports(name, volume, _run(2018, 1)))
+
+
+class a_guess_gets_room_after_its_entry_not_before(unittest.TestCase):
+    """#191 exempted a volume the app *guessed* holds one issue from the
+    year check entirely, so that Witch Hammer -- one listed issue from 2018,
+    a series that ran to #3 in 2024 -- would take its own files.
+
+    Too generous by six decades. Strange Adventures (2021), classified the
+    same way from a single listed issue, then accepted a file dated 1955:
+    240 of them in the run of 2026-09-04, every one belonging to Strange
+    Adventures (1950).
+
+    What that case needs is room *after* the entry. A series that outran its
+    catalogue produces newer files, never older ones, and "a file cannot
+    predate the volume it belongs to" holds however thin the entry is.
+    """
+
+    def test_a_thin_entry_still_cannot_claim_a_much_older_file(self):
+        volume = _volume('Strange Adventures', 2021, SpecialVersion.TPB)
+
+        self.assertFalse(_imports(
+            'Strange Adventures, 1955-12-00 (#65).cbz', volume, _run(2021, 1)
+        ))
+
+    def test_the_run_that_was_publishing_then_takes_it(self):
+        self.assertTrue(_imports(
+            'Strange Adventures, 1955-12-00 (#65).cbz',
+            _volume('Strange Adventures', 1950), _run(1950, 200)
+        ))
+
+    def test_a_series_that_outran_its_entry_still_takes_its_own(self):
+        "The case the exemption exists for, unchanged."
+        volume = _volume('Witch Hammer', 2018, SpecialVersion.TPB)
+
+        for name in ('Witch Hammer 02 (2023).cbz', 'Witch Hammer 03 (2024).cbz'):
+            with self.subTest(name=name):
+                self.assertTrue(_imports(name, volume, _run(2018, 1)))
+
+    def test_a_file_from_before_a_thin_entry_began_is_refused(self):
+        volume = _volume('Witch Hammer', 2018, SpecialVersion.TPB)
+
+        self.assertFalse(_imports(
+            'Witch Hammer 01 (2009).cbz', volume, _run(2018, 1)
+        ))
+
+
+class a_volume_with_no_dates_is_not_judged_on_them(unittest.TestCase):
+    """A catalogue entry can carry issues and no dates at all. Reading its
+    start year as its end year then refuses every file it has, which is the
+    opposite of what a year check is for.
+    """
+
+    def _undated(self, count):
+        issues = [
+            SimpleNamespace(calculated_issue_number=float(n), date=None)
+            for n in range(1, count + 1)
+        ]
+        return issues, {i.calculated_issue_number: None for i in issues}
+
+    def test_a_later_file_is_still_taken(self):
+        self.assertTrue(_imports(
+            'Batman 087 (1946).cbz', _volume('Batman', 1940),
+            self._undated(100)
+        ))
+
+    def test_an_earlier_one_is_still_refused(self):
+        "The near end holds: a file cannot predate the volume it belongs to."
+        self.assertFalse(_imports(
+            'Batman 087 (1925).cbz', _volume('Batman', 1940),
+            self._undated(100)
+        ))

@@ -21,9 +21,13 @@ class _FakeVolume:
     """
 
     def __init__(self, volume_id, title, year, volume_number, folder,
-                 issues=range(1, 6)):
+                 issues=range(1, 6), dates=None):
         self.id = volume_id
         self._issues = list(issues)
+        # `{issue number: 'YYYY-MM-DD'}`, for the volumes whose catalogue
+        # entry actually dates its issues. ComicVine's usually does; the
+        # fixtures that predate this one did not care, and still do not.
+        self._dates = dates or {}
         self._data = SimpleNamespace(
             title=title,
             year=year,
@@ -37,7 +41,10 @@ class _FakeVolume:
 
     def get_issues(self, _skip_files=False):
         return [
-            SimpleNamespace(calculated_issue_number=float(n), date=None)
+            SimpleNamespace(
+                calculated_issue_number=float(n),
+                date=self._dates.get(n)
+            )
             for n in self._issues
         ]
 
@@ -667,9 +674,49 @@ class a_folder_of_stuck_files_is_reported_once(unittest.TestCase):
 
         joined = '\n'.join(captured.output)
         self.assertIn('20 file(s) could not be imported', joined)
-        # A sample to act on, not twenty lines of it.
-        self.assertIn('...and 15 more', joined)
-        self.assertEqual(len(captured.output), wfi.AMBIGUOUS_SAMPLE + 2)
+        # Twenty files, but one duplicate volume behind all of them: one
+        # decision, said once, with a file named so it can be found.
+        self.assertIn('across 1 set(s) of competing volumes', joined)
+        self.assertIn(
+            '20 file(s): Wonder Woman (2026) [id 1]; Wonder Woman (2026) '
+            '[id 2]',
+            joined
+        )
+        self.assertIn('e.g. /downloads/Wonder Woman 001.cbz', joined)
+        self.assertNotIn('...and', joined)
+        self.assertEqual(len(captured.output), 3)
+
+    def test_the_biggest_pile_is_named_first(self):
+        ambiguous = {'/downloads/small.cbz': 'C; D'}
+        ambiguous.update({
+            f'/downloads/big {n}.cbz': 'A; B' for n in range(10)
+        })
+
+        with self.assertLogs(wfi.LOGGER, level='WARNING') as captured:
+            wfi._report_ambiguous('Orphans', ambiguous)
+
+        joined = '\n'.join(captured.output)
+        self.assertIn('11 file(s) could not be imported', joined)
+        self.assertIn('across 2 set(s)', joined)
+        self.assertLess(joined.index('10 file(s): A; B'),
+                        joined.index('1 file(s): C; D'))
+
+    def test_too_many_sets_are_counted_rather_than_listed(self):
+        ambiguous = {
+            f'/downloads/{n}.cbz': f'Series {n} (2000) [id {n}]; '
+            f'Series {n} (2001) [id {n + 100}]'
+            for n in range(wfi.AMBIGUOUS_SAMPLE + 3)
+        }
+
+        with self.assertLogs(wfi.LOGGER, level='WARNING') as captured:
+            wfi._report_ambiguous('Orphans', ambiguous)
+
+        joined = '\n'.join(captured.output)
+        self.assertIn('...and 3 more set(s) covering 3 file(s)', joined)
+        # Summary + two lines per named set + the tail.
+        self.assertEqual(
+            len(captured.output), wfi.AMBIGUOUS_SAMPLE * 2 + 2
+        )
 
     def test_a_short_list_is_given_in_full(self):
         with self.assertLogs(wfi.LOGGER, level='WARNING') as captured:
@@ -677,9 +724,10 @@ class a_folder_of_stuck_files_is_reported_once(unittest.TestCase):
 
         joined = '\n'.join(captured.output)
         self.assertIn('1 file(s) could not be imported', joined)
-        self.assertIn('/downloads/a.cbz -> A; B', joined)
+        self.assertIn('1 file(s): A; B', joined)
+        self.assertIn('e.g. /downloads/a.cbz', joined)
         self.assertNotIn('...and', joined)
-        self.assertEqual(len(captured.output), 2)
+        self.assertEqual(len(captured.output), 3)
 
     def test_nothing_stuck_says_nothing(self):
         with patch.object(wfi.LOGGER, 'warning') as warn:
@@ -753,6 +801,146 @@ class the_volume_that_has_the_issue_wins(unittest.TestCase):
 
         self.assertEqual(
             self._match('/inbound/Batman 087 (1946).cbz', volumes), 1
+        )
+
+
+class the_run_that_dates_the_issue_takes_it(unittest.TestCase):
+    """Two runs of a series can both list the issue number a file names, and
+    then no amount of reading the filename separates them -- unless the two
+    catalogue entries disagree about *when* they published it, which they
+    almost always do.
+
+    Silas's 2026-09-04 log, after the year check had already cleared 299 of
+    997 stuck files: "Captain America 015 (2026)" was still competing
+    between Captain America (2023) and Captain America (2025). Both have a
+    #15. Only one of them dates it 2026 -- and the year in these release
+    names is the issue's cover year, which is exactly the number to compare
+    it against.
+    """
+
+    def _match(self, filename, volumes, ambiguous=None):
+        with patch.object(wfi, 'Volume', side_effect=lambda vid: volumes[vid]):
+            return wfi.match_file_to_library_volume(
+                filename, LibraryIndex(list(volumes)), ambiguous
+            )
+
+    def test_the_run_that_published_it_that_year_takes_it(self):
+        volumes = {
+            1: _FakeVolume(
+                1, 'Captain America', 2023, 1, '/l/1', range(1, 21),
+                dates={15: '2024-06-01'}
+            ),
+            2: _FakeVolume(
+                2, 'Captain America', 2025, 1, '/l/2', range(1, 21),
+                dates={15: '2026-07-01'}
+            )
+        }
+
+        self.assertEqual(
+            self._match(
+                '/inbound/Captain America 015 (2026) (Digital).cbz', volumes
+            ),
+            2
+        )
+
+    def test_a_cover_date_a_year_out_still_counts(self):
+        """A December issue is cover-dated into the next year as often as
+        not, so the nearest run wins rather than only an exact one."""
+        volumes = {
+            1: _FakeVolume(
+                1, 'Hellverine', 2024, 1, '/l/1', range(1, 6),
+                dates={4: '2025-01-01'}
+            ),
+            2: _FakeVolume(
+                2, 'Hellverine', 2025, 1, '/l/2', range(1, 6),
+                dates={4: '2026-03-01'}
+            )
+        }
+
+        self.assertEqual(
+            self._match('/inbound/Hellverine 004 (2024).cbz', volumes), 1
+        )
+
+    def test_the_same_year_from_both_settles_nothing(self):
+        volumes = {
+            1: _FakeVolume(
+                1, 'Hellverine', 2024, 1, '/l/1', range(1, 6),
+                dates={4: '2025-02-01'}
+            ),
+            2: _FakeVolume(
+                2, 'Hellverine', 2025, 1, '/l/2', range(1, 6),
+                dates={4: '2025-11-01'}
+            )
+        }
+        ambiguous = {}
+
+        self.assertIsNone(
+            self._match('/inbound/Hellverine 004 (2025).cbz', volumes,
+                        ambiguous)
+        )
+        self.assertEqual(len(ambiguous), 1)
+
+    def test_a_run_that_names_no_date_does_not_outvote_one_that_does(self):
+        volumes = {
+            1: _FakeVolume(
+                1, 'Catwoman', 2011, 1, '/l/1', range(1, 6),
+                dates={3: '2011-11-01'}
+            ),
+            2: _FakeVolume(2, 'Catwoman', 2012, 1, '/l/2', range(1, 6))
+        }
+
+        self.assertEqual(
+            self._match('/inbound/Catwoman 003 (2011).cbz', volumes), 1
+        )
+
+    def test_neither_naming_a_date_stays_ambiguous(self):
+        """The Nightwing case: two undated catalogue entries say nothing to
+        compare, and a guess would file the comic in the wrong folder."""
+        volumes = {
+            1: _FakeVolume(1, 'Nightwing', 2016, 1, '/l/1', range(1, 101)),
+            2: _FakeVolume(2, 'Nightwing', 2021, 1, '/l/2', range(1, 101))
+        }
+
+        self.assertIsNone(
+            self._match('/inbound/Nightwing 087 (2021).cbz', volumes)
+        )
+
+    def test_a_file_with_no_year_settles_nothing(self):
+        """Detective Comics 949 names no year, and the library holds two
+        entries covering the same run. That is library data to dedupe, not
+        something the matcher can read out of a filename."""
+        volumes = {
+            1: _FakeVolume(
+                1, 'Detective Comics', 1937, 1, '/l/1', range(940, 960),
+                dates={949: '2021-11-01'}
+            ),
+            2: _FakeVolume(
+                2, 'Detective Comics', 2017, 1, '/l/2', range(940, 960),
+                dates={949: '2021-11-01'}
+            )
+        }
+        ambiguous = {}
+
+        self.assertIsNone(
+            self._match('/inbound/Detective.Comics.949.cbz', volumes,
+                        ambiguous)
+        )
+        self.assertEqual(len(ambiguous), 1)
+
+    def test_a_year_nowhere_near_either_run_is_no_evidence(self):
+        volumes = {
+            1: _FakeVolume(
+                1, 'Green Lantern', 2005, 1, '/l/1', range(1, 40),
+                dates={24: '2007-12-01'}
+            ),
+            2: _FakeVolume(
+                2, 'Green Lantern', 2021, 1, '/l/2', range(1, 40),
+                dates={24: '2023-04-01'}
+            )
+        }
+
+        self.assertIsNone(
+            self._match('/inbound/Green Lantern 024 (2015).cbz', volumes)
         )
 
 

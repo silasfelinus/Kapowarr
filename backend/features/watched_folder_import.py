@@ -41,7 +41,7 @@ from __future__ import annotations
 from os.path import getmtime, isdir, isfile
 from time import time
 from typing import (Any, Callable, Container, Dict, Iterable, List,
-                    Mapping, Optional, Tuple, Union)
+                    Mapping, NamedTuple, Optional, Tuple, Union)
 
 from backend.base.definitions import (FileConstants, FilenameData,
                                       IssueData, VolumeData)
@@ -234,7 +234,7 @@ def match_parsed_to_library_volume(
 
     described_as = described_as or str(file_data['series'])
     matches: List[int] = []
-    lists_the_issue: List[int] = []
+    candidates: List[_Candidate] = []
     # `.get`, not `[...]`: `FilenameData` is a TypedDict and not every
     # caller fills every key -- the feed sync hands in what an indexer
     # gave it.
@@ -254,25 +254,19 @@ def match_parsed_to_library_volume(
             number_to_year
         ):
             matches.append(volume_id)
-            if _lists_issue(number_to_year, wanted):
-                lists_the_issue.append(volume_id)
+            candidates.append(_Candidate(
+                volume_id=volume_id,
+                lists_issue=_lists_issue(number_to_year, wanted),
+                issue_year=_issue_year(number_to_year, wanted)
+            ))
 
     if not matches:
         return None
 
     if len(matches) > 1:
-        # A volume that lists the issue is a better home for it than one
-        # that does not. Nightwing (2021) and Nightwing (2016) both pass the
-        # year check for a file numbered 87 -- 2021 is the one volume's
-        # first year and the other's eighty-seventh issue -- but only one of
-        # them has ever published an issue 87.
-        #
-        # Only when it settles the question outright. Two volumes both
-        # listing the issue is still a choice nobody can make from the
-        # filename, and guessing puts a comic in the wrong folder, which is
-        # what this whole path exists to avoid.
-        if len(lists_the_issue) == 1:
-            return lists_the_issue[0]
+        settled = _settle(candidates, file_data.get('year'))
+        if settled is not None:
+            return settled
 
         if ambiguous is not None:
             ambiguous[described_as] = _name_volumes(index, matches)
@@ -292,6 +286,125 @@ def match_parsed_to_library_volume(
         return None
 
     return matches[0]
+
+
+# How far the year in a filename may sit from the year the volume dates
+# that issue to and still be talking about the same comic. A cover date
+# runs a couple of months ahead of the ship date, so a December issue is
+# routinely tagged with either year; more than that and the two numbers
+# are not describing the same release.
+ISSUE_YEAR_SLACK = 1
+
+
+class _Candidate(NamedTuple):
+    """One volume that a file could belong to, and what it offers as proof."""
+
+    volume_id: int
+    "The volume."
+
+    lists_issue: bool
+    "Whether the volume has an issue by the number the file names at all."
+
+    issue_year: Union[int, None]
+    "The year the volume published that issue, where it knows."
+
+
+def _settle(
+    candidates: List[_Candidate],
+    file_year: Union[int, None]
+) -> Union[int, None]:
+    """Pick the one volume the evidence actually points at, or nobody.
+
+    The tie-breaks below are ordered by how much they know, and each one
+    only answers when it answers *outright* -- one candidate, no runners-up.
+    Two volumes that are equally good homes stay ambiguous on purpose:
+    guessing between them puts a comic in the wrong folder, which is the one
+    outcome this whole path exists to avoid.
+
+    Args:
+        candidates (List[_Candidate]): Every volume that passed the filter.
+
+        file_year (Union[int, None]): The year in the file's name. For the
+            release names this sees -- "Captain America 015 (2026)",
+            "Catwoman 003 (2011)", "Batman - The Dark Knight 023.4 (2013)" --
+            that is the *issue's* cover year, not the volume's first year,
+            so it is the issue's own date, not the volume's, that breaks
+            the tie.
+
+    Returns:
+        Union[int, None]: The volume's ID, or None if nothing settled it.
+    """
+    # A volume that lists the issue is a better home for it than one that
+    # does not. Nightwing (2021) and Nightwing (2016) both pass the year
+    # check for a file numbered 87 -- 2021 is the one volume's first year
+    # and the other's eighty-seventh issue -- but only one of them has ever
+    # published an issue 87.
+    listing = [c for c in candidates if c.lists_issue]
+    if len(listing) == 1:
+        return listing[0].volume_id
+
+    if file_year is None or not listing:
+        # Detective Comics 949 names no year, and both Detective Comics
+        # (1937) and Detective Comics (2017) list a 949. Nothing in the
+        # filename can separate those; the library has two entries for one
+        # run of comics, and that is where the fix belongs.
+        return None
+
+    # Both list it, so ask each what year it says that issue came out in.
+    # Captain America (2023) and Captain America (2025) both have a #15,
+    # but the 2023 run dates its #15 to 2024 and the 2025 run dates its own
+    # to 2026, and the file says 2026.
+    #
+    # A volume that has no date for the issue says nothing here and is not
+    # counted against one that does: "I published this in 2021" beats
+    # silence. It does not beat another volume saying the same thing, and
+    # two silent volumes settle nothing -- which is the Nightwing case, and
+    # stays ambiguous.
+    dated = [c for c in listing if c.issue_year is not None]
+    if not dated:
+        return None
+
+    distances = [
+        (abs((c.issue_year or 0) - file_year), c) for c in dated
+    ]
+    closest = min(distance for distance, _ in distances)
+    if closest > ISSUE_YEAR_SLACK:
+        # Nothing here published it anywhere near then; the year in the
+        # name is measuring something else and is no help.
+        return None
+
+    nearest = [c for distance, c in distances if distance == closest]
+    if len(nearest) == 1:
+        return nearest[0].volume_id
+
+    return None
+
+
+def _issue_year(
+    number_to_year: Mapping[float, Union[int, None]],
+    issue_number: Any
+) -> Union[int, None]:
+    """The year the volume published that issue, where it says.
+
+    Args:
+        number_to_year (Mapping[float, Union[int, None]]): The volume's
+            issues, by number.
+        issue_number (Any): What the file says it is. For a range, the year
+            of whichever end the volume knows about.
+
+    Returns:
+        Union[int, None]: The year, or None if the volume does not list the
+            issue or has no date for it.
+    """
+    if issue_number is None:
+        return None
+
+    ends = issue_number if isinstance(issue_number, tuple) else (issue_number,)
+    for end in ends:
+        year = number_to_year.get(end)
+        if year is not None:
+            return year
+    return None
 
 
 def _lists_issue(
@@ -450,15 +563,18 @@ def run_watched_folder_import(
         watched_folder, should_stop, description='Watched folder')
 
 
-# How many stuck files to name before saying how many more there are. A
-# scan that reports every one of them says the same thing on every pass:
-# 2026-09-03's log was 4,155 such lines across two hours, 97% of the file,
-# for 997 files that had been stuck for days.
-AMBIGUOUS_SAMPLE = 5
+# How many *pairs* to name before saying how many more there are. Listing
+# stuck files one per line said the same thing on every pass -- 2026-09-03's
+# log was 4,155 such lines across two hours, 97% of the file, for 997 files
+# -- and the file was never the unit anyone could act on. Once the matcher
+# settles what a filename can settle, everything left is one library holding
+# two entries for one run of comics, so the pair is the unit: 698 files were
+# only ever a handful of duplicate volumes, each of which is one decision.
+AMBIGUOUS_SAMPLE = 8
 
 
 def _report_ambiguous(description: str, ambiguous: Dict[str, str]) -> None:
-    """Say what could not be filed, once, with enough of it to act on.
+    """Say what could not be filed, once, grouped by the decision it needs.
 
     Args:
         description (str): What to call this pass in the log.
@@ -467,20 +583,33 @@ def _report_ambiguous(description: str, ambiguous: Dict[str, str]) -> None:
     if not ambiguous:
         return
 
+    by_competitors: Dict[str, List[str]] = {}
+    for described_as, competing in ambiguous.items():
+        by_competitors.setdefault(competing, []).append(described_as)
+
+    groups = sorted(
+        by_competitors.items(), key=lambda kv: len(kv[1]), reverse=True
+    )
+
     LOGGER.warning(
         '%s: %d file(s) could not be imported because their name matches '
-        'more than one volume in the library. They will be found again on '
-        'every pass, and re-downloaded, until the library stops offering '
-        'two homes for them.',
-        description, len(ambiguous)
+        'more than one volume in the library, across %d set(s) of competing '
+        'volumes. Nothing in a filename can separate these -- the library '
+        'has more than one entry for the same run of comics, and removing '
+        'the duplicate lets every file under it through at once.',
+        description, len(ambiguous), len(groups)
     )
-    for described_as, competing in list(ambiguous.items())[:AMBIGUOUS_SAMPLE]:
-        LOGGER.warning('%s:   %s -> %s', description, described_as, competing)
-
-    if len(ambiguous) > AMBIGUOUS_SAMPLE:
+    for competing, files in groups[:AMBIGUOUS_SAMPLE]:
         LOGGER.warning(
-            '%s:   ...and %d more',
-            description, len(ambiguous) - AMBIGUOUS_SAMPLE
+            '%s:   %d file(s): %s', description, len(files), competing
+        )
+        LOGGER.warning('%s:     e.g. %s', description, files[0])
+
+    if len(groups) > AMBIGUOUS_SAMPLE:
+        remaining = groups[AMBIGUOUS_SAMPLE:]
+        LOGGER.warning(
+            '%s:   ...and %d more set(s) covering %d file(s)',
+            description, len(remaining), sum(len(f) for _, f in remaining)
         )
     return
 

@@ -49,7 +49,12 @@ issue_regex_4 = compile(r'(?<!--)(?:annuals?[\s\._])?(?<!pages\s)(?:#\s*)?(\-?' 
 issue_regex_5 = compile(r'(?<!page\s)(?:annuals?[\s\._])?#\s*(\-?' + issue_regex_snippet + r')\b(?!(?:\-|\s\-\s|\.\-\.)' + issue_regex_snippet + r')', IGNORECASE)
 issue_regex_6 = compile(r'(?:(?P<i_start>^)|(?<=(?<!part)(?<!page)[\s\._])(?P<n_c>n))(\-?' + issue_regex_snippet + r')(?=(?(n_c)c\d+|\s\-)(?=\s|\.|_|(?=\()|$))', IGNORECASE)
 issue_regex_7 = compile(r'(?:part[\s\._]|annuals?[\s\._]|(?<=[\s\._])|^)(\-?' + issue_regex_snippet + r')(?![\s\-\._]covers?)(?![\s\-\._]of[\s\-\._]\d+[\s\-\._]covers?)(?=\s|\.|_|\(|$)', IGNORECASE)
-year_regex = compile(r'\((?:[a-z]+\.?\s)?' + year_regex_snippet + r'\)|--' + year_regex_snippet + r'--|__' + year_regex_snippet + r'__|, ' + year_regex_snippet + r'\s{3}|\b(?:(?:\d{2}-){1,2}(\d{4})|(\d{4})(?:-\d{2}){1,2})\b', IGNORECASE)
+# Up to two words may sit between the opening bracket and the year, not
+# one: cover dates are written as a month range as often as a month, and
+# "Green Lantern 024 (DC) (Feb-Mar 1947)" was reading as having no year at
+# all. A file with no year is a file the importer cannot rule any volume
+# out for, so that one unread bracket had it matching five Green Lanterns.
+year_regex = compile(r'\((?:[a-z]+\.?[\s\-]){0,2}' + year_regex_snippet + r'\)|--' + year_regex_snippet + r'--|__' + year_regex_snippet + r'__|, ' + year_regex_snippet + r'\s{3}|\b(?:(?:\d{2}-){1,2}(\d{4})|(\d{4})(?:-\d{2}){1,2})\b', IGNORECASE)
 series_regex = compile(r'(^(\d+\.)?\s+|^\d+\s{3}|\s(?=\s)|[\s,]+$)')
 annual_regex = compile(r'(?:\+|plus)[\s\._]?annuals?|annuals?[\s\._]?(?:\+|plus)|^((?!annuals?).)*$', IGNORECASE) # If regex matches, it's NOT an annual
 annual_prefix_regex = compile(r'annuals?[\s\._]', IGNORECASE)

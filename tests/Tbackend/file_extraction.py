@@ -165,6 +165,48 @@ class extract_filename_data(unittest.TestCase):
         }
         self.run_cases(cases)
 
+    def test_a_year_nobody_could_have_printed(self):
+        """Mylar wrote 2099 as the year of any series with no official
+        release when it was added, so a library migrated from it is full
+        of folders like "Vampirella (2099)". A file inside one whose own
+        name carries no year takes the folder's -- and since the year
+        check landed, 2099 is seventy years past anything the volume ever
+        published, so the volume refused its own comic.
+
+        A year that far ahead is a placeholder, not a date, and a file
+        with no year leaves every volume in the running. Which is right:
+        nothing was learned.
+        """
+        cases = {
+            'Vampirella/Vampirella (2099)/Vampirella 005.cbz':
+                {'series': 'Vampirella', 'year': None, 'volume_number': 1, 'special_version': None, 'issue_number': 5.0, 'annual': False},
+
+            'Aliens/Alien (2099)/Alien 003.cbz':
+                {'series': 'Alien', 'year': None, 'volume_number': 1, 'special_version': None, 'issue_number': 3.0, 'annual': False},
+        }
+        self.run_cases(cases)
+    # autopep8: on
+
+    def test_a_year_the_file_really_carries_is_believed(self):
+        """The sentinel is thrown away; a real year in the same folder is
+        not. Nor is next year's -- a comic is cover-dated ahead of when it
+        ships."""
+        from datetime import date
+
+        from backend.base.file_extraction import (YEAR_HEADROOM,
+                                                  year_is_plausible)
+
+        self.assertFalse(year_is_plausible(2099, today=2026))
+        self.assertTrue(year_is_plausible(1947, today=2026))
+        self.assertTrue(year_is_plausible(2026, today=2026))
+        self.assertTrue(
+            year_is_plausible(2026 + YEAR_HEADROOM, today=2026))
+        self.assertFalse(
+            year_is_plausible(2026 + YEAR_HEADROOM + 1, today=2026))
+        # And it moves with the clock rather than against a fixed ceiling.
+        self.assertTrue(year_is_plausible(date.today().year))
+
+    # autopep8: off
     def test_cover_date_ranges(self):
         """A cover date is written as a month range as often as a month, and
         a bracket the year regex could not read was a file with no year at

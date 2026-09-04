@@ -5,6 +5,7 @@ Extracting comic data (like series name, issue number, etc.) from a string and
 generalising it. The string can be a filepath, filename, search result title, etc.
 """
 
+from datetime import date
 from os.path import basename, dirname, splitext
 from re import IGNORECASE, Pattern, compile
 from typing import Collection, Dict, Tuple, TypeVar, Union
@@ -54,6 +55,37 @@ issue_regex_7 = compile(r'(?:part[\s\._]|annuals?[\s\._]|(?<=[\s\._])|^)(\-?' + 
 # "Green Lantern 024 (DC) (Feb-Mar 1947)" was reading as having no year at
 # all. A file with no year is a file the importer cannot rule any volume
 # out for, so that one unread bracket had it matching five Green Lanterns.
+# How far ahead of today a cover date can plausibly be. A comic dated a
+# few months into next year is routine; anything past that is not a date.
+#
+# Mylar wrote 2099 as the year of any series with no official release at
+# the time it was added, and libraries migrated from it are full of
+# folders like "Vampirella (2099)" and "Alien (2099)". A file inside one
+# whose own name carries no year takes the folder's, so since the year
+# check landed those files were refused by their own volume -- 2099 is
+# seventy years past anything the volume has published. Read as a
+# sentinel it means what it always meant: nobody knows.
+YEAR_HEADROOM = 2
+
+
+def year_is_plausible(year: int, today: Union[int, None] = None) -> bool:
+    """Whether a number found in a name can be a comic's cover year.
+
+    Args:
+        year (int): The year that was parsed out.
+
+        today (Union[int, None], optional): The current year, for tests.
+            Defaults to None, meaning ask the clock.
+
+    Returns:
+        bool: Whether to believe it. A year too far ahead is a placeholder
+            or a mis-parse, and saying nothing about a file's year leaves
+            every volume in the running -- which is right, because nothing
+            was learned.
+    """
+    return year <= (today or date.today().year) + YEAR_HEADROOM
+
+
 year_regex = compile(r'\((?:[a-z]+\.?[\s\-]){0,2}' + year_regex_snippet + r'\)|--' + year_regex_snippet + r'--|__' + year_regex_snippet + r'__|, ' + year_regex_snippet + r'\s{3}|\b(?:(?:\d{2}-){1,2}(\d{4})|(\d{4})(?:-\d{2}){1,2})\b', IGNORECASE)
 series_regex = compile(r'(^(\d+\.)?\s+|^\d+\s{3}|\s(?=\s)|[\s,]+$)')
 annual_regex = compile(r'(?:\+|plus)[\s\._]?annuals?|annuals?[\s\._]?(?:\+|plus)|^((?!annuals?).)*$', IGNORECASE) # If regex matches, it's NOT an annual
@@ -627,6 +659,8 @@ def extract_filename_data(
     year = int(year) if year else None
     if fix_year and year is not None:
         year = fix_broken_year(year)
+    if year is not None and not year_is_plausible(year):
+        year = None
 
     file_data = FilenameData({
         'series': series,

@@ -25,15 +25,21 @@ test('the Review Holds enhancer is loaded after the base review UI', () => {
 	assert.ok(review >= 0 && search > review);
 });
 
-test('opening Edit Match immediately searches the proposed title', () => {
+test('opening Edit Match offers the proposed title without searching', () => {
+	// It used to search on open. Silas, 2026-09-04: "we should kill whatever
+	// is auto-searching, it would be better to edit first anyway." The query
+	// it fired was the whole release filename -- the worst question
+	// available and the most expensive one to ask -- and it had to finish
+	// before the field could usefully be edited.
 	const open = functionBody(searchUi, 'openEditCVMatch', 'buildProposalRow');
 	assert.match(open, /LIEls\.search\.input\.value = rowSearchQuery\(rowid\)/);
-	assert.match(open, /if \(LIEls\.search\.input\.value\)\s*\n\s*searchCV\(\)/);
+	assert.doesNotMatch(open, /searchCV\(\)/);
 });
 
-test('the first automatic query prefers the existing proposed match', () => {
+test('the offered query prefers the existing proposed match', () => {
 	assert.match(searchUi, /const proposed = stripResultYear\(row\?\.querySelector\('a'\)\?\.innerText\)/);
-	assert.match(searchUi, /return proposed \|\| item\.file_title \|\| ''/);
+	// Falling back to the filename, with the release tags taken off it.
+	assert.match(searchUi, /return proposed \|\| seriesFrom\(item\.file_title\) \|\| ''/);
 });
 
 test('an in-flight query cannot be duplicated by repeated submits', () => {

@@ -127,17 +127,13 @@ test('a remembered set naming nothing configured is discarded', () => {
 	assert.match(load, /if \(!providers\.some\(p => p\.on\)\)/);
 });
 
-test('the toggles are on screen before the first search runs', () => {
-	// The dialog searches the proposed title as soon as it opens, and that
-	// search has to honour the choice the toggles are about to show as
-	// already made.
+test('the toggles are on screen before anything can be searched', () => {
 	const open = source.slice(
 		source.indexOf('window.openEditCVMatch'),
 		source.indexOf('window.buildProposalRow')
 	);
 
 	assert.match(open, /loadProviders\(\)\.then/);
-	assert.match(open, /searchCV\(\)/);
 });
 
 test('the search sends the choice with the query', () => {

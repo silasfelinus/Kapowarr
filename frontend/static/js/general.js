@@ -41,10 +41,18 @@ function buildQuery(params) {
 	).join('&');
 };
 
-async function fetchAPI(endpoint, api_key, params={}, json_return=true) {
+async function fetchAPI(endpoint, api_key, params={}, json_return=true,
+		options={}) {
 	const formatted_params = buildQuery(params);
 
-	return fetch(`${url_base}/api${endpoint}?api_key=${api_key}${formatted_params}`)
+	// `options` is for an AbortSignal, so a caller can stop waiting on a
+	// request that is never coming back. A browser opens about six
+	// connections per host and a hanging request keeps one of them, so
+	// enough of them make the whole site unreachable from that browser.
+	return fetch(
+		`${url_base}/api${endpoint}?api_key=${api_key}${formatted_params}`,
+		options
+	)
 	.then(response => {
 		if (!response.ok) return Promise.reject(response);
 		if (json_return)

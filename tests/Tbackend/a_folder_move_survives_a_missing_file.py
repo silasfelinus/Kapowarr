@@ -136,3 +136,107 @@ class a_row_with_no_file_behind_it(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class a_volume_carrying_another_series(unittest.TestCase):
+    """`/content/Black Hammer/Black Hammer Omnibus (2022)` was a landing
+    zone. Superman: The Man of Steel's folder was set to it, and its 116
+    files included seven Web of Spider-Man issues, two German Catwoman
+    collections and a One-Punch Man volume -- all linked to Superman's
+    issues by an earlier import.
+
+    Moving the volume moved them too, deeper into the wrong series, and
+    said nothing. They have to move -- they are linked to this volume's
+    issues, and leaving them behind strands them outside any volume folder
+    at all -- but the move is the moment the mistake is visible, and
+    nobody can act on what they are not told.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = self.tmp.name
+        self.old = os.path.join(self.root, 'Black Hammer Omnibus (2022)')
+        self.new = os.path.join(self.root, 'Superman The Man of Steel (1991)')
+        os.makedirs(os.path.join(self.old, 'Web.Of.Spider-Man.106'))
+
+        self.files = []
+        for name in (
+            'Superman - The Man of Steel 09.cbr',
+            'Web.Of.Spider-Man.106/Web of Spider-Man 101 (1993).cbz'
+        ):
+            path = os.path.join(self.old, name)
+            with open(path, 'wb') as f:
+                f.write(b'x')
+            self.files.append(path)
+
+    def _move(self):
+        volume = Volume.__new__(Volume)
+        volume.id = 1691
+
+        with patch.object(
+            Volume, 'get_data',
+            return_value=SimpleNamespace(
+                title='Superman: The Man of Steel', year=1991,
+                volume_number=1, special_version=None, root_folder=1,
+                folder=self.old
+            )
+        ), patch.object(
+            Volume, 'get_all_files',
+            return_value=[{'filepath': f} for f in self.files]
+        ), patch.object(
+            Volume, 'update'
+        ), patch(
+            'backend.implementations.volumes.RootFolders',
+            return_value={1: self.root}
+        ), patch(
+            'backend.implementations.naming.generate_volume_folder_path',
+            return_value=self.new
+        ), patch(
+            'backend.implementations.volumes.rename_file'
+        ), patch(
+            'backend.implementations.volumes.FilesDB'
+        ), patch(
+            'backend.implementations.volumes.delete_empty_child_folders'
+        ), patch(
+            'backend.implementations.volumes.delete_empty_parent_folders'
+        ), patch(
+            'backend.implementations.volumes.folder_is_inside_folder',
+            return_value=False
+        ), patch.object(
+            Volume, '_Volume__volume_folder_used_by_other_volume',
+            return_value=True
+        ), patch(
+            'backend.implementations.volumes.mass_process_files'
+        ), patch(
+            'backend.implementations.volumes.Settings',
+            return_value=SimpleNamespace(
+                sv=SimpleNamespace(create_empty_volume_folders=False)
+            )
+        ):
+            volume.change_volume_folder(None)
+
+    def test_the_stranger_is_named(self):
+        with self.assertLogs(LOGGER, level='WARNING') as captured:
+            self._move()
+
+        joined = '\n'.join(captured.output)
+        self.assertIn('name a different series', joined)
+        self.assertIn('Web of Spider-Man 101', joined)
+        self.assertIn('1 file(s)', joined)
+
+    def test_the_volumes_own_file_is_not_called_a_stranger(self):
+        with self.assertLogs(LOGGER, level='WARNING') as captured:
+            self._move()
+
+        self.assertNotIn(
+            'Superman - The Man of Steel 09', '\n'.join(captured.output)
+        )
+
+    def test_a_volume_carrying_only_its_own_says_nothing(self):
+        self.files = [self.files[0]]
+
+        with patch.object(LOGGER, 'warning') as warn:
+            self._move()
+
+        warn.assert_not_called()

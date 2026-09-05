@@ -7,6 +7,7 @@ public API intact while allowing the durable Continuous Library Import to run in
 its own lane instead of monopolising every unrelated task for hours.
 """
 
+from itertools import count
 from threading import RLock, Thread
 from time import monotonic, sleep, time
 
@@ -21,6 +22,24 @@ from backend.internals.server import (TaskAddedEvent, TaskEndedEvent,
 
 _TASK_QUEUE_LOCK = RLock()
 TaskHandler.queue_lock = _TASK_QUEUE_LOCK
+
+# A task's id had been `queue[-1]['id'] + 1`, which is not a sequence: it
+# reads the tail of a list entries are removed from the middle of, so
+# finishing the newest task hands its number to the next one. A long job
+# with short ones coming and going behind it -- Watched Folder Import (5)
+# still queued while Feed Sync ran four times, which is every quarter of
+# an hour on Silas's box -- reissues the same id over and over.
+#
+# The UI waits out a maintenance pass by polling `/system/tasks` for the
+# id it was given and finishing when nothing has it. A reissued id means
+# it finds a stranger instead: the pass had long since finished, but
+# "Reset & Re-evaluate Holds" sat disabled showing Recover Orphaned
+# Downloads' message, "Checking the download folder for anything left
+# behind" (2026-09-05).
+#
+# So count, and never look back. Ids only have to be unique among the
+# tasks alive at one time; nothing reads meaning into their size.
+_TASK_IDS = count(1)
 
 # These scheduled jobs should never stack duplicate copies while one is already
 # queued/running. In the old single lane, a long continuous import could let
@@ -159,7 +178,7 @@ def _add_laned(self, task) -> int:
                 )
                 return existing['id']
 
-        task_id = self.queue[-1]['id'] + 1 if self.queue else 1
+        task_id = next(_TASK_IDS)
         entry = {
             'task': task,
             'id': task_id,

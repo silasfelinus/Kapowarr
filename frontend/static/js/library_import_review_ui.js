@@ -510,10 +510,12 @@
 			row => row.dataset.hasMatch === 'true'
 		).length;
 
-		if (matchedOnly)
-			summary.innerText = `${matched} matched volume groups shown · ${heads.length} total`;
-		else
-			summary.innerText = `${heads.length} volume groups · ${matched} with a proposed match`;
+		// Called from `applyMatchFilter`, which every checkbox and every
+		// group refresh runs through.
+		setText(summary, matchedOnly
+			? `${matched} matched volume groups shown · ${heads.length} total`
+			: `${heads.length} volume groups · ${matched} with a proposed match`
+		);
 	};
 
 	function applyMatchFilter() {
@@ -569,17 +571,38 @@
 			groups.get(groupNumber).push(row);
 		});
 
+		// Read every group before writing to any of them.
+		//
+		// `innerText` is layout-aware, so reading it forces a style and
+		// layout recalculation -- and `row.hidden` below invalidates
+		// layout again. Interleaved per group, that is one forced layout
+		// per group for as many groups as the page holds, each one
+		// walking a table that grows with the review backlog. It is the
+		// second half of the freeze the profile caught: with the
+		// once-a-second timer fixed, `set innerText` was still 38% of the
+		// recording and this is where the rest of it lives.
+		//
+		// Split into a pass that only reads and a pass that only writes,
+		// the whole render costs one layout instead of one per group.
+		// Nothing about what it decides changes.
+		const plans = [];
 		groups.forEach((rows, groupNumber) => {
-			const head = rows[0];
-			const matched = rows.some(rowHasMatch);
-			const fileEntries = rows.map(row => {
-				const cell = row.querySelector('.file-column');
-				return {
-					name: cell?.innerText || 'Untitled file',
-					path: cell?.title || ''
-				};
+			plans.push({
+				groupNumber,
+				rows,
+				head: rows[0],
+				matched: rows.some(rowHasMatch),
+				fileEntries: rows.map(row => {
+					const cell = row.querySelector('.file-column');
+					return {
+						name: cell?.innerText || 'Untitled file',
+						path: cell?.title || ''
+					};
+				})
 			});
+		});
 
+		plans.forEach(({groupNumber, rows, head, matched, fileEntries}) => {
 			rows.forEach((row, index) => {
 				row.dataset.volumeHead = index === 0 ? 'true' : 'false';
 				row.dataset.volumeChild = index === 0 ? 'false' : 'true';
@@ -608,11 +631,11 @@
 					const details = document.createElement('details');
 					details.className = 'volume-file-details';
 					const summary = document.createElement('summary');
-					summary.innerText = `${fileEntries.length} files`;
+					summary.textContent = `${fileEntries.length} files`;
 					const list = document.createElement('ul');
 					fileEntries.forEach(file => {
 						const item = document.createElement('li');
-						item.innerText = file.name;
+						item.textContent = file.name;
 						item.title = file.path;
 						list.appendChild(item);
 					});
@@ -671,9 +694,30 @@
 
 	const searchResults = document.querySelector('.search-results');
 	if (searchResults) {
+		// This observer writes into the subtree it observes, which is a
+		// loop unless the write is conditional.
+		//
+		// `innerText = 'Select'` does not compare anything: the setter
+		// replaces the element's children with a new text node every time,
+		// even when the text is already that. Inside a `childList` +
+		// `subtree` observer on the same element, each write is a mutation
+		// the observer is watching for, so it calls this back, which
+		// writes again, forever.
+		//
+		// It only bites once a search returns: `.search-results` is empty
+		// until then, so there are no buttons to relabel and nothing to
+		// mutate. That is why the tab locked up on searching and looked
+		// like the search's fault, and why an ad blocker showed as 60% of
+		// the profile -- its own observer was being woken by our runaway
+		// mutations, so it was a passenger with a very loud seat
+		// (2026-09-05).
+		//
+		// `setText` returns without touching the DOM when the text already
+		// matches, so the second pass mutates nothing and the loop ends
+		// after one. Never write into an observed subtree unconditionally.
 		const relabelGroupSelect = () => {
 			searchResults.querySelectorAll('td:nth-child(4) button').forEach(
-				button => button.innerText = 'Select'
+				button => setText(button, 'Select')
 			);
 		};
 		new MutationObserver(relabelGroupSelect).observe(

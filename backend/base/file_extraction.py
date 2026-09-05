@@ -537,12 +537,14 @@ def extract_filename_data(
             )
 
     # If allowed, make assumption
+    volume_number_assumed = False
     if (
         assume_volume_number
         and not volume_result
         and not volume_folder_result
     ):
         volume_number = 1
+        volume_number_assumed = True
 
     # Check for Special Version
     if not special_version:
@@ -668,7 +670,8 @@ def extract_filename_data(
         'volume_number': volume_number,
         'special_version': special_version,
         'issue_number': calculated_issue_number,
-        'annual': annual
+        'annual': annual,
+        'volume_number_assumed': volume_number_assumed
     })
 
     LOGGER.debug(f'Extracting filename data: {file_data}')

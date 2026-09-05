@@ -510,10 +510,12 @@
 			row => row.dataset.hasMatch === 'true'
 		).length;
 
-		if (matchedOnly)
-			summary.innerText = `${matched} matched volume groups shown · ${heads.length} total`;
-		else
-			summary.innerText = `${heads.length} volume groups · ${matched} with a proposed match`;
+		// Called from `applyMatchFilter`, which every checkbox and every
+		// group refresh runs through.
+		setText(summary, matchedOnly
+			? `${matched} matched volume groups shown · ${heads.length} total`
+			: `${heads.length} volume groups · ${matched} with a proposed match`
+		);
 	};
 
 	function applyMatchFilter() {
@@ -569,17 +571,38 @@
 			groups.get(groupNumber).push(row);
 		});
 
+		// Read every group before writing to any of them.
+		//
+		// `innerText` is layout-aware, so reading it forces a style and
+		// layout recalculation -- and `row.hidden` below invalidates
+		// layout again. Interleaved per group, that is one forced layout
+		// per group for as many groups as the page holds, each one
+		// walking a table that grows with the review backlog. It is the
+		// second half of the freeze the profile caught: with the
+		// once-a-second timer fixed, `set innerText` was still 38% of the
+		// recording and this is where the rest of it lives.
+		//
+		// Split into a pass that only reads and a pass that only writes,
+		// the whole render costs one layout instead of one per group.
+		// Nothing about what it decides changes.
+		const plans = [];
 		groups.forEach((rows, groupNumber) => {
-			const head = rows[0];
-			const matched = rows.some(rowHasMatch);
-			const fileEntries = rows.map(row => {
-				const cell = row.querySelector('.file-column');
-				return {
-					name: cell?.innerText || 'Untitled file',
-					path: cell?.title || ''
-				};
+			plans.push({
+				groupNumber,
+				rows,
+				head: rows[0],
+				matched: rows.some(rowHasMatch),
+				fileEntries: rows.map(row => {
+					const cell = row.querySelector('.file-column');
+					return {
+						name: cell?.innerText || 'Untitled file',
+						path: cell?.title || ''
+					};
+				})
 			});
+		});
 
+		plans.forEach(({groupNumber, rows, head, matched, fileEntries}) => {
 			rows.forEach((row, index) => {
 				row.dataset.volumeHead = index === 0 ? 'true' : 'false';
 				row.dataset.volumeChild = index === 0 ? 'false' : 'true';
@@ -608,11 +631,11 @@
 					const details = document.createElement('details');
 					details.className = 'volume-file-details';
 					const summary = document.createElement('summary');
-					summary.innerText = `${fileEntries.length} files`;
+					summary.textContent = `${fileEntries.length} files`;
 					const list = document.createElement('ul');
 					fileEntries.forEach(file => {
 						const item = document.createElement('li');
-						item.innerText = file.name;
+						item.textContent = file.name;
 						item.title = file.path;
 						list.appendChild(item);
 					});
@@ -673,7 +696,7 @@
 	if (searchResults) {
 		const relabelGroupSelect = () => {
 			searchResults.querySelectorAll('td:nth-child(4) button').forEach(
-				button => button.innerText = 'Select'
+				button => setText(button, 'Select')
 			);
 		};
 		new MutationObserver(relabelGroupSelect).observe(

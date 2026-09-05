@@ -106,7 +106,50 @@ test('no timer callback in this file touches innerText', () => {
 	// this is the tripwire that makes anyone adding the fourteenth look.
 	const writes = script.match(/\.innerText = /g) || [];
 	assert.equal(
-		writes.length, 14,
+		writes.length, 9,
 		'innerText writes changed -- check the new one is not on a timer'
 	);
+});
+
+
+test('the group render reads every group before it writes to any', () => {
+	// `innerText` reads force layout and `row.hidden` writes invalidate it.
+	// Interleaved per group that is one forced layout per group; split into
+	// a read pass and a write pass it is one for the whole render.
+	const start = script.indexOf('function collapseRenderedRows');
+	assert.notEqual(start, -1);
+	const body = script.slice(start, script.indexOf('\n\tfunction ', start + 10));
+
+	const readPass = body.indexOf('plans.push(');
+	const writePass = body.indexOf('plans.forEach(');
+	assert.ok(readPass > -1, 'there is a read pass');
+	assert.ok(writePass > readPass, 'and it comes before the write pass');
+
+	// Nothing after the write pass begins may *read* innerText. A write is
+	// harmless here -- it is the read that forces layout mid-render.
+	const after = body.slice(writePass);
+	const reads = [...after.matchAll(/\.innerText\b(?!\s*=)/g)];
+	assert.deepEqual(
+		reads.map(m => after.slice(Math.max(0, m.index - 30), m.index + 10)),
+		[],
+		'a write pass that reads innerText puts the thrash back'
+	);
+});
+
+test('the row hiding happens after the reads, not between them', () => {
+	const start = script.indexOf('function collapseRenderedRows');
+	const body = script.slice(start, script.indexOf('\n\tfunction ', start + 10));
+
+	assert.ok(
+		body.indexOf('row.hidden = index !== 0') > body.indexOf('plans.forEach('),
+		'hiding rows is a write and belongs in the write pass'
+	);
+});
+
+test('the volume summary is written through setText too', () => {
+	const start = script.indexOf('function updateSummary');
+	const body = script.slice(start, script.indexOf('\n\tfunction ', start + 10));
+
+	assert.doesNotMatch(body, /\.innerText\b/);
+	assert.match(body, /setText\(summary,/);
 });

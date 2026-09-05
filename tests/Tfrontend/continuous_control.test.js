@@ -31,8 +31,13 @@ function control(job, live, opts) {
 			remove(n) { button.classes.delete(n); }
 		}
 	};
+	// The panel's other control. `renderContinuousControl` labels it too --
+	// it is the only way back to the import options, and what it should say
+	// depends on whether a pass is still running. Covered on its own in
+	// `the_way_back_says_where_it_goes.test.js`; here it just has to exist.
+	const back = {innerText: ''};
 	const context = vm.createContext({
-		LIEls: {buttons: {continuous_stop: button}},
+		LIEls: {buttons: {continuous_stop: button, continuous_back: back}},
 		continuousStopRequested: (opts || {}).stopRequested || false,
 		job, live
 	});

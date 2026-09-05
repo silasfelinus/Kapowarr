@@ -573,6 +573,19 @@ function paintContinuousStatus(snapshot) {
 // explanation, and no way to pick the pass back up from the panel that was
 // telling you it had stopped.
 function renderContinuousControl(job, live) {
+	// The way back to the import options is this button, and its label was
+	// fixed in the template. So a finished pass -- 490/490 folders, nothing
+	// left to run -- still offered to "Run in Background", which is not a
+	// description of anything and reads as a control for the import rather
+	// than a way out of the panel. Silas, 2026-09-05: "run in background is
+	// a pretty opaque way to get back to the main screen."
+	//
+	// Same rule as the stop/resume button below: say what pressing it does
+	// from where the page actually is.
+	LIEls.buttons.continuous_back.innerText = live
+		? 'Run in Background'
+		: 'Back to Import Options';
+
 	const button = LIEls.buttons.continuous_stop;
 	button.classList.remove('hidden');
 

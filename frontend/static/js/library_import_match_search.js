@@ -6,6 +6,9 @@
 	// hatch when the first query is too specific.
 	let searchInFlight = null;
 	let searchInFlightQuery = null;
+	// The controller for the request currently in flight, so the dialog can
+	// abandon it when it closes.
+	let searchGiveUp = null;
 
 	const originalBuildProposalRow = buildProposalRow;
 	const originalImportLibrary = importLibrary;
@@ -303,6 +306,7 @@
 		// twenty seconds; this is the backstop for a response that never
 		// arrives at all.
 		const giveUp = new AbortController();
+		searchGiveUp = giveUp;
 		const abandon = setTimeout(() => giveUp.abort(), SEARCH_GIVE_UP_MS);
 
 		searchInFlight = usingApiKey()
@@ -330,8 +334,33 @@
 			setSearchBusy(false);
 			searchInFlight = null;
 			searchInFlightQuery = null;
+			if (searchGiveUp === giveUp) searchGiveUp = null;
 		});
 		return searchInFlight;
+	};
+
+	// Closing the dialog abandons the search it started.
+	//
+	// Cancel called `closeWindow()`, which hides the dialog and nothing
+	// else: the request stayed on one of the browser's six connections to
+	// this host, and `searchInFlight` stayed set -- so reopening and asking
+	// the same question handed back the same stuck promise, with no way
+	// from the page to start over (2026-09-05, Silas: "can't cancel").
+	//
+	// Aborting is the whole of it. The server bounds each provider at
+	// twenty seconds regardless; this is about not making someone wait for
+	// an answer they have already walked away from.
+	window.abandonMatchSearch = function() {
+		if (searchGiveUp === null)
+			return false;
+
+		searchGiveUp.abort();
+		searchGiveUp = null;
+		searchInFlight = null;
+		searchInFlightQuery = null;
+		setSearchBusy(false);
+		setSearchStatus('Search cancelled.');
+		return true;
 	};
 
 	window.openEditCVMatch = function(rowid) {

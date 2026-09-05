@@ -486,5 +486,9 @@
 		modalTitle.innerText = 'Edit Metadata Match';
 	const reviewNote = document.querySelector('#continuous-review-note');
 	if (reviewNote)
-		reviewNote.innerText = 'These rows were held by Continuous Auto-Import. Editing a match searches the configured metadata providers automatically; if the first title is too specific, edit it and search again.';
+		// It stopped searching automatically when #196 killed the
+		// auto-search, and this line kept saying it did -- so the screen
+		// promised a search that never came and left the reader waiting
+		// for it (2026-09-05, Silas's Review Holds screenshot).
+		reviewNote.innerText = 'These rows were held by Continuous Auto-Import. Editing a match offers the title it guessed; edit it if you need to, then search. Nothing is searched until you ask.';
 })();

@@ -32,6 +32,29 @@
 		...document.querySelectorAll('[data-rescan-untracked-library]')
 	];
 
+	// `innerText` is layout-aware: it respects display, line breaking and
+	// text-transform, so reading it forces a synchronous style and layout
+	// recalculation and writing it invalidates layout again. That is a fine
+	// price to pay once, and a ruinous one on a timer.
+	//
+	// `updatePrimaryControls` runs every second and did both. A profile of
+	// the frozen Review Holds page put 94.7% of the recording inside it,
+	// with `set innerText` alone at 38% self time and 1.2s of major GC
+	// behind it -- each call outlasting the interval that scheduled it, so
+	// the main thread never came up for air and the tab stopped answering
+	// clicks (2026-09-05).
+	//
+	// These are plain one-line strings. `textContent` says the same thing
+	// without consulting layout, and writing nothing at all when the text
+	// has not changed is cheaper still -- which, on a control that is
+	// re-rendered every second and almost never actually differs, is nearly
+	// every time.
+	function setText(element, value) {
+		if (!element || element.textContent === value)
+			return;
+		element.textContent = value;
+	};
+
 	function installStyles() {
 		if (document.querySelector('#library-import-review-ui-style'))
 			return;
@@ -394,11 +417,17 @@
 			const showDock = continuousTaskId !== null && continuousPanelDismissed;
 			dock.hidden = !showDock;
 			if (showDock && dockStatus)
-				dockStatus.innerText = LIEls.continuous.status.innerText || 'Working through the longboxes...';
+				setText(
+					dockStatus,
+					LIEls.continuous.status.textContent
+						|| 'Working through the longboxes...'
+				);
 			const review = dock.querySelector('#background-review-holds');
 			if (review) {
 				review.disabled = continuousReviewFolderCount === 0;
-				review.innerText = `Review Holds (${continuousReviewFolderCount})`;
+				setText(
+					review, `Review Holds (${continuousReviewFolderCount})`
+				);
 			};
 		};
 	};

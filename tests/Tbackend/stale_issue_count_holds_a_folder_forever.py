@@ -136,10 +136,15 @@ class the_file_is_filed_against_the_volume(unittest.TestCase):
             sql, rows = call.args[0], call.args[1]
             if 'INSERT' not in sql.upper():
                 continue
+            # Both inserts repeat their values in a `WHERE EXISTS` guard,
+            # so a row that vanished mid-scan is skipped rather than
+            # killing the whole refresh. The binding is the leading
+            # columns; the rest is the guard asking whether they are
+            # still there.
             if 'issues_files' in sql:
-                issue_bindings.update(tuple(r) for r in rows)
+                issue_bindings.update(tuple(r[:2]) for r in rows)
             elif 'volume_files' in sql:
-                volume_bindings.update(tuple(r) for r in rows)
+                volume_bindings.update(tuple(r[:3]) for r in rows)
         return add, issue_bindings, volume_bindings
 
     def test_an_issue_the_volume_does_not_have_still_enters_the_library(self):

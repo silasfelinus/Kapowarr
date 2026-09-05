@@ -10,12 +10,22 @@ title said 426 folders were misfiled -- `ElfQuest: New Blood` under
 describing a library working exactly as intended, and the second one came
 with an offer to move 426 folders.
 
-What survives is narrower and asks about words rather than paths:
+What survives asks whether anything can choose between a folder's
+occupants, in two shapes:
 
   one folder, unrelated series   Volumes sharing a directory with no
-                                 meaningful word between them. Thirteen
+                                 meaningful word between them. Six
                                  ElfQuests share "elfquest"; One Piece and
                                  Hercules share nothing.
+
+  one folder, one title          Volumes sharing a directory that
+                                 `match_title` cannot tell apart -- Web of
+                                 Spider-Man 82, 83 and 84 in
+                                 `/content/Spider-Man`. A franchise folder
+                                 passes: `ElfQuest: Jink` is not
+                                 `ElfQuest: Wave Dancers`, and
+                                 `Detective Comics Annual` is not
+                                 `Detective Comics`.
 
   named after another series     A volume whose folder's own last part has
                                  no word in common with its title.
@@ -38,8 +48,9 @@ sys.path.insert(
         os.path.dirname(os.path.abspath(__file__)))), 'scripts')
 )
 
-from library_conflicts import (meaningful, shared_folders,  # noqa: E402
-                               title_words, wrongly_named)
+from library_conflicts import (indistinguishable, meaningful,  # noqa: E402
+                               shared_folders, title_words, unrelated,
+                               wrongly_named)
 
 
 def _volume(volume_id, title, folder, downloaded=0, issues=1, year=2000):
@@ -76,8 +87,6 @@ ORGANISED = [
     ('Catwoman', '/content/Catwoman'),
     ('Detective Comics', '/content/Batman/Detective Comics (2016)'),
     ('Detective Comics Annual', '/content/Batman/Detective Comics (2016)'),
-    ('The Bunker', '/content/Bunker'),
-    ('Bunker', '/content/Bunker'),
     ('Vote Loki', '/content/Loki'),
     ('Loki', '/content/Loki'),
     ('Batman', '/content/Batman'),
@@ -142,6 +151,17 @@ class folders_holding_unrelated_series(unittest.TestCase):
         ]
 
         self.assertEqual(shared_folders(volumes), [])
+
+    def test_the_annual_is_not_the_series(self):
+        """Both in `/content/Batman/Detective Comics (2016)`, and that is
+        fine: `Detective.Comics.Annual.002.cbz` names the annual and
+        `match_title` agrees, so neither can take the other's files."""
+        self.assertEqual(shared_folders([
+            _volume(1757, 'Detective Comics',
+                    '/content/Batman/Detective Comics (2016)', 179),
+            _volume(1670, 'Detective Comics Annual',
+                    '/content/Batman/Detective Comics (2016)', 12)
+        ]), [])
 
     def test_a_volume_alone_in_its_folder_is_never_a_group(self):
         self.assertEqual(shared_folders([
@@ -225,3 +245,50 @@ class it_can_only_report(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class one_folder_one_title(unittest.TestCase):
+    """The case the word-overlap question could never report. Volumes that
+    share a title share every word in it, so a check that skipped a group
+    with a word in common skipped these before it skipped anything else --
+    and these are the ones that actually cost Silas comics.
+    """
+
+    def test_three_web_of_spider_man_volumes_in_one_folder(self):
+        volumes = [
+            _volume(82, 'Web of Spider-Man', '/content/Spider-Man', 5),
+            _volume(83, 'Web of Spider-Man', '/content/Spider-Man', 12),
+            _volume(84, 'Web of Spider-Man', '/content/Spider-Man', 7)
+        ]
+
+        groups = shared_folders(volumes)
+        self.assertEqual(len(groups), 1)
+        self.assertEqual([v['id'] for v in groups[0]], [83, 84, 82])
+        self.assertTrue(indistinguishable(volumes))
+        # They share every word, so the older question saw nothing.
+        self.assertFalse(unrelated(volumes))
+
+    def test_a_leading_the_does_not_make_it_a_different_series(self):
+        """`/content/Bunker` holding both entries, from Silas's library on
+        2026-09-04. `match_title` strips the article, so one of these is
+        collecting the other's comics."""
+        self.assertEqual(len(shared_folders([
+            _volume(1, 'The Bunker', '/content/Bunker', 4),
+            _volume(2, 'Bunker', '/content/Bunker', 0)
+        ])), 1)
+
+    def test_the_unrelated_ones_are_reported_first(self):
+        """Two shapes, two fixes: move a stranger out, or give one entry of
+        a series its own folder. The stranger reads worse, so it leads."""
+        groups = shared_folders([
+            _volume(1, 'Web of Spider-Man', '/content/Spider-Man', 5),
+            _volume(2, 'Web of Spider-Man', '/content/Spider-Man', 5),
+            _volume(3, 'One Piece', '/content/WildCATS', 6),
+            _volume(4, 'Hercules', '/content/WildCATS', 1)
+        ])
+
+        self.assertEqual(
+            [sorted(v['title'] for v in g) for g in groups],
+            [['Hercules', 'One Piece'],
+             ['Web of Spider-Man', 'Web of Spider-Man']]
+        )

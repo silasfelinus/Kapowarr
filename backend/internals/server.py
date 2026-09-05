@@ -10,6 +10,7 @@ from __future__ import annotations
 import select
 from multiprocessing import SimpleQueue
 from os import urandom
+from os.path import getmtime, join
 from threading import Thread, Timer
 from typing import (TYPE_CHECKING, Any, Callable, Dict,
                     Iterable, List, Mapping, Union)
@@ -94,6 +95,43 @@ class Server(metaclass=Singleton):
             static_url_path='/static'
         )
         app.config['SECRET_KEY'] = urandom(32)
+
+        # Every `url_for('static', ...)` gets the file's modification time
+        # on the end, so a changed file is a new URL.
+        #
+        # Without it the templates ask for `/static/js/foo.js` and nothing
+        # else, and a browser that has the old one keeps it across any
+        # number of container restarts. On 2026-09-05 that made four
+        # separate frontend fixes look like they had done nothing: the
+        # image was right, the page was not, and a stale cache is
+        # indistinguishable from a broken fix without going and reading the
+        # file inside the container.
+        #
+        # Read once per file and remembered. A container's files do not
+        # change under it -- a new build is a new container -- and a page
+        # asks for a hundred of these, which is a hundred stat calls per
+        # load to catch something that cannot happen.
+        static_versions: Dict[str, str] = {}
+
+        @app.url_defaults
+        def version_static_files(endpoint: str, values: Dict[str, Any]):
+            if endpoint != 'static' or 'filename' not in values:
+                return
+
+            filename = values['filename']
+            if filename not in static_versions:
+                try:
+                    static_versions[filename] = str(int(
+                        getmtime(join(str(app.static_folder), filename))
+                    ))
+                except OSError:
+                    # A URL for a file that is not there is a broken link
+                    # either way; versioning is not the place to raise it.
+                    static_versions[filename] = ''
+
+            if static_versions[filename]:
+                values['v'] = static_versions[filename]
+            return
 
         json_provider = DefaultJSONProvider(app)
         json_provider.sort_keys = False

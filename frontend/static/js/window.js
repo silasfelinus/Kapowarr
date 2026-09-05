@@ -26,6 +26,16 @@ function showLoadWindow(id) {
 };
 
 function closeWindow() {
+	// A window that started a request owns it. Hiding the dialog used to
+	// leave the request running on one of the browser's six connections to
+	// this host, with no way from the page to stop it -- so Cancel looked
+	// like it did nothing and reopening handed back the same stuck search.
+	//
+	// Declared by whichever page has such a request; pages without one are
+	// unaffected.
+	if (typeof window.abandonMatchSearch === 'function')
+		window.abandonMatchSearch();
+
 	document.querySelector('.window').removeAttribute('show-window');
 };
 

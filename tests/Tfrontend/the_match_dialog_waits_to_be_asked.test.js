@@ -145,3 +145,23 @@ test('fetchAPI can carry the signal', () => {
 	assert.match(fn, /options=\{\}/);
 	assert.match(fn, /\n\t\toptions\n\t\)/);
 });
+
+
+test('the Review Holds banner does not promise a search that never comes', () => {
+	// #196 removed the auto-search and this line kept advertising it, so the
+	// screen told the reader it was searching and then did nothing. Silas's
+	// 2026-09-05 screenshot has the dialog open under that banner.
+	const fs = require('node:fs');
+	const path = require('node:path');
+	const source = fs.readFileSync(
+		path.join(
+			path.resolve(__dirname, '../..'),
+			'frontend/static/js/library_import_match_search.js'
+		),
+		'utf8'
+	);
+	const note = source.slice(source.indexOf('reviewNote.innerText'));
+
+	assert.doesNotMatch(note, /searches the configured metadata providers automatically/);
+	assert.match(note, /Nothing is searched until you ask/);
+});

@@ -146,9 +146,15 @@
 					return;
 				};
 
-				if (LIEls?.continuous?.status)
-					LIEls.continuous.status.innerText = task.message
-						|| fallbackMessage;
+				// Twice a second for as long as the pass runs, and the
+				// message is the same string on nearly every tick. Same
+				// reason as `setText` itself: an `innerText` write asks
+				// for layout, and this one is on the shortest timer in
+				// the file.
+				setText(
+					LIEls?.continuous?.status,
+					task.message || fallbackMessage
+				);
 				setTimeout(poll, 500);
 			})
 			.catch(reject);

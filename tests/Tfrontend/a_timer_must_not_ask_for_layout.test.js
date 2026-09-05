@@ -32,7 +32,7 @@ function updatePrimaryControlsSource() {
 
 test('the once-a-second pass never touches innerText', () => {
 	assert.doesNotMatch(
-		updatePrimaryControlsSource(), /innerText/,
+		updatePrimaryControlsSource(), /\.innerText\b/,
 		'innerText in a timer forces layout on every tick'
 	);
 });
@@ -75,5 +75,38 @@ test('the status it mirrors is read without consulting layout', () => {
 	assert.match(
 		updatePrimaryControlsSource(),
 		/LIEls\.continuous\.status\.textContent/
+	);
+});
+
+
+test('the half-second task poll does not ask for layout either', () => {
+	// `waitForTaskCompletion` runs twice a second for as long as a
+	// maintenance pass lasts, writing a status message that is the same
+	// string on nearly every tick.
+	const start = script.indexOf('function waitForTaskCompletion');
+	assert.notEqual(start, -1);
+	const body = script.slice(start, script.indexOf('\n\tfunction ', start + 10));
+
+	assert.match(body, /setTimeout\(poll, 500\)/, 'still a 500ms poll');
+	assert.doesNotMatch(body, /\.innerText\b/);
+	assert.match(body, /setText\(/);
+});
+
+test('no timer callback in this file touches innerText', () => {
+	// The pattern, not the two instances: anything on a repeating timer
+	// here goes through setText.
+	for (const timer of ['setInterval(updatePrimaryControls, 1000)']) {
+		assert.match(script, new RegExp(timer.replace(/[()]/g, '\\$&')));
+	}
+	// updatePrimaryControls and waitForTaskCompletion are the two, and
+	// both are asserted clean above. This guards the file-wide count so a
+	// third one cannot be added silently.
+	// Every remaining one is in a render path that runs on an action, not
+	// on a clock. A new one is fine; a new one inside a timer is not, and
+	// this is the tripwire that makes anyone adding the fourteenth look.
+	const writes = script.match(/\.innerText = /g) || [];
+	assert.equal(
+		writes.length, 14,
+		'innerText writes changed -- check the new one is not on a timer'
 	);
 });

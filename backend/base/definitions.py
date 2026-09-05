@@ -837,7 +837,19 @@ class ApiResponse(TypedDict):
     code: int
 
 
-class FilenameData(TypedDict):
+class _AssumedFilenameFields(TypedDict, total=False):
+    """Parts of `FilenameData` the parser supplied rather than read.
+
+    Optional on purpose: `FilenameData` is written as a literal in a dozen
+    places that have no assumption to declare, and a required key would
+    make every one of them wrong.
+    """
+
+    volume_number_assumed: bool
+    "True when `volume_number` is the parser's default, not the name's claim"
+
+
+class FilenameData(_AssumedFilenameFields):
     series: str
     year: Union[int, None]
     volume_number: Union[int, Tuple[int, int], None]

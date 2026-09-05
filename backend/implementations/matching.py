@@ -668,6 +668,41 @@ def file_importing_filter(
         )
     )
 
+    # A volume number the name never stated is not evidence about which
+    # volume the file is. `extract_filename_data` fills in 1 when the name
+    # is silent -- which is most files -- and almost every volume in a
+    # comics library is volume 1, so that invented 1 was quietly acting as
+    # a match for the volume-1 entries of a series and a mismatch for
+    # every other one. Where the name also carries no year there is then
+    # nothing left to judge on, and the file was being handed to whichever
+    # entry happened to be volume 1 rather than to the one that has the
+    # issue.
+    #
+    # "Detective.Comics.962.(two.covers).cbz" is the shape of it: the name
+    # states no year and no volume, Detective Comics (2016) is volume 3
+    # and holds #934-1112, and the file could not reach it. What it could
+    # reach was Detective Comics (1937), which stops at #881, and
+    # Detective Comics (2017), which stops at #30 -- two volumes that
+    # cannot contain issue 962 competing for it while the one that can was
+    # never in the running.
+    #
+    # So where the name states neither, this clause rules nothing in or
+    # out and every entry of the series stays a candidate. Deciding
+    # between them is `_settle`'s job in
+    # `backend.features.watched_folder_import`, and it decides on which
+    # volume actually lists the issue -- real evidence, rather than a
+    # number the file never carried. Where it cannot decide, the file is
+    # reported and left alone, which is the outcome to prefer over a
+    # confident wrong folder.
+    volume_number_stated = (
+        file_data['volume_number'] is not None
+        and not file_data.get('volume_number_assumed', False)
+    )
+    nothing_to_go_on = (
+        not volume_number_stated
+        and file_data['year'] is None
+    )
+
     is_match = (
         (matching_special_version or inferred_single_issue)
         and not year_rules_it_out
@@ -675,6 +710,7 @@ def file_importing_filter(
             matching_volume_number
             or matching_year
             or collected
+            or nothing_to_go_on
         )
     )
 

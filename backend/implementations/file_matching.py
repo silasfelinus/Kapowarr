@@ -332,10 +332,35 @@ def scan_files(
                     ((issue_id,) for issue_id in deleted_downloaded_issues)
                 )
 
-        # Add bindings that aren't in current bindings
+        # Add bindings that aren't in current bindings.
+        #
+        # `WHERE EXISTS` rather than a plain VALUES: a file this scan read
+        # can be gone by the time the scan writes. `refresh_and_scan` runs
+        # a pool over every volume in the `continuous_import` lane while
+        # Recover Orphaned Downloads and Watched Folder Import run in
+        # `default` -- deliberately, so a long refresh does not monopolise
+        # everything -- and both of those create and delete `files` rows.
+        #
+        # On 2026-09-05 at 00:33:39 that cost Silas the whole hourly
+        # refresh: `sqlite3.IntegrityError: FOREIGN KEY constraint failed`
+        # out of the pool, with Recover Orphaned Downloads importing on
+        # another thread in the same second. 5,568 volumes abandoned
+        # because one file went away mid-scan.
+        #
+        # A binding for a row that no longer exists has nothing to say, so
+        # skipping it loses nothing. Anything else the constraint would
+        # have caught still raises.
         cursor.executemany(
-            "INSERT INTO issues_files(file_id, issue_id) VALUES (?, ?);",
-            add_bindings
+            """
+            INSERT INTO issues_files(file_id, issue_id)
+            SELECT ?, ?
+            WHERE EXISTS (SELECT 1 FROM files WHERE id = ?)
+                AND EXISTS (SELECT 1 FROM issues WHERE id = ?);
+            """,
+            (
+                (file_id, issue_id, file_id, issue_id)
+                for file_id, issue_id in add_bindings
+            )
         )
 
         # Delete bindings for general files that aren't in new bindings
@@ -363,18 +388,24 @@ def scan_files(
             )
 
         # Add bindings for general files that aren't in current bindings
+        # Same race, same answer: the file may be gone, and the volume
+        # itself may have been deleted while the pool was working.
         cursor.executemany("""
             INSERT INTO volume_files(
                 file_id, volume_id, file_type
-            ) VALUES (
-                ?, ?, ?
             )
+            SELECT ?, ?, ?
+            WHERE EXISTS (SELECT 1 FROM files WHERE id = ?)
+                AND EXISTS (SELECT 1 FROM volumes WHERE id = ?)
             ON CONFLICT(file_id) DO
             UPDATE SET
                 file_type = ?;
             """,
             (
-                (file_id, volume_id, file_type, file_type)
+                (
+                    file_id, volume_id, file_type,
+                    file_id, volume_id, file_type
+                )
                 for file_id, file_type in new_general_bindings.items()
             )
         )

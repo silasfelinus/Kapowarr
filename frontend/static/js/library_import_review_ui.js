@@ -694,6 +694,27 @@
 
 	const searchResults = document.querySelector('.search-results');
 	if (searchResults) {
+		// This observer writes into the subtree it observes, which is a
+		// loop unless the write is conditional.
+		//
+		// `innerText = 'Select'` does not compare anything: the setter
+		// replaces the element's children with a new text node every time,
+		// even when the text is already that. Inside a `childList` +
+		// `subtree` observer on the same element, each write is a mutation
+		// the observer is watching for, so it calls this back, which
+		// writes again, forever.
+		//
+		// It only bites once a search returns: `.search-results` is empty
+		// until then, so there are no buttons to relabel and nothing to
+		// mutate. That is why the tab locked up on searching and looked
+		// like the search's fault, and why an ad blocker showed as 60% of
+		// the profile -- its own observer was being woken by our runaway
+		// mutations, so it was a passenger with a very loud seat
+		// (2026-09-05).
+		//
+		// `setText` returns without touching the DOM when the text already
+		// matches, so the second pass mutates nothing and the loop ends
+		// after one. Never write into an observed subtree unconditionally.
 		const relabelGroupSelect = () => {
 			searchResults.querySelectorAll('td:nth-child(4) button').forEach(
 				button => setText(button, 'Select')

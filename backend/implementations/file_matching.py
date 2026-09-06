@@ -32,7 +32,11 @@ from backend.internals.settings import Settings
 
 # region Automatic Match
 
-def nested_volume_folders(volume_id: int, folder: str) -> List[str]:
+def nested_volume_folders(
+    volume_id: int,
+    folder: str,
+    own_name: Union[str, None] = None
+) -> List[str]:
     """The folders of other volumes that sit inside this volume's folder.
 
     A library organised by franchise nests them: `/content/Catwoman` holds
@@ -46,8 +50,14 @@ def nested_volume_folders(volume_id: int, folder: str) -> List[str]:
 
         folder (str): Its folder.
 
+        own_name (Union[str, None], optional): The directory name this
+            volume would be given, from `generate_volume_folder_name`. A
+            child by that name is this volume's own, however many other
+            volumes have wrongly claimed it, so it is never foreign.
+            Defaults to None, meaning judge on the folder alone.
+
     Returns:
-        List[str]: Each such folder with a trailing separator, ready to
+        List[str]: Each foreign folder with a trailing separator, ready to
             test a filepath against. A volume sharing this exact folder is
             not one of these -- that is two volumes with one folder, and
             excluding the shared contents would leave both of them with
@@ -55,20 +65,33 @@ def nested_volume_folders(volume_id: int, folder: str) -> List[str]:
     """
     own = folder.rstrip(sep)
     prefix = own + sep
-    return [
-        other.rstrip(sep) + sep
-        for (other,) in get_db().execute(
-            "SELECT folder FROM volumes WHERE id != ? AND folder IS NOT NULL;",
-            (volume_id,)
-        )
-        if other and other.rstrip(sep) != own and other.startswith(prefix)
-    ]
+    mine = (own + sep + own_name.rstrip(sep)) if own_name else None
+
+    # Deduplicated: several volumes may name the same folder, and each
+    # would otherwise contribute the same prefix to test every file
+    # against. Insertion order is kept so the list reads as the database
+    # returned it.
+    found: Dict[str, None] = {}
+    for (other,) in get_db().execute(
+        "SELECT folder FROM volumes WHERE id != ? AND folder IS NOT NULL;",
+        (volume_id,)
+    ):
+        if (
+            other
+            and other.rstrip(sep) != own
+            and other.rstrip(sep) != mine
+            and other.startswith(prefix)
+        ):
+            found[other.rstrip(sep) + sep] = None
+
+    return list(found)
 
 
 def outside_other_volumes(
     volume_id: int,
     folder: str,
-    contents: List[str]
+    contents: List[str],
+    own_name: Union[str, None] = None
 ) -> List[str]:
     """The scanned files that are this volume's to claim.
 
@@ -81,7 +104,13 @@ def outside_other_volumes(
     (1993) dragged an entire `Catwoman Annual (1994)` directory, twice.
 
     A file inside another volume's folder is that volume's, whatever the
-    tree above it says.
+    tree above it says -- unless that folder is the one this volume would
+    have been given itself. Batman (2016) sat at `/content/Batman` with
+    its comics in `/content/Batman/Batman (2016)`, a directory three other
+    volumes had also claimed, Batman (1940) among them. Reading that as
+    foreign took 161 of its 163 issues away and made every one of them
+    wanted again. A directory named for this volume holds this volume's
+    comics, however many others say otherwise.
 
     Args:
         volume_id (int): The volume being scanned.
@@ -90,10 +119,13 @@ def outside_other_volumes(
 
         contents (List[str]): Everything `list_files` found beneath it.
 
+        own_name (Union[str, None], optional): The directory name this
+            volume would be given. Defaults to None.
+
     Returns:
         List[str]: The files not inside some other volume's folder.
     """
-    nested = nested_volume_folders(volume_id, folder)
+    nested = nested_volume_folders(volume_id, folder, own_name)
     if not nested:
         return contents
 
@@ -135,6 +167,7 @@ def scan_files(
             about the download status of the issues.
             Defaults to False.
     """
+    from backend.implementations.naming import generate_volume_folder_name
     from backend.implementations.volumes import Volume
 
     LOGGER.debug(f'Scanning for files for {volume_id}')
@@ -202,8 +235,22 @@ def scan_files(
         folder=volume_data.folder,
         ext=FileConstants.SCANNABLE_EXTENSIONS
     )
-    folder_contents = outside_other_volumes(volume_id, volume_data.folder,
-                                            folder_contents)
+    # The name this volume would be given, so a child directory carrying
+    # it is not read as another volume's. Only ever an exemption, so a
+    # naming format that cannot be filled costs the exemption rather than
+    # the scan.
+    try:
+        own_folder_name = generate_volume_folder_name(volume_data)
+    except Exception:
+        LOGGER.debug(
+            "Could not work out volume %d's own folder name; scanning "
+            "without it", volume_id
+        )
+        own_folder_name = None
+
+    folder_contents = outside_other_volumes(
+        volume_id, volume_data.folder, folder_contents, own_folder_name
+    )
     for file in filtered_iter(folder_contents, set(filepath_filter)):
         if file in manually_matched_files:
             # File already manually matched to issue(s)

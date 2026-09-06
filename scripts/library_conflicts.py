@@ -333,10 +333,17 @@ def main() -> int:
     if shared or wrong:
         print('Which volume is the misplaced one, and where it belongs, is '
               'a judgement about your library -- and moving a folder moves '
-              'comics. Fix one from the UI, or with:')
+              'comics. Fix one from the UI, or by naming the folder:')
         print('  curl -X PUT "$KAP/volumes/<id>?api_key=$KEY" \\')
         print('       -H \'Content-Type: application/json\' \\')
-        print('       -d \'{"volume_folder": null}\'')
+        print('       -d \'{"volume_folder": "/content/Series/Series '
+              '(2016)"}\'')
+        print()
+        print('Name the path. `"volume_folder": null` rebuilds the default, '
+              'which is <root folder>/<title> (<year>) and knows nothing of '
+              'a franchise directory -- it moves the volume out to the top '
+              'level rather than into its own folder beneath the one it is '
+              'in now.')
     return 0
 
 

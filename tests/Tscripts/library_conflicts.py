@@ -49,8 +49,8 @@ sys.path.insert(
 )
 
 from library_conflicts import (indistinguishable, meaningful,  # noqa: E402
-                               shared_folders, title_words, unrelated,
-                               wrongly_named)
+                               named_after_it, shared_folders, title_words,
+                               unrelated, wrongly_named)
 
 
 def _volume(volume_id, title, folder, downloaded=0, issues=1, year=2000):
@@ -292,3 +292,57 @@ class one_folder_one_title(unittest.TestCase):
             [['Hercules', 'One Piece'],
              ['Web of Spider-Man', 'Web of Spider-Man']]
         )
+
+
+class a_folder_name_is_not_free_to_be_the_title(unittest.TestCase):
+    """Every row here was reported as misfiled against its own directory,
+    in the 2026-09-06 run over Silas's library. Eight of twenty-one
+    findings were this.
+    """
+
+    def test_punctuation_a_path_cannot_hold_is_not_a_different_series(self):
+        for title, folder_name in (
+            ("D'Orc", 'DOrc (2026)'),
+            ('Die!Die!Die!', 'DieDieDie (2018)'),
+            ("X'ed", 'Xed (2015)'),
+            ("Thun'da", 'Thunda (2016)'),
+            ('The Other/Half', 'The OtherHalf (2026)'),
+            ('Witchblade/Vampirella', 'WitchbladeVampirella (2026)')
+        ):
+            with self.subTest(title=title):
+                self.assertTrue(named_after_it(title, folder_name))
+
+    def test_a_title_of_nothing_but_common_words_still_names_its_folder(self):
+        """`meaningful('Saga')` is empty -- "saga" identifies no series on
+        its own -- so there was no word for the folder to share and the
+        volume was reported against its own name."""
+        self.assertEqual(meaningful('Saga'), set())
+        self.assertTrue(named_after_it('Saga', 'Saga'))
+        self.assertTrue(named_after_it('VS', 'VS (2018)'))
+
+    def test_a_misspelt_folder_is_still_a_finding(self):
+        """The narrowing must not swallow the real ones: this folder is
+        not the title, it is the title with a letter missing."""
+        self.assertFalse(named_after_it('Starstruck', 'Starstuck (1985)'))
+        self.assertEqual(
+            [v['id'] for v in wrongly_named([
+                _volume(4636, 'Starstruck',
+                        '/content/Starstruck/Starstuck (1985)', 6)
+            ])],
+            [4636]
+        )
+
+    def test_a_stranger_in_the_folder_is_still_a_finding(self):
+        for title, folder in (
+            ('Golden Kamuy', '/content/Art of, The/Art of Atari (2016)'),
+            ('Euphrates no Ki',
+             '/content/Catwoman/Catwoman The One You Love (2015)')
+        ):
+            with self.subTest(title=title):
+                self.assertEqual(len(wrongly_named([
+                    _volume(1, title, folder, 1)
+                ])), 1)
+
+    def test_a_franchise_folder_still_names_its_volumes(self):
+        self.assertTrue(named_after_it('ElfQuest: New Blood', 'ElfQuest'))
+        self.assertTrue(named_after_it('Marvel Previews', 'Marvel Universe'))

@@ -5,7 +5,7 @@ The matching of files to issues in a volume
 """
 
 from collections import Counter
-from os.path import basename, isdir
+from os.path import basename, isdir, sep
 from typing import Dict, List, Set, Tuple, Union
 
 from backend.base.definitions import (FileConstants, FileMatch, FilenameData,
@@ -31,6 +31,87 @@ from backend.internals.settings import Settings
 
 
 # region Automatic Match
+
+def nested_volume_folders(volume_id: int, folder: str) -> List[str]:
+    """The folders of other volumes that sit inside this volume's folder.
+
+    A library organised by franchise nests them: `/content/Catwoman` holds
+    `Catwoman (2011)`, `Catwoman Lonely City (2021)`, `Cavewoman Deep Water
+    (2017)` and a dozen more, each its own volume. A volume pointed at the
+    franchise directory itself contains all of them.
+
+    Args:
+        volume_id (int): The volume being scanned, which never counts as
+            nested in itself.
+
+        folder (str): Its folder.
+
+    Returns:
+        List[str]: Each such folder with a trailing separator, ready to
+            test a filepath against. A volume sharing this exact folder is
+            not one of these -- that is two volumes with one folder, and
+            excluding the shared contents would leave both of them with
+            nothing rather than fixing anything.
+    """
+    own = folder.rstrip(sep)
+    prefix = own + sep
+    return [
+        other.rstrip(sep) + sep
+        for (other,) in get_db().execute(
+            "SELECT folder FROM volumes WHERE id != ? AND folder IS NOT NULL;",
+            (volume_id,)
+        )
+        if other and other.rstrip(sep) != own and other.startswith(prefix)
+    ]
+
+
+def outside_other_volumes(
+    volume_id: int,
+    folder: str,
+    contents: List[str]
+) -> List[str]:
+    """The scanned files that are this volume's to claim.
+
+    `list_files` walks the whole tree under a volume's folder, and nothing
+    told it that a subdirectory might belong to a different volume. So a
+    volume pointed at a franchise directory claimed every comic beneath it
+    -- and `change_volume_folder` moves the files a volume claims, so
+    moving it then carried them all away. On 2026-09-06 Catwoman (2018)
+    took eleven Cavewoman files with it into its own folder, and Catwoman
+    (1993) dragged an entire `Catwoman Annual (1994)` directory, twice.
+
+    A file inside another volume's folder is that volume's, whatever the
+    tree above it says.
+
+    Args:
+        volume_id (int): The volume being scanned.
+
+        folder (str): Its folder.
+
+        contents (List[str]): Everything `list_files` found beneath it.
+
+    Returns:
+        List[str]: The files not inside some other volume's folder.
+    """
+    nested = nested_volume_folders(volume_id, folder)
+    if not nested:
+        return contents
+
+    kept = [
+        file for file in contents
+        if not any(file.startswith(other) for other in nested)
+    ]
+
+    if len(kept) != len(contents):
+        LOGGER.debug(
+            "Volume %d's folder contains %d other volume folder(s); "
+            "leaving %d file(s) in them to their own volumes",
+            volume_id, len(nested), len(contents) - len(kept)
+        )
+
+    return kept
+
+
 def scan_files(
     volume_id: int,
     filepath_filter: List[str] = [],
@@ -121,6 +202,8 @@ def scan_files(
         folder=volume_data.folder,
         ext=FileConstants.SCANNABLE_EXTENSIONS
     )
+    folder_contents = outside_other_volumes(volume_id, volume_data.folder,
+                                            folder_contents)
     for file in filtered_iter(folder_contents, set(filepath_filter)):
         if file in manually_matched_files:
             # File already manually matched to issue(s)

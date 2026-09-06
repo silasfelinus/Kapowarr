@@ -200,15 +200,47 @@ def indistinguishable(members: List[Dict[str, Any]]) -> bool:
     return False
 
 
+def named_after_it(title: str, folder_name: str) -> bool:
+    """Whether a directory's name accounts for the volume in it.
+
+    Two ways it can, because a folder name is not free to be the title.
+    A path cannot hold every character a title can, so `D'Orc` lives in
+    `DOrc (2026)`, `Die!Die!Die!` in `DieDieDie (2018)` and
+    `Witchblade/Vampirella` in `WitchbladeVampirella (2026)` -- the same
+    name with the punctuation a filesystem would not take. `match_title`
+    already strips exactly that before comparing, and asking it with
+    `allow_contains` also covers the year the folder appends.
+
+    Otherwise a word in common is enough, which is what lets a volume sit
+    in a franchise, author or publisher directory: `ElfQuest: New Blood`
+    in `ElfQuest`, `Marvel Previews` in `Marvel Universe`.
+
+    Word overlap alone was not enough, because a title made entirely of
+    words too common to identify anything has no meaningful word to share
+    -- `Saga` in `/content/Saga` and `VS` in `/content/VS (2018)` were
+    both reported as misfiled against their own directories.
+
+    Args:
+        title (str): The volume's title.
+
+        folder_name (str): The last part of its folder's path.
+
+    Returns:
+        bool: Whether the folder is named for this volume.
+    """
+    return (
+        match_title(folder_name, title, allow_contains=True)
+        or bool(meaningful(title) & meaningful(folder_name))
+    )
+
+
 def wrongly_named(volumes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """The volumes whose own folder is named after a different series.
 
-    Only the folder's last part is compared, and only for a word in
-    common. A volume under a franchise, author or publisher folder keeps
-    its own name in its own directory -- `ElfQuest: New Blood` in
-    `/content/ElfQuest`, `Marvel Previews` in `/content/Marvel Universe`
-    -- so those are not findings. `Golden Kamuy` in
-    `/content/Art of, The/Art of Atari (2016)` is.
+    Only the folder's last part is asked about. `Golden Kamuy` in
+    `/content/Art of, The/Art of Atari (2016)` is a finding, and so is
+    `Starstruck` in `/content/Starstruck/Starstuck (1985)` -- the folder
+    is not the title, it is the title misspelt.
 
     Args:
         volumes (List[Dict[str, Any]]): Every volume in the library.
@@ -220,9 +252,8 @@ def wrongly_named(volumes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         (
             v for v in volumes
             if v.get('folder')
-            and not (
-                meaningful(v['title'])
-                & meaningful(normalise(v['folder']).rsplit('/', 1)[-1])
+            and not named_after_it(
+                v['title'], normalise(v['folder']).rsplit('/', 1)[-1]
             )
         ),
         key=lambda v: -(v.get('issues_downloaded') or 0)
@@ -302,10 +333,17 @@ def main() -> int:
     if shared or wrong:
         print('Which volume is the misplaced one, and where it belongs, is '
               'a judgement about your library -- and moving a folder moves '
-              'comics. Fix one from the UI, or with:')
+              'comics. Fix one from the UI, or by naming the folder:')
         print('  curl -X PUT "$KAP/volumes/<id>?api_key=$KEY" \\')
         print('       -H \'Content-Type: application/json\' \\')
-        print('       -d \'{"volume_folder": null}\'')
+        print('       -d \'{"volume_folder": "/content/Series/Series '
+              '(2016)"}\'')
+        print()
+        print('Name the path. `"volume_folder": null` rebuilds the default, '
+              'which is <root folder>/<title> (<year>) and knows nothing of '
+              'a franchise directory -- it moves the volume out to the top '
+              'level rather than into its own folder beneath the one it is '
+              'in now.')
     return 0
 
 

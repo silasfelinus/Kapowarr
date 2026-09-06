@@ -137,3 +137,76 @@ class a_volume_does_not_reach_into_another(unittest.TestCase):
         library = {1: '/content/Catwoman/', 2: '/content/Catwoman'}
         with patch.object(file_matching, 'get_db', lambda: _Rows(library)):
             self.assertEqual(nested_volume_folders(2, '/content/Catwoman'), [])
+
+
+class a_directory_named_for_this_volume_is_its_own(unittest.TestCase):
+    """The first version of this cost Batman (2016) its whole run.
+
+    It sat at `/content/Batman` with its comics in
+    `/content/Batman/Batman (2016)` -- a directory three other volumes had
+    also claimed as their folder, Batman (1940) and two annuals among
+    them. Reading that child as foreign took 161 of 163 issues away and
+    made every one of them wanted again, which is the re-download this
+    whole line of work exists to stop.
+
+    A directory named for this volume holds this volume's comics, however
+    many other volumes say otherwise. The name is the one the app would
+    give it, so the year is part of the answer: `Catwoman (2011)` is not
+    `Catwoman (2012)`'s folder.
+    """
+
+    BATMAN = {
+        1753: '/content/Batman',
+        1652: '/content/Batman/Batman (2016)',
+        1653: '/content/Batman/Batman (2016)',
+        1754: '/content/Batman/Batman (2016)',
+        1655: '/content/Batman/Batman-Catwoman (2020)'
+    }
+
+    def _nested(self, library, volume_id, folder, own_name):
+        with patch.object(file_matching, 'get_db', lambda: _Rows(library)):
+            return nested_volume_folders(volume_id, folder, own_name)
+
+    def test_the_squatted_folder_is_still_its_own(self):
+        self.assertEqual(
+            self._nested(self.BATMAN, 1753, '/content/Batman',
+                         'Batman (2016)'),
+            ['/content/Batman/Batman-Catwoman (2020)/']
+        )
+
+    def test_its_files_are_kept(self):
+        contents = [
+            '/content/Batman/Batman (2016)/Batman 001 (2016).cbz',
+            '/content/Batman/Batman-Catwoman (2020)/Batman-Catwoman 01.cbz'
+        ]
+        with patch.object(file_matching, 'get_db',
+                          lambda: _Rows(self.BATMAN)):
+            self.assertEqual(
+                outside_other_volumes(1753, '/content/Batman', contents,
+                                      'Batman (2016)'),
+                ['/content/Batman/Batman (2016)/Batman 001 (2016).cbz']
+            )
+
+    def test_a_different_year_is_a_different_folder(self):
+        """The exemption is the name the app would give this volume, not
+        its title, so it does not hand a franchise folder back every run
+        of the series beneath it."""
+        library = {
+            30: '/content/Catwoman',
+            29: '/content/Catwoman/Catwoman (2011)'
+        }
+
+        self.assertEqual(
+            self._nested(library, 30, '/content/Catwoman',
+                         'Catwoman (2012)'),
+            ['/content/Catwoman/Catwoman (2011)/']
+        )
+
+    def test_without_a_name_nothing_is_exempt(self):
+        """`own_name` defaults to None for callers that have no volume
+        data, and then the older, blunter answer stands."""
+        self.assertEqual(
+            self._nested(self.BATMAN, 1753, '/content/Batman', None),
+            ['/content/Batman/Batman (2016)/',
+             '/content/Batman/Batman-Catwoman (2020)/']
+        )

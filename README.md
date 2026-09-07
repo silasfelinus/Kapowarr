@@ -25,7 +25,7 @@ Upstream Kapowarr is built around adding volumes one at a time and downloading t
 
 That's the gap this fork works on.
 
-**Getting an existing library in.** Continuous Library Import walks every root folder in the background — resumable, checkpointed in SQLite, paced conservatively against the metadata API. It imports what it is confident about and holds the rest for review rather than guessing. A single pass across a 490-folder library imported 456 volumes and held 40.
+**Getting an existing library in.** Continuous Library Import walks every root folder in the background — resumable, checkpointed in SQLite, paced conservatively against the metadata API. It imports what it is confident about and holds the rest for you to review rather than guessing.
 
 **Getting files in that arrived some other way.** A watched folder imports anything dropped into it. Orphan recovery sweeps the download folder for files that finished but never made it to the library — including ones whose filename matches two volumes, which it resolves against what Kapowarr actually asked for.
 
@@ -46,7 +46,7 @@ That's the gap this fork works on.
 - Orphan recovery for downloads that finished but never got filed
 - Manual import and per-file match editing when you want the last word
 - Rename, move and convert on import or on demand; archive extraction and repacking
-- Reading lists, and a built-in reader for CBZ/ZIP, loose images and PDFs
+- Reading lists, and a built-in reader for CBZ/ZIP, CBR/RAR, CBT/TAR, PDF and loose images
 
 ### Acquisition
 

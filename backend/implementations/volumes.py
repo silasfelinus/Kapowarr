@@ -805,33 +805,47 @@ class Volume:
                 self.id, len(missing), missing[0]
             )
 
-        # Say when the volume is carrying files that are not its own.
+        # A volume's folder can be carrying files that are not its own.
         # Superman: The Man of Steel's folder was a landing zone -- its
         # 116 files included seven Web of Spider-Man issues, two German
         # Catwoman collections and a One-Punch Man volume, all linked to
         # its issues by some earlier import. Moving the volume moved them
         # too, deeper into the wrong series, and said nothing (2026-09-04).
+        # On 2026-09-06 the same shape carried eleven Cavewoman files into
+        # Catwoman (2018)'s new folder and an entire
+        # `Catwoman Annual (1994)` directory into Catwoman (1993)'s.
         #
-        # They still move: they are linked to this volume's issues, and
-        # leaving them behind would strand them outside any volume folder
-        # at all. But nobody can act on what they are not told, and this
-        # is the moment the mistake is visible.
+        # So they no longer move. A move is the one moment the mistake is
+        # both visible and cheap to stop: the file stays where it is,
+        # under the folder it was actually filed in, its database row
+        # still names where it is, and the volume takes only what names
+        # it.
+        #
+        # Deliberately not done in `scan_files`. A first attempt refused
+        # these at scan time instead, and in a library organised by
+        # franchise that left files no volume claimed at all: Star Wars
+        # (1995) went to 0 of 31 and Batman (2016) to 1 of 163
+        # (2026-09-07). What a volume counts is not what a move carries.
         strangers = []
+        moving = []
         for filepath in present:
             series = extract_filename_data(filepath)['series']
             if series and not match_title(volume_data.title, series):
                 strangers.append(filepath)
+            else:
+                moving.append(filepath)
 
         if strangers:
             LOGGER.warning(
                 "Volume %d (%s) has %d file(s) that name a different "
-                "series; they move with it. Check whether they belong to "
-                "this volume at all. First: %s",
+                "series; they are staying where they are rather than "
+                "moving with it. Check whether they belong to this "
+                "volume at all. First: %s",
                 self.id, volume_data.title, len(strangers), strangers[0]
             )
 
         file_changes = change_basefolder(
-            present,
+            moving,
             current_volume_folder,
             new_volume_folder
         )

@@ -715,9 +715,24 @@
 		// `setText` returns without touching the DOM when the text already
 		// matches, so the second pass mutates nothing and the loop ends
 		// after one. Never write into an observed subtree unconditionally.
+		//
+		// The label also has to say which of the two buttons this is. The
+		// row template has one button that matches the file you opened the
+		// dialog on and one that matches every file in its group, and
+		// calling them both `Select` made them indistinguishable -- with
+		// the collapsed view showing "27 files" on a single row, picking
+		// the wrong one imports one of the twenty-seven and looks like
+		// nothing happened (2026-09-07). So it names the count.
 		const relabelGroupSelect = () => {
+			const rowid = LIEls.search.window?.dataset.rowid;
+			const row = rowid === undefined ? null : document.querySelector(
+				`.proposal-list tr[data-rowid="${rowid}"]`
+			);
+			const groupNumber = row?.dataset.group_number;
+			const size = groupNumber ? getGroupRows(groupNumber).length : 1;
+			const label = size > 1 ? `Select all ${size} files` : 'Select';
 			searchResults.querySelectorAll('td:nth-child(4) button').forEach(
-				button => setText(button, 'Select')
+				button => setText(button, label)
 			);
 		};
 		new MutationObserver(relabelGroupSelect).observe(

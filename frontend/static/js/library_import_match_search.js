@@ -217,6 +217,29 @@
 		});
 	};
 
+	function resetSearchScroll() {
+		// A dialog keeps its scroll position when its contents are
+		// replaced, so searching a second time left you wherever the last
+		// list had been scrolled to -- usually the bottom, looking at the
+		// tail of results for a volume you had already moved on from.
+		// The results are new; the view of them should be too.
+		//
+		// Three elements, because the scrollbar is not always on the same
+		// one: the dialog itself and `.window-content` both scroll
+		// vertically depending on how tall the results are, and
+		// `.search-results-container` scrolls sideways for a wide table.
+		[
+			LIEls.search.window,
+			LIEls.search.window?.querySelector('.window-content'),
+			LIEls.search.container
+		].forEach(element => {
+			if (!element)
+				return;
+			element.scrollTop = 0;
+			element.scrollLeft = 0;
+		});
+	};
+
 	function renderSearchResults(results) {
 		LIEls.search.results.innerHTML = '';
 		results.forEach(result => {
@@ -245,6 +268,7 @@
 			LIEls.search.results.appendChild(entry);
 		});
 		hide([], [LIEls.search.container]);
+		resetSearchScroll();
 	};
 
 	function describeSearchError(error) {
@@ -367,6 +391,7 @@
 		LIEls.search.window.dataset.rowid = rowid;
 		LIEls.search.results.innerHTML = '';
 		hide([LIEls.search.container]);
+		resetSearchScroll();
 		LIEls.search.input.value = rowSearchQuery(rowid);
 		showWindow('cv-window');
 		LIEls.search.input.focus();

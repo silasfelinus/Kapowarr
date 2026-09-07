@@ -91,11 +91,27 @@ test('the observer callback writes only through setText', () => {
 	assert.notEqual(start, -1);
 	const body = script.slice(start, script.indexOf('};', start) + 2);
 
-	assert.match(body, /setText\(button, 'Select'\)/);
+	// The label itself is not the point and has since gained a file count,
+	// so this asks the question the test is named for: every write to the
+	// button goes through `setText`, which compares before it touches the
+	// DOM. What must never come back is a bare assignment.
+	assert.match(body, /setText\(button, [^)]+\)/);
 	assert.doesNotMatch(
 		body, /\.innerText\s*=/,
 		'an unconditional write here reopens the loop'
 	);
+});
+
+test('the two select buttons are told apart', () => {
+	// One matches the file the dialog was opened on, the other every file
+	// in its group. Labelling both `Select` made picking the wrong one
+	// import 1 of 27 and look like nothing happened.
+	const start = script.indexOf('const relabelGroupSelect');
+	const body = script.slice(start, script.indexOf('};', start) + 2);
+
+	assert.match(body, /getGroupRows\(groupNumber\)\.length/);
+	assert.match(body, /size > 1/);
+	assert.match(body, /Select all \$\{size\} files/);
 });
 
 test('it is still watching the subtree it needs to watch', () => {

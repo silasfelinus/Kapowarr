@@ -1,15 +1,17 @@
 # -*- coding: utf-8 -*-
 
 """
-GetComics Discover: browse GetComics' recent releases inside Kapowarr,
-cross-referenced against the library so already-added series can be excluded
-from the discovery feed.
+Discover: browse recent comic releases inside Kapowarr, cross-referenced
+against the library so already-added series can be excluded from the
+discovery feed.
 
 Mirrors `backend.features.pull_list`'s relationship with
 `backend.implementations.weekly_releases` (itself mirroring
 `backend.features.search`'s `SearchSources` registry): a discover source
 registers itself with `DiscoverSources.register()`, so a second source
-could be added later without this module's orchestration needing to change.
+could be added later without this module's orchestration needing to change
+-- `AnnasArchiveDiscover` below is exactly that second source, landing with
+zero changes to `_fetch_discover_page()`'s merge/dedup logic.
 
 Unlike the weekly pull list, Discover is a live browse view rather than a
 scheduled/persisted check. The recommendation layer is deliberately
@@ -18,6 +20,15 @@ strong title/franchise overlap with the current library. Richer metadata
 signals such as creators/characters can be added when those fields are
 persisted locally; this first pass never makes extra ComicVine calls just to
 manufacture recommendations.
+
+Every registered source here is metadata/browse only -- Discover never
+grabs or downloads anything itself, it links out to the source's own page
+(see `DiscoverItemData`/`DiscoverMatchData`) and, separately, offers
+"Search & Add" against Kapowarr's own library-add search. This is why
+Anna's Archive -- a shadow library Kapowarr must never automate downloads
+from (kapowarr/t-040) -- fits here rather than in `SearchSources`
+(`backend.features.search`), which is real acquisition and not appropriate
+for it.
 """
 
 from asyncio import gather, run
@@ -27,6 +38,8 @@ from typing import Any, Dict, List, Tuple, Type
 from backend.base.definitions import (DiscoverItemData,
                                       DiscoverMatchData, DiscoverSource)
 from backend.base.helpers import AsyncSession
+from backend.implementations.annas_archive import \
+    fetch_annas_archive_discover_page
 from backend.implementations.discover import fetch_getcomics_discover_page
 from backend.implementations.matching import match_title
 from backend.implementations.volumes import Library
@@ -74,6 +87,24 @@ class GetComicsDiscover(DiscoverSource):
         page: int = 1
     ) -> Tuple[List[DiscoverItemData], int]:
         return await fetch_getcomics_discover_page(session, page)
+
+
+@DiscoverSources.register
+class AnnasArchiveDiscover(DiscoverSource):
+    """Anna's Archive's comic search results, sorted newest-first.
+
+    Metadata/search discovery only -- see this module's docstring and
+    `backend.implementations.annas_archive` for why: Kapowarr never
+    downloads from Anna's Archive, it only surfaces link-out entries here,
+    identically to how every other Discover item behaves.
+    """
+
+    async def fetch(
+        self,
+        session: AsyncSession,
+        page: int = 1
+    ) -> Tuple[List[DiscoverItemData], int]:
+        return await fetch_annas_archive_discover_page(session, page)
 
 
 async def _fetch_discover_page(page: int) -> Tuple[List[DiscoverItemData], int]:

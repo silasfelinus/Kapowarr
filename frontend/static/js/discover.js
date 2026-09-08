@@ -31,7 +31,7 @@ function updateModeControls() {
 			'For You ranks recent releases using explainable title and franchise overlap with comics already in your library.';
 	} else {
 		DiscoverEls.mode_description.innerText =
-			'Recent releases from GetComics that are not already represented in your library.';
+			'Recent releases from GetComics and Anna\'s Archive that are not already represented in your library.';
 	};
 };
 
@@ -69,7 +69,7 @@ function fillList(api_key) {
 		if (visible_items.length === 0) {
 			DiscoverEls.empty_message.innerText = mode === 'for-you'
 				? 'No strong recommendations found in the recent release window yet.'
-				: 'No new-to-your-library releases found on this GetComics page.';
+				: 'No new-to-your-library releases found on this page.';
 		};
 
 		visible_items.forEach(obj => {
@@ -88,7 +88,7 @@ function fillList(api_key) {
 
 			const title_link = entry.querySelector('.title-column a');
 			title_link.innerText = obj.year !== null ? `${series} (${obj.year})` : series;
-			title_link.title = `${obj.display_title} - open on GetComics`;
+			title_link.title = `${obj.display_title} - open on ${obj.source}`;
 			title_link.href = obj.link;
 
 			const reason_column = entry.querySelector('.reason-column');

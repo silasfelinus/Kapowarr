@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-"""GetComics Discover UI and API routes."""
+"""Discover UI and API routes."""
 
 from flask import request
 

@@ -5,9 +5,12 @@ from bs4 import BeautifulSoup
 
 from backend.base.definitions import DiscoverSource
 from backend.features import discover as discover_feature_module
-from backend.features.discover import (DiscoverSources, GetComicsDiscover,
-                                       get_discover_feed,
+from backend.features.discover import (AnnasArchiveDiscover, DiscoverSources,
+                                       GetComicsDiscover, get_discover_feed,
                                        match_discover_items_to_library)
+from backend.implementations.annas_archive import (
+    MAX_ANNAS_ARCHIVE_DISCOVER_PAGES, _get_annas_archive_items,
+    _get_annas_archive_max_page, fetch_annas_archive_discover_page)
 from backend.implementations.discover import (MAX_DISCOVER_PAGES,
                                               _get_discover_articles,
                                               fetch_getcomics_discover_page)
@@ -176,6 +179,179 @@ class getcomics_discover_page_fetch(unittest.IsolatedAsyncioTestCase):
 
 
 # =====================
+# _get_annas_archive_items()
+# =====================
+class get_annas_archive_items(unittest.TestCase):
+    def test_extracts_link_title_and_cover(self):
+        html = """
+        <div>
+            <a href="/md5/abc123"><img src="http://x/batman.jpg">Batman v1 #1 (2024)</a>
+        </div>
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        items = _get_annas_archive_items(soup)
+
+        self.assertEqual(len(items), 1)
+        link, title, cover = items[0]
+        self.assertEqual(link, 'https://annas-archive.org/md5/abc123')
+        self.assertEqual(title, 'Batman v1 #1 (2024)')
+        self.assertEqual(cover, 'http://x/batman.jpg')
+
+    def test_cover_as_sibling_of_title_anchor(self):
+        html = """
+        <div>
+            <img data-src="http://x/lazy.jpg">
+            <a href="/md5/def456">Daredevil #10</a>
+        </div>
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        _, _, cover = _get_annas_archive_items(soup)[0]
+        self.assertEqual(cover, 'http://x/lazy.jpg')
+
+    def test_no_image_gives_none_cover(self):
+        html = '<a href="/md5/abc123">Title</a>'
+        soup = BeautifulSoup(html, "html.parser")
+        _, _, cover = _get_annas_archive_items(soup)[0]
+        self.assertIsNone(cover)
+
+    def test_non_md5_links_are_skipped(self):
+        html = """
+        <a href="/about">About</a>
+        <a href="/md5/abc123">Real Result</a>
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        items = _get_annas_archive_items(soup)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0][1], 'Real Result')
+
+    def test_anchor_without_text_is_skipped(self):
+        html = '<a href="/md5/abc123"><img src="http://x/1.jpg"></a>'
+        soup = BeautifulSoup(html, "html.parser")
+        self.assertEqual(_get_annas_archive_items(soup), [])
+
+    def test_duplicate_links_to_same_item_deduplicated(self):
+        html = """
+        <a href="/md5/abc123"><img src="http://x/1.jpg"></a>
+        <a href="/md5/abc123">Batman</a>
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        items = _get_annas_archive_items(soup)
+        self.assertEqual(len(items), 1)
+
+    def test_multiple_items_in_page_order(self):
+        html = """
+        <a href="/md5/1">First</a>
+        <a href="/md5/2">Second</a>
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        items = _get_annas_archive_items(soup)
+        self.assertEqual([i[1] for i in items], ['First', 'Second'])
+
+
+# =====================
+# _get_annas_archive_max_page()
+# =====================
+class get_annas_archive_max_page(unittest.TestCase):
+    def test_no_pagination_links_defaults_to_one(self):
+        soup = BeautifulSoup('<a href="/md5/1">Item</a>', "html.parser")
+        self.assertEqual(_get_annas_archive_max_page(soup), 1)
+
+    def test_finds_highest_page_param(self):
+        html = """
+        <a href="/search?q=&page=2">2</a>
+        <a href="/search?q=&page=7">7</a>
+        <a href="/search?q=&page=3">3</a>
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        self.assertEqual(_get_annas_archive_max_page(soup), 7)
+
+
+# =====================
+# fetch_annas_archive_discover_page(), with a fake AsyncSession
+# =====================
+class _FakeAnnasArchiveSession:
+    """Returns a canned response body for any URL and records each call's
+    full (url, params) so pagination params can be asserted on, unlike
+    `_FakeAsyncSession` above (which only needs to record the URL, since
+    GetComics puts the page number in the URL path itself).
+    """
+
+    def __init__(self, body: str) -> None:
+        self._body = body
+        self.calls = []
+
+    async def get_text(self, url, params={}, headers={}, quiet_fail=False):
+        self.calls.append((url, dict(params)))
+        return self._body
+
+
+ANNAS_ARCHIVE_LISTING_HTML = """
+<a href="/md5/abc123"><img src="http://aa.example/batman.jpg">Batman 001 (2024)</a>
+<a href="/md5/def456">Daredevil #10</a>
+<a href="/search?q=&page=4">4</a>
+"""
+
+
+class annas_archive_discover_page_fetch(unittest.IsolatedAsyncioTestCase):
+    async def test_parses_items_and_max_page(self):
+        session = _FakeAnnasArchiveSession(ANNAS_ARCHIVE_LISTING_HTML)
+
+        items, max_page = await fetch_annas_archive_discover_page(session, page=1)
+
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0]['series'], 'Batman')
+        self.assertEqual(items[0]['link'], 'https://annas-archive.org/md5/abc123')
+        self.assertEqual(items[0]['cover'], 'http://aa.example/batman.jpg')
+        self.assertEqual(items[0]['source'], "Anna's Archive")
+        self.assertIsNone(items[1]['cover'])
+        self.assertEqual(max_page, 4)
+
+    async def test_page_param_is_sent(self):
+        session = _FakeAnnasArchiveSession(ANNAS_ARCHIVE_LISTING_HTML)
+
+        await fetch_annas_archive_discover_page(session, page=3)
+
+        self.assertEqual(session.calls[0][1]['page'], '3')
+
+    async def test_page_below_one_is_clamped_to_first_page(self):
+        session = _FakeAnnasArchiveSession(ANNAS_ARCHIVE_LISTING_HTML)
+
+        await fetch_annas_archive_discover_page(session, page=0)
+
+        self.assertEqual(session.calls[0][1]['page'], '1')
+
+    async def test_empty_response_returns_empty(self):
+        session = _FakeAnnasArchiveSession('')
+
+        items, max_page = await fetch_annas_archive_discover_page(session, page=1)
+
+        self.assertEqual(items, [])
+        self.assertEqual(max_page, 1)
+
+    async def test_max_page_is_capped(self):
+        html = '<a href="/search?q=&page=999">999</a>'
+        session = _FakeAnnasArchiveSession(html)
+
+        _, max_page = await fetch_annas_archive_discover_page(session, page=1)
+
+        self.assertEqual(max_page, MAX_ANNAS_ARCHIVE_DISCOVER_PAGES)
+
+    async def test_never_returns_a_direct_download_link(self):
+        # Every item's link must be an Anna's Archive item page, never
+        # anything that looks like a direct file/download URL -- this is
+        # the metadata/search-only boundary from kapowarr/t-040 encoded as
+        # a test, not just a docstring promise.
+        session = _FakeAnnasArchiveSession(ANNAS_ARCHIVE_LISTING_HTML)
+
+        items, _ = await fetch_annas_archive_discover_page(session, page=1)
+
+        for item in items:
+            self.assertTrue(item['link'].startswith(
+                'https://annas-archive.org/md5/'
+            ))
+
+
+# =====================
 # match_discover_items_to_library()
 # =====================
 def _item(series, year=None, link='http://x/1'):
@@ -246,9 +422,13 @@ class discover_sources_registry(unittest.TestCase):
     def test_getcomics_is_registered_by_default(self):
         self.assertIn(GetComicsDiscover, DiscoverSources.sources)
 
+    def test_annas_archive_is_registered_by_default(self):
+        self.assertIn(AnnasArchiveDiscover, DiscoverSources.sources)
+
     def test_get_active_returns_instances(self):
         active = DiscoverSources.get_active()
         self.assertTrue(any(isinstance(s, GetComicsDiscover) for s in active))
+        self.assertTrue(any(isinstance(s, AnnasArchiveDiscover) for s in active))
 
     def test_register_adds_a_new_source(self):
         class _DummySource(DiscoverSource):

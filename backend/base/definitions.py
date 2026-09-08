@@ -210,6 +210,19 @@ class Constants:
     weekly-releases post to parse.
     """
 
+    ANNAS_ARCHIVE_SITE_URL = "https://annas-archive.org"
+    """
+    The base URL of Anna's Archive. Distinct in kind from `GC_SITE_URL`
+    above: GetComics is a download source Kapowarr can grab a file from,
+    while Anna's Archive is wired up as metadata/search discovery only (see
+    `backend.implementations.annas_archive` and kapowarr/t-040) -- Kapowarr
+    never automates a download from it, only surfaces link-out entries on
+    the Discover page.
+    """
+
+    ANNAS_ARCHIVE_SOURCE_TERM = "Anna's Archive"
+    "The name used for Anna's Archive as a Discover link-out source"
+
     MYLAR_RELEASES_URL = "https://talkhard.notaninja.party/newcomics.php"
     """
     Community release-calendar endpoint used by Mylar for its weekly pull

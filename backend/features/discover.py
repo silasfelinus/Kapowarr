@@ -41,6 +41,8 @@ from backend.base.helpers import AsyncSession
 from backend.implementations.annas_archive import \
     fetch_annas_archive_discover_page
 from backend.implementations.discover import fetch_getcomics_discover_page
+from backend.implementations.internet_archive import \
+    fetch_internet_archive_discover_page
 from backend.implementations.matching import match_title
 from backend.implementations.volumes import Library
 
@@ -105,6 +107,30 @@ class AnnasArchiveDiscover(DiscoverSource):
         page: int = 1
     ) -> Tuple[List[DiscoverItemData], int]:
         return await fetch_annas_archive_discover_page(session, page)
+
+
+@DiscoverSources.register
+class InternetArchiveDiscover(DiscoverSource):
+    """The Internet Archive's most recently added texts, browse/link-out
+    only -- including controlled-lending items.
+
+    This is deliberately unfiltered by download eligibility: Discover is a
+    browse view, so an item Kapowarr will never auto-acquire (a
+    controlled-lending one) is still worth surfacing here for a human to
+    find and borrow themselves. `backend.implementations.internet_archive`'s
+    module docstring covers the full boundary; `SearchSources`
+    (`backend.features.search`) is the registry that actually enforces it
+    for acquisition, via `search_internet_archive()`'s own restriction
+    check, and it is a separate function precisely so this browse view is
+    never subject to it.
+    """
+
+    async def fetch(
+        self,
+        session: AsyncSession,
+        page: int = 1
+    ) -> Tuple[List[DiscoverItemData], int]:
+        return await fetch_internet_archive_discover_page(session, page)
 
 
 async def _fetch_discover_page(page: int) -> Tuple[List[DiscoverItemData], int]:

@@ -21,6 +21,7 @@ from backend.features.acquisition_preferences import (
     pack_preference_rank, search_stops_at_first_match)
 from backend.implementations.getcomics import search_getcomics
 from backend.implementations.indexers import Indexers, search_indexer
+from backend.implementations.internet_archive import search_internet_archive
 from backend.implementations.matching import check_search_result_match
 from backend.implementations.query_builders import QueryBuilders
 from backend.implementations.torznab import (TorznabIndexers,
@@ -224,6 +225,21 @@ def _rank_search_result(
 class SearchGetComics(SearchSource):
     async def search(self, session: AsyncSession) -> List[SearchResultData]:
         return await search_getcomics(session, self.query)
+
+
+@SearchSources.register(DownloadType.DIRECT)
+class SearchInternetArchive(SearchSource):
+    """The Internet Archive as a real DIRECT acquisition source -- but only
+    for items it confirms are publicly downloadable; see
+    `backend.implementations.internet_archive` for the boundary this
+    enforces (kapowarr/t-041). A second `DownloadType.DIRECT` source
+    alongside `SearchGetComics` needed no change to this registry or to
+    `_dedupe_search_results()`/ranking below -- exactly the extension point
+    `SearchSources`'s own docstring promises.
+    """
+
+    async def search(self, session: AsyncSession) -> List[SearchResultData]:
+        return await search_internet_archive(session, self.query)
 
 
 @SearchSources.register(DownloadType.USENET)

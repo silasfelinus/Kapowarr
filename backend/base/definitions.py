@@ -223,6 +223,21 @@ class Constants:
     ANNAS_ARCHIVE_SOURCE_TERM = "Anna's Archive"
     "The name used for Anna's Archive as a Discover link-out source"
 
+    IA_SITE_URL = "https://archive.org"
+    """
+    The base URL of the Internet Archive. Unlike `ANNAS_ARCHIVE_SITE_URL`
+    above, this *is* wired up as a real acquisition source (kapowarr/t-041)
+    -- but only for the subset of items the Internet Archive itself serves
+    as direct public downloads. Controlled-lending items (the majority of
+    its comics) are never resolved, borrowed, or bypassed; they only ever
+    appear as browse/link-out Discover entries, identically to how Anna's
+    Archive is handled. See `backend.implementations.internet_archive` for
+    where that boundary is actually enforced.
+    """
+
+    IA_SOURCE_TERM = "Internet Archive"
+    "The name used for the Internet Archive as both a Discover and a Search source"
+
     MYLAR_RELEASES_URL = "https://talkhard.notaninja.party/newcomics.php"
     """
     Community release-calendar endpoint used by Mylar for its weekly pull
@@ -768,6 +783,8 @@ class DownloadSource(BaseEnum):
     "A torrent magnet link directly on the webpage"
     USENET_INDEXER = "Usenet indexer"
     "An NZB release found on a configured Newznab-compatible indexer"
+    INTERNET_ARCHIVE = "Internet Archive"
+    "A direct public-download file, confirmed not access-restricted (kapowarr/t-041)"
 
 
 class DownloadState(BaseEnum):

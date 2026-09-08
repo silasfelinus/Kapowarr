@@ -3,8 +3,9 @@ from asyncio import run
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from backend.base.custom_exceptions import EnqueuingDownloadFailure
-from backend.base.definitions import (Constants,
+from backend.base.custom_exceptions import (EnqueuingDownloadFailure,
+                                            LinkBroken)
+from backend.base.definitions import (Constants, DownloadSource,
                                       EnqueuingDownloadFailureReason)
 from backend.features.download_queue import DownloadHandler
 from backend.implementations import download_preppers as dp
@@ -32,6 +33,22 @@ class DownloadPrepperRegistryTest(unittest.TestCase):
             dp.DownloadPreppers.get_for_link('https://example.invalid/file')
         )
 
+    @patch.object(dp.Indexers, 'find_by_link', return_value=None)
+    def test_internet_archive_link_resolves_to_ia_prepper(self, _find):
+        prepper = dp.DownloadPreppers.get_for_link(
+            Constants.IA_SITE_URL + '/download/batman-001/batman-001.cbz'
+        )
+        self.assertIs(prepper, dp.InternetArchiveDownloadPrepper)
+        self.assertEqual(prepper.identifier, 'ia')
+
+    @patch.object(dp.Indexers, 'find_by_link', return_value=None)
+    def test_internet_archive_details_link_is_not_a_download_link(self, _find):
+        # /details/<id> is the Discover-only, browse/link-out page --
+        # never something this prepper (or any other) should claim.
+        self.assertIsNone(dp.DownloadPreppers.get_for_link(
+            Constants.IA_SITE_URL + '/details/batman-001'
+        ))
+
     def test_newznab_prepper_delegates_to_existing_download_factory(self):
         expected = MagicMock()
         with patch.object(
@@ -50,6 +67,66 @@ class DownloadPrepperRegistryTest(unittest.TestCase):
         create.assert_awaited_once_with(
             'https://indexer.example/get/42', 7, 11, True
         )
+
+
+class InternetArchiveDownloadPrepperTest(unittest.TestCase):
+    """Unlike GetComics/Newznab/Torznab, this prepper never fetches
+    anything itself -- the link it's given already is the final,
+    confirmed-eligible file URL (see `search_internet_archive()`), so its
+    only job is constructing a `DirectDownload` with the right metadata.
+    """
+
+    def test_prepare_builds_a_direct_download_with_the_ia_source(self):
+        expected = MagicMock()
+        with patch.object(
+            dp, 'DirectDownload', return_value=expected
+        ) as direct_download:
+            result = run(dp.InternetArchiveDownloadPrepper.prepare(
+                Constants.IA_SITE_URL + '/download/batman-001/batman-001.cbz',
+                7,
+                11,
+                False
+            ))
+
+        self.assertEqual(result, [expected])
+        _, kwargs = direct_download.call_args
+        self.assertEqual(
+            kwargs['download_link'],
+            Constants.IA_SITE_URL + '/download/batman-001/batman-001.cbz'
+        )
+        self.assertEqual(kwargs['volume_id'], 7)
+        self.assertEqual(kwargs['source_type'], DownloadSource.INTERNET_ARCHIVE)
+        self.assertEqual(kwargs['source_name'], Constants.IA_SOURCE_TERM)
+        self.assertEqual(kwargs['forced_match'], False)
+
+    def test_prepare_derives_title_from_the_url_encoded_filename(self):
+        with patch.object(dp, 'DirectDownload', return_value=MagicMock()) as direct_download:
+            run(dp.InternetArchiveDownloadPrepper.prepare(
+                Constants.IA_SITE_URL + '/download/x/Batman%20001%20%282024%29.cbz',
+                1,
+                None,
+                False
+            ))
+
+        _, kwargs = direct_download.call_args
+        self.assertEqual(kwargs['web_title'], 'Batman 001 (2024).cbz')
+
+    def test_a_broken_ia_link_is_blocklisted_and_raises(self):
+        with patch.object(
+            dp, 'DirectDownload', side_effect=LinkBroken('broken')
+        ), patch.object(dp, 'add_to_blocklist') as blocklist:
+            with self.assertRaises(EnqueuingDownloadFailure) as ctx:
+                run(dp.InternetArchiveDownloadPrepper.prepare(
+                    Constants.IA_SITE_URL + '/download/x/gone.cbz',
+                    1,
+                    None,
+                    False
+                ))
+
+        self.assertEqual(
+            ctx.exception.reason, EnqueuingDownloadFailureReason.LINK_BROKEN
+        )
+        blocklist.assert_called_once()
 
 
 class QueuePrepperDispatchTest(unittest.TestCase):

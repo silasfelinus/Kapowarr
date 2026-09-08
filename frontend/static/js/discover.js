@@ -31,7 +31,7 @@ function updateModeControls() {
 			'For You ranks recent releases using explainable title and franchise overlap with comics already in your library.';
 	} else {
 		DiscoverEls.mode_description.innerText =
-			'Recent releases from GetComics and Anna\'s Archive that are not already represented in your library.';
+			'Recent releases from GetComics, Anna\'s Archive and the Internet Archive that are not already represented in your library.';
 	};
 };
 

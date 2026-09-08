@@ -12,14 +12,20 @@ recognises a link.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from os.path import splitext
 from typing import Dict, List, Type, Union
+from urllib.parse import unquote
 
-from backend.base.custom_exceptions import EnqueuingDownloadFailure
+from backend.base.custom_exceptions import (EnqueuingDownloadFailure,
+                                            LinkBroken)
 from backend.base.definitions import (BlocklistReason, Constants, Download,
+                                      DownloadSource,
                                       EnqueuingDownloadFailureReason)
+from backend.base.file_extraction import extract_filename_data
 from backend.base.logging import LOGGER
 from backend.features.acquisition_preferences import order_getcomics_groups
 from backend.implementations.blocklist import add_to_blocklist
+from backend.implementations.download_clients import DirectDownload
 from backend.implementations.getcomics import GetComicsPage
 from backend.implementations.indexers import Indexers, create_nzb_download
 from backend.implementations.torznab import (create_torznab_download,
@@ -230,3 +236,72 @@ class TorznabDownloadPrepper(DownloadPrepper):
                 error.reason.value
             )
             raise
+
+
+@DownloadPreppers.register('ia')
+class InternetArchiveDownloadPrepper(DownloadPrepper):
+    """Turn an Internet Archive direct-download link into a queue-ready
+    download.
+
+    Unlike GetComics (a webpage that must be fetched to discover its real
+    mirror links) and Newznab/Torznab (a GUID/description link whose real
+    release name is only known once fetched), an Internet Archive result's
+    `link` here already *is* the exact, publicly-downloadable file URL --
+    `search_internet_archive()` only ever builds one after confirming the
+    item is not access-restricted and picking one specific file from its
+    metadata (see `backend.implementations.internet_archive`'s module
+    docstring for the full boundary). There is nothing left to resolve or
+    re-verify before download, so this prepper's only job is wiring the
+    link up to `DirectDownload` (identifier 'direct'), which already
+    handles a plain HTTP GET with no link conversion.
+    """
+
+    @classmethod
+    def matches(cls, link: str) -> bool:
+        return link.startswith(f"{Constants.IA_SITE_URL}/download/")
+
+    @classmethod
+    async def prepare(
+        cls,
+        link: str,
+        volume_id: int,
+        issue_id: Union[int, None] = None,
+        force_match: bool = False
+    ) -> List[Download]:
+        filename = unquote(link.rsplit('/', 1)[-1]) or 'unknown release'
+        info = extract_filename_data(
+            splitext(filename)[0],
+            assume_volume_number=False,
+            fix_year=True
+        )
+        covered_issues = info['issue_number']
+
+        try:
+            return [DirectDownload(
+                download_link=link,
+                volume_id=volume_id,
+                covered_issues=covered_issues,
+                source_type=DownloadSource.INTERNET_ARCHIVE,
+                source_name=Constants.IA_SOURCE_TERM,
+                web_link=None,
+                web_title=filename,
+                web_sub_title=None,
+                forced_match=force_match
+            )]
+        except LinkBroken:
+            add_to_blocklist(
+                web_link=None,
+                web_title=None,
+                web_sub_title=None,
+                download_link=link,
+                source=None,
+                volume_id=volume_id,
+                issue_id=issue_id,
+                reason=BlocklistReason.LINK_BROKEN
+            )
+            LOGGER.warning(
+                'Unable to add Internet Archive download; fail_reason="link_broken"'
+            )
+            raise EnqueuingDownloadFailure(
+                EnqueuingDownloadFailureReason.LINK_BROKEN
+            )

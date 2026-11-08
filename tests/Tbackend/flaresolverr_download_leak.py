@@ -138,6 +138,29 @@ class AsyncDownloadAndSessionCleanup(unittest.IsolatedAsyncioTestCase):
             link, allow_flaresolverr=False
         )
 
+    async def test_cloudflare_refusal_does_not_blocklist_download_link(self):
+        response = SimpleNamespace(
+            ok=False,
+            status=403,
+            headers=CIMultiDict(challenge_headers()),
+        )
+        fake_session = MagicMock()
+        fake_session.get = AsyncMock(return_value=response)
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=fake_session)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        link = "https://getcomics.org/download?id=456"
+        with patch.object(getcomics, "AsyncSession", return_value=context):
+            with self.assertRaises(getcomics.ClientError):
+                await getcomics.__purify_link(
+                    GCDownloadSource.GETCOMICS, link
+                )
+
+        fake_session.get.assert_awaited_once_with(
+            link, allow_flaresolverr=False
+        )
+
     async def test_async_challenge_failure_destroys_its_session(self):
         solver = FlareSolverr.__new__(FlareSolverr)
         solver.base_url = "http://flaresolverr:8191"

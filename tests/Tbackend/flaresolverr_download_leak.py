@@ -128,7 +128,7 @@ class AsyncDownloadAndSessionCleanup(unittest.IsolatedAsyncioTestCase):
 
         link = "https://getcomics.org/download?id=123"
         with patch.object(getcomics, "AsyncSession", return_value=context):
-            url, download_type = await getcomics.__purify_link(
+            url, download_type = await getattr(getcomics, '__purify_link')(
                 GCDownloadSource.GETCOMICS, link
             )
 
@@ -153,7 +153,7 @@ class AsyncDownloadAndSessionCleanup(unittest.IsolatedAsyncioTestCase):
         link = "https://getcomics.org/download?id=456"
         with patch.object(getcomics, "AsyncSession", return_value=context):
             with self.assertRaises(getcomics.ClientError):
-                await getcomics.__purify_link(
+                await getattr(getcomics, '__purify_link')(
                     GCDownloadSource.GETCOMICS, link
                 )
 

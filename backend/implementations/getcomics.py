@@ -507,7 +507,10 @@ async def __purify_link(
         return link, TorrentDownload
 
     async with AsyncSession() as session:
-        r = await session.get(link)
+        # This link points toward an archive or torrent. Chromium's challenge
+        # solver must never navigate it: redirected downloads accumulate in
+        # FlareSolverr's /app/Downloads instead of Kapowarr's download folder.
+        r = await session.get(link, allow_flaresolverr=False)
     if not r.ok:
         raise LinkBroken(link)
     url = str(r.real_url)

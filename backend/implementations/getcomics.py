@@ -512,6 +512,12 @@ async def __purify_link(
         # FlareSolverr's /app/Downloads instead of Kapowarr's download folder.
         r = await session.get(link, allow_flaresolverr=False)
     if not r.ok:
+        # A Cloudflare challenge is temporary, not evidence that a comic link
+        # is dead. Browser-solving this file URL would download an extra copy
+        # into FlareSolverr, so leave it retryable instead of blocklisting it.
+        header, value = Constants.CF_CHALLENGE_HEADER
+        if r.status == 403 and r.headers.get(header) == value:
+            raise ClientError('Cloudflare challenged a direct download link')
         raise LinkBroken(link)
     url = str(r.real_url)
     content_type = r.headers.getone("Content-Type", "")

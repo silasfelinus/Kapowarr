@@ -11,7 +11,9 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Python 3.8/3.9 are no longer provided on ubuntu-26.04 (ubuntu-latest).
+    # Preserve our supported-version test matrix on the older runner.
+    runs-on: ${{ (matrix.python-version == '3.8' || matrix.python-version == '3.9') && 'ubuntu-22.04' || 'ubuntu-latest' }}
     strategy:
       matrix:
         python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]

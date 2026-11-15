@@ -224,24 +224,31 @@ class FlareSolverr:
                 }
             )["session"]
 
-            # Get result
-            result = self.__api_request(
-                self.base_url, session,
-                {
-                    'cmd': 'request.get',
-                    'session': session_id,
-                    'url': url
-                }
-            )["solution"]
-
-            # Close session
-            self.__api_request(
-                self.base_url, session,
-                {
-                    'cmd': 'sessions.destroy',
-                    'session': session_id
-                }
-            )
+            # A challenge can fail or time out after a browser is created.
+            # Always close it, including when "solution" is absent.
+            try:
+                result = self.__api_request(
+                    self.base_url, session,
+                    {
+                        'cmd': 'request.get',
+                        'session': session_id,
+                        'url': url
+                    }
+                )["solution"]
+            finally:
+                try:
+                    self.__api_request(
+                        self.base_url, session,
+                        {
+                            'cmd': 'sessions.destroy',
+                            'session': session_id
+                        }
+                    )
+                except Exception as error:
+                    LOGGER.warning(
+                        'Unable to destroy FlareSolverr session: %s',
+                        type(error).__name__
+                    )
 
             scope = cleared_scope(url)
             self.ua_mapping[scope] = result["userAgent"]
@@ -303,24 +310,30 @@ class FlareSolverr:
                 }
             ))["session"]
 
-            # Get result
-            result = (await self.__async_api_request(
-                self.base_url, session,
-                {
-                    'cmd': 'request.get',
-                    'session': session_id,
-                    'url': url
-                }
-            ))["solution"]
-
-            # Close session
-            await self.__async_api_request(
-                self.base_url, session,
-                {
-                    'cmd': 'sessions.destroy',
-                    'session': session_id
-                }
-            )
+            # A failed request must not leave Chromium running indefinitely.
+            try:
+                result = (await self.__async_api_request(
+                    self.base_url, session,
+                    {
+                        'cmd': 'request.get',
+                        'session': session_id,
+                        'url': url
+                    }
+                ))["solution"]
+            finally:
+                try:
+                    await self.__async_api_request(
+                        self.base_url, session,
+                        {
+                            'cmd': 'sessions.destroy',
+                            'session': session_id
+                        }
+                    )
+                except Exception as error:
+                    LOGGER.warning(
+                        'Unable to destroy FlareSolverr session: %s',
+                        type(error).__name__
+                    )
 
         scope = cleared_scope(url)
         self.ua_mapping[scope] = result["userAgent"]

@@ -1126,7 +1126,8 @@ class Session(RSession):
         allow_redirects=True,
         proxies=None, hooks=None,
         stream=None, verify=None,
-        cert=None, json=None
+        cert=None, json=None,
+        allow_flaresolverr: bool = True
     ):
         _request_tally.made += 1
         ua, cf_cookies = self.fs.get_ua_cookies(url)
@@ -1142,7 +1143,10 @@ class Session(RSession):
             cert, json
         )
 
-        if result.status_code == 403:
+        # A streamed response is a file transfer, not a page to navigate with
+        # Chromium. Sending binary links to FlareSolverr makes Chrome save the
+        # archive in its own unmounted /app/Downloads directory.
+        if result.status_code == 403 and allow_flaresolverr and not stream:
             fs_result = self.fs.handle_cf_block(result.url, result.headers)
 
             if fs_result:
@@ -1414,6 +1418,8 @@ class AsyncSession(ClientSession):
         return
 
     async def _request(self, *args, **kwargs):
+        # Caller may be resolving a file URL; do not let Chromium download it.
+        allow_flaresolverr = kwargs.pop('allow_flaresolverr', True)
         method, url = args[0], args[1]
         sleep_time = Constants.BACKOFF_FACTOR_RETRIES
 
@@ -1537,7 +1543,7 @@ class AsyncSession(ClientSession):
                 )
                 continue
 
-            if response.status == 403:
+            if response.status == 403 and allow_flaresolverr:
                 fs_result = await self.fs.handle_cf_block_async(
                     self, str(response.url), response.headers
                 )

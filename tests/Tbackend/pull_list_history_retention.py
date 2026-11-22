@@ -146,7 +146,7 @@ class pull_list_history_retention(unittest.TestCase):
         self.assertEqual([row['release_title'] for row in rows], ['Fresh Batman'])
 
     def test_refresh_preserves_release_ids_and_updates_metadata(self):
-        first, _ = self._check([
+        self._check([
             _release('Midnight Spider-Man'),
             _release('Fantastic Four')
         ])
@@ -179,11 +179,14 @@ class pull_list_history_retention(unittest.TestCase):
 
     def test_action_recovers_when_a_refresh_replaces_the_numeric_id(self):
         from backend.features.pull_list import (
-            _release_key, act_on_release, get_pull_list
+            _release_key, act_on_release
         )
 
         self._check([_release('Midnight Spider-Man')])
-        displayed = get_pull_list(_week())[0]
+        displayed = dict(self.connection.execute(
+            'SELECT * FROM pull_list_entries;'
+        ).fetchone())
+        displayed['release_key'] = _release_key(displayed)
         # Simulate an old browser row whose ID was invalidated by an
         # earlier refresh, while retaining the series' stable release key.
         with patch.object(
@@ -202,16 +205,17 @@ class pull_list_history_retention(unittest.TestCase):
         )
 
     def test_stale_action_never_grabs_a_different_release(self):
-        from backend.features.pull_list import act_on_release, get_pull_list
+        from backend.features.pull_list import _release_key, act_on_release
 
         self._check([
             _release('Midnight Spider-Man'),
             _release('Fantastic Four')
         ])
-        displayed = next(
-            row for row in get_pull_list(_week())
-            if row['release_title'] == 'Midnight Spider-Man'
-        )
+        displayed = dict(self.connection.execute(
+            "SELECT * FROM pull_list_entries "
+            "WHERE release_title = 'Midnight Spider-Man';"
+        ).fetchone())
+        displayed['release_key'] = _release_key(displayed)
         self._check([_release('Fantastic Four')])
         with patch.object(
             pull_list_module, '_add_or_monitor_entry'

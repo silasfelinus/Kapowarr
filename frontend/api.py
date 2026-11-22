@@ -1656,7 +1656,18 @@ def api_pull_list_action(entry_id: int):
             raise InvalidKeyValue('root_folder_id', root_folder_id)
         RootFolders().get_one(root_folder_id)
 
-    volume_id, issue_id = act_on_release(entry_id, action, root_folder_id)
+    release_key = data.get('release_key')
+    week_start = data.get('week_start')
+    if release_key is not None:
+        if not isinstance(release_key, str) or not release_key:
+            raise InvalidKeyValue('release_key', release_key)
+        if not isinstance(week_start, str) or not week_start:
+            raise InvalidKeyValue('week_start', week_start)
+
+    volume_id, issue_id = act_on_release(
+        entry_id, action, root_folder_id,
+        release_key=release_key, week_start=week_start
+    )
     task_id = None
     if action == 'grab' and issue_id is not None:
         task_id = TaskHandler().add(AutoSearchIssue(volume_id, issue_id))

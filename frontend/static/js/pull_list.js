@@ -354,7 +354,9 @@ function actOnEntry(action, entry, button, api_key) {
 		: null;
 	sendAPI('POST', `/pulllist/${entry.id}/action`, api_key, {}, {
 		action,
-		root_folder_id
+		root_folder_id,
+		release_key: entry.release_key,
+		week_start: entry.week_start
 	})
 	.then(() => loadList(api_key))
 	.catch(error => {

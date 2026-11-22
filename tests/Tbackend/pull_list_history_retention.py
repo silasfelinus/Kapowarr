@@ -230,6 +230,41 @@ class pull_list_history_retention(unittest.TestCase):
                 )
         add.assert_not_called()
 
+    def test_archive_includes_verified_early_future_release(self):
+        future_week = _week(2)
+        self._insert_entry('Already Released', future_week)
+        self.connection.execute(
+            """
+            UPDATE pull_list_entries
+            SET release_date = ?,
+                availability_source = 'GetComics',
+                availability_link = 'https://example.invalid/available'
+            WHERE release_title = 'Already Released';
+            """,
+            ((date.today() + timedelta(days=16)).isoformat(),)
+        )
+        self.connection.execute(
+            """
+            INSERT INTO publisher_subscriptions(
+                publisher, root_folder_id, auto_search
+            ) VALUES ('DC Comics', 7, 1);
+            """
+        )
+        self.connection.commit()
+        with patch.object(
+            pull_list_module, '_add_or_monitor_entry', return_value=(5, 105)
+        ) as add, patch.object(
+            pull_list_module, 'auto_search',
+            return_value=[{'link': 'https://example.invalid/issue'}]
+        ) as search:
+            downloads = process_publisher_subscriptions([])
+
+        self.assertEqual(
+            downloads, [('https://example.invalid/issue', 5, 105)]
+        )
+        add.assert_called_once()
+        search.assert_called_once()
+
     def test_manual_check_fetches_only_the_selected_historical_week(self):
         selected = date.fromisoformat(_week(-20))
         selected_iso = selected.isoformat()

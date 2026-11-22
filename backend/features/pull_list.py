@@ -866,6 +866,12 @@ def _process_publisher_subscriptions_unlocked(
             """
             SELECT * FROM pull_list_entries
             WHERE week_start <= ?
+               OR (
+                 availability_source IS NOT NULL
+                 AND availability_source != ''
+                 AND availability_link IS NOT NULL
+                 AND availability_link != ''
+               )
             ORDER BY week_start, id;
             """,
             (current_week,)
@@ -884,7 +890,12 @@ def _process_publisher_subscriptions_unlocked(
 
     for entry in entries:
         week_start = str(entry.get('week_start') or '')
-        if not week_start or week_start > current_week:
+        available = bool(
+            entry.get('availability_source') and entry.get('availability_link')
+        )
+        # Even a future-week listing can be released early; an independent
+        # availability result outranks an unreliable calendar date.
+        if not week_start or (week_start > current_week and not available):
             continue
 
         publisher = str(entry.get('publisher') or '').lower()
@@ -902,9 +913,6 @@ def _process_publisher_subscriptions_unlocked(
         # A bare future calendar row still waits. Otherwise each weekly
         # scan could try an entire week's unreleased books on Monday.
         release_date = str(entry.get('release_date') or '')
-        available = bool(
-            entry.get('availability_source') and entry.get('availability_link')
-        )
         indexed = (
             bool(subscription['auto_search'])
             and entry.get('issue_id') is not None

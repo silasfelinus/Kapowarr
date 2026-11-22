@@ -222,7 +222,9 @@ def match_releases_to_library(
                 if volume.get('comicvine_id') == comicvine_id
             ), None)
 
-        if matched_volume is None:
+        # A known provider ID is authoritative. Falling back to a same-name
+        # volume can silently attach volume 2 to volume 1 (often same year).
+        if matched_volume is None and not comicvine_id:
             matched_volume = next((
                 volume for volume in volumes
                 if match_title(volume['title'], release['series'])
@@ -325,8 +327,33 @@ def check_weekly_pull_list(
     })
     cursor = get_db()
     with cursor:
+        old_entries = []
         if refreshed_weeks:
             placeholders = ','.join('?' for _ in refreshed_weeks)
+            old_entries = cursor.execute(
+                'SELECT * FROM pull_list_entries '
+                f'WHERE week_start IN ({placeholders});',
+                tuple(refreshed_weeks)
+            ).fetchalldict()
+        existing = {}
+        for old in old_entries:
+            key = (str(old['week_start']), _release_key(old))
+            existing.setdefault(key, []).append(old['id'])
+
+        retained, new = [], []
+        for entry in entries:
+            key = (str(entry['week_start']), _release_key(entry))
+            prior = existing.get(key)
+            if prior:
+                entry['id'] = prior.pop(0)
+                retained.append(entry)
+            else:
+                entry['id'] = None
+                new.append(entry)
+
+        # Reinsert retained IDs before allocating new ones, so a refresh
+        # cannot recycle a currently displayed release ID for another comic.
+        if refreshed_weeks:
             cursor.execute(
                 'DELETE FROM pull_list_entries '
                 f'WHERE week_start IN ({placeholders});',
@@ -335,19 +362,20 @@ def check_weekly_pull_list(
         cursor.executemany(
             """
             INSERT INTO pull_list_entries(
-                volume_id, issue_id, comicvine_volume_id, comicvine_issue_id,
-                issue_number, release_title, publisher, release_date,
-                cover_date, week_start, year, source, link,
-                availability_source, availability_link, checked_at
+                id, volume_id, issue_id, comicvine_volume_id,
+                comicvine_issue_id, issue_number, release_title,
+                publisher, release_date, cover_date, week_start, year,
+                source, link, availability_source, availability_link,
+                checked_at
             ) VALUES (
-                :volume_id, :issue_id, :comicvine_volume_id,
+                :id, :volume_id, :issue_id, :comicvine_volume_id,
                 :comicvine_issue_id, :issue_number, :release_title,
                 :publisher, :release_date, :cover_date, :week_start, :year,
                 :source, :link, :availability_source, :availability_link,
                 :checked_at
             );
             """,
-            entries
+            retained + new
         )
 
     archive_count = cursor.execute(
@@ -372,7 +400,7 @@ def get_pull_list(week_start: Union[str, None] = None) -> List[Dict[str, Any]]:
     except ValueError:
         selected_week = _monday(date.today()).isoformat()
 
-    return get_db().execute(
+    entries = get_db().execute(
         """
         SELECT
             p.*, v.title AS volume_title, v.monitored AS volume_monitored,
@@ -403,6 +431,9 @@ def get_pull_list(week_start: Union[str, None] = None) -> List[Dict[str, Any]]:
         """,
         (selected_week,)
     ).fetchalldict()
+    for entry in entries:
+        entry['release_key'] = _release_key(entry)
+    return entries
 
 
 def get_publishers() -> List[Dict[str, Any]]:
@@ -762,14 +793,33 @@ def _add_or_monitor_entry(
 def act_on_release(
     entry_id: int,
     action: str,
-    root_folder_id: Union[int, None] = None
+    root_folder_id: Union[int, None] = None,
+    release_key: Union[str, None] = None,
+    week_start: Union[str, None] = None
 ) -> Tuple[int, Union[int, None]]:
     """Apply an explicit add/monitor/grab action to one calendar row."""
-    entry = get_db().execute(
+    cursor = get_db()
+    entry = cursor.execute(
         'SELECT * FROM pull_list_entries WHERE id = ?;', (entry_id,)
     ).fetchonedict()
+    if release_key is not None and (
+        not entry or _release_key(entry) != release_key
+        or str(entry['week_start']) != week_start
+    ):
+        # A background calendar refresh can replace the row between page
+        # rendering and the user's click. Resolve by immutable release identity
+        # rather than acting on a reused numeric ID for a different comic.
+        entry = next((
+            row for row in cursor.execute(
+                'SELECT * FROM pull_list_entries WHERE week_start = ?;',
+                (week_start,)
+            ).fetchalldict()
+            if _release_key(row) == release_key
+        ), None)
     if not entry:
-        raise RuntimeError('Release entry not found')
+        raise RuntimeError(
+            'Release entry not found; refresh the pull list and try again'
+        )
     if action not in ('monitor', 'grab'):
         raise RuntimeError('Unsupported release action')
     if entry.get('volume_id') is None and root_folder_id is None:

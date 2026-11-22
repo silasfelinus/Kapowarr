@@ -887,18 +887,31 @@ def _process_publisher_subscriptions_unlocked(
         if not week_start or week_start > current_week:
             continue
 
-        # The week filter alone is not enough. A week starts on Monday, so
-        # from Monday morning it admits every release in it -- including
-        # Friday's, three days before anyone could have it. Those were
-        # attempted, failed for the only possible reason, and recorded.
-        release_date = str(entry.get('release_date') or '')
-        if release_date and release_date > today:
-            continue
         publisher = str(entry.get('publisher') or '').lower()
         if publisher_filter is not None and publisher != publisher_filter:
             continue
         subscription = subscriptions.get(publisher)
         if not subscription:
+            continue
+
+        # Provider dates can be late or just wrong. Don't let a future
+        # metadata date suppress a release that has independent evidence:
+        # either the availability feed found it, or an auto-search
+        # subscription already has the exact issue in the library.
+        #
+        # A bare future calendar row still waits. Otherwise each weekly
+        # scan could try an entire week's unreleased books on Monday.
+        release_date = str(entry.get('release_date') or '')
+        available = bool(
+            entry.get('availability_source') and entry.get('availability_link')
+        )
+        indexed = (
+            bool(subscription['auto_search'])
+            and entry.get('issue_id') is not None
+        )
+        if release_date and release_date > today and not (
+            available or indexed
+        ):
             continue
         action = 'auto_search' if subscription['auto_search'] else 'auto_add'
         release_key = _release_key(entry)

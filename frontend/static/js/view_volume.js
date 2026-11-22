@@ -1061,6 +1061,23 @@ function showInfoWindow(window) {
 
 usingApiKey()
 .then(api_key => {
+	// ComicVine cover dates describe the printed issue month, not when
+	// shops started selling it. Use the configured metadata date type for
+	// the table heading rather than implying every stored date is on-sale.
+	fetchAPI('/settings', api_key)
+	.then(json => {
+		const header = document.querySelector('.issues-table th.issue-date');
+		if (!header)
+			return;
+		const cover_date = json.result.date_type === 'cover_date';
+		header.innerText = cover_date ? 'Cover Date' : 'In-Store Date';
+		header.title = cover_date
+			? 'Printed cover month, not the on-sale date. Select In Store Date '
+				+ 'under Settings > Metadata to show shop release dates.'
+			: 'On-sale date provided by the selected metadata source.';
+	})
+	.catch(() => { /* Keep the neutral heading when settings are unavailable. */ });
+
 	fetchAPI(`/volumes/${volume_id}`, api_key)
 	.then(json => fillPage(json.result, api_key))
 	.catch(e => {

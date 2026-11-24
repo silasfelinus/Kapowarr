@@ -147,6 +147,56 @@ class a_release_that_is_not_out_yet_is_not_attempted(_Base):
             'and nothing is recorded, so it is clean when it does arrive'
         )
 
+    def test_available_issue_is_not_suppressed_by_wrong_future_date(self):
+        entry = self._entry(
+            16, release_date=date.today() + timedelta(days=9)
+        )
+        entry['availability_source'] = 'GetComics'
+        entry['availability_link'] = 'https://example.test/available'
+
+        searched = self._run(
+            entry, [{'link': 'https://example.test/real-download'}]
+        )
+
+        self.assertEqual(
+            searched.call_count, 1,
+            'real availability takes precedence over a wrong release date'
+        )
+        self.assertEqual(
+            self.connection.execute(
+                'SELECT success FROM publisher_automation_history;'
+            ).fetchone()[0], 1
+        )
+
+    def test_indexed_issue_is_searched_even_with_wrong_future_date(self):
+        entry = self._entry(
+            17, release_date=date.today() + timedelta(days=9)
+        )
+        entry['issue_id'] = 101
+
+        searched = self._run(
+            entry, [{'link': 'https://example.test/indexer-result'}]
+        )
+
+        self.assertEqual(
+            searched.call_count, 1,
+            'an indexed issue is worth searching despite a provider date'
+        )
+
+    def test_future_row_without_availability_remains_deferred(self):
+        entry = self._entry(
+            18, release_date=date.today() + timedelta(days=9)
+        )
+        entry['availability_source'] = 'GetComics'
+        # A source label alone is not independent evidence of a result.
+
+        with patch.object(pull_list, '_add_or_monitor_entry') as add, \
+                patch.object(pull_list, 'auto_search') as searched:
+            pull_list.process_publisher_subscriptions([entry])
+
+        add.assert_not_called()
+        searched.assert_not_called()
+
     def test_today_is_attempted(self):
         entry = self._entry(15, release_date=date.today())
 

@@ -100,6 +100,21 @@ class release_to_library_matching(unittest.TestCase):
 
         self.assertEqual(entries[0]['volume_id'], 1)
 
+    def test_explicit_comicvine_id_never_matches_a_different_volume(self):
+        entries = match_releases_to_library(
+            [_release(
+                'Midnight Spider-Man', year=2026,
+                comicvine_volume_id=22222
+            )],
+            [_volume(
+                1, 'Midnight Spider-Man', year=2026,
+                comicvine_id=11111
+            )]
+        )
+
+        self.assertIsNone(entries[0]['volume_id'])
+        self.assertEqual(entries[0]['comicvine_volume_id'], 22222)
+
     def test_year_prevents_wrong_title_match(self):
         entries = match_releases_to_library(
             [_release('Batman', year=2025)],

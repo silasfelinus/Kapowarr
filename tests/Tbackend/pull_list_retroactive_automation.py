@@ -115,6 +115,26 @@ class publisher_retroactive_automation(unittest.TestCase):
             0
         )
 
+    def test_verified_available_release_ignores_future_week(self):
+        current = _monday(date.today())
+        entry = self._entry(current + timedelta(weeks=2), 131)
+        entry['availability_source'] = 'GetComics'
+        entry['availability_link'] = 'https://example.test/early'
+
+        with patch.object(
+            pull_list, '_add_or_monitor_entry', return_value=(5, 105)
+        ) as add_entry, patch.object(
+            pull_list, 'auto_search',
+            return_value=[{'link': 'https://example.test/real-issue'}]
+        ) as search:
+            downloads = pull_list.process_publisher_subscriptions([entry])
+
+        self.assertEqual(
+            downloads, [('https://example.test/real-issue', 5, 105)]
+        )
+        add_entry.assert_called_once()
+        search.assert_called_once()
+
     def test_successful_historical_grab_is_not_repeated(self):
         past = _monday(date.today()) - timedelta(weeks=2)
         entry = self._entry(past, 14)

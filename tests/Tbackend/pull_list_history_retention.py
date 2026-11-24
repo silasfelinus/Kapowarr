@@ -145,6 +145,126 @@ class pull_list_history_retention(unittest.TestCase):
         ).fetchall()
         self.assertEqual([row['release_title'] for row in rows], ['Fresh Batman'])
 
+    def test_refresh_preserves_release_ids_and_updates_metadata(self):
+        self._check([
+            _release('Midnight Spider-Man'),
+            _release('Fantastic Four')
+        ])
+        original = {
+            row['release_title']: row['id']
+            for row in self.connection.execute(
+                'SELECT id, release_title FROM pull_list_entries;'
+            ).fetchall()
+        }
+
+        changed = _release('Midnight Spider-Man')
+        changed['availability_source'] = 'GetComics'
+        changed['availability_link'] = 'https://example.invalid/available'
+        self._check([changed, _release('Fantastic Four')])
+
+        current = {
+            row['release_title']: row
+            for row in self.connection.execute(
+                'SELECT id, release_title, availability_source '
+                'FROM pull_list_entries;'
+            ).fetchall()
+        }
+        self.assertEqual(set(original), set(current))
+        for title, old_id in original.items():
+            self.assertEqual(current[title]['id'], old_id)
+        self.assertEqual(
+            current['Midnight Spider-Man']['availability_source'],
+            'GetComics'
+        )
+
+    def test_action_recovers_when_a_refresh_replaces_the_numeric_id(self):
+        from backend.features.pull_list import (
+            _release_key, act_on_release
+        )
+
+        self._check([_release('Midnight Spider-Man')])
+        displayed = dict(self.connection.execute(
+            'SELECT * FROM pull_list_entries;'
+        ).fetchone())
+        displayed['release_key'] = _release_key(displayed)
+        # Simulate an old browser row whose ID was invalidated by an
+        # earlier refresh, while retaining the series' stable release key.
+        with patch.object(
+            pull_list_module, '_add_or_monitor_entry', return_value=(42, 7)
+        ) as add:
+            result = act_on_release(
+                999999, 'grab', 1,
+                release_key=displayed['release_key'],
+                week_start=displayed['week_start']
+            )
+
+        self.assertEqual(result, (42, 7))
+        self.assertEqual(add.call_count, 1)
+        self.assertEqual(
+            _release_key(add.call_args[0][0]), displayed['release_key']
+        )
+
+    def test_stale_action_never_grabs_a_different_release(self):
+        from backend.features.pull_list import _release_key, act_on_release
+
+        self._check([
+            _release('Midnight Spider-Man'),
+            _release('Fantastic Four')
+        ])
+        displayed = dict(self.connection.execute(
+            "SELECT * FROM pull_list_entries "
+            "WHERE release_title = 'Midnight Spider-Man';"
+        ).fetchone())
+        displayed['release_key'] = _release_key(displayed)
+        self._check([_release('Fantastic Four')])
+        with patch.object(
+            pull_list_module, '_add_or_monitor_entry'
+        ) as add:
+            with self.assertRaisesRegex(
+                RuntimeError, 'refresh the pull list'
+            ):
+                act_on_release(
+                    displayed['id'], 'grab', 1,
+                    release_key=displayed['release_key'],
+                    week_start=displayed['week_start']
+                )
+        add.assert_not_called()
+
+    def test_archive_includes_verified_early_future_release(self):
+        future_week = _week(2)
+        self._insert_entry('Already Released', future_week)
+        self.connection.execute(
+            """
+            UPDATE pull_list_entries
+            SET release_date = ?,
+                availability_source = 'GetComics',
+                availability_link = 'https://example.invalid/available'
+            WHERE release_title = 'Already Released';
+            """,
+            ((date.today() + timedelta(days=16)).isoformat(),)
+        )
+        self.connection.execute(
+            """
+            INSERT INTO publisher_subscriptions(
+                publisher, root_folder_id, auto_search
+            ) VALUES ('DC Comics', 7, 1);
+            """
+        )
+        self.connection.commit()
+        with patch.object(
+            pull_list_module, '_add_or_monitor_entry', return_value=(5, 105)
+        ) as add, patch.object(
+            pull_list_module, 'auto_search',
+            return_value=[{'link': 'https://example.invalid/issue'}]
+        ) as search:
+            downloads = process_publisher_subscriptions([])
+
+        self.assertEqual(
+            downloads, [('https://example.invalid/issue', 5, 105)]
+        )
+        add.assert_called_once()
+        search.assert_called_once()
+
     def test_manual_check_fetches_only_the_selected_historical_week(self):
         selected = date.fromisoformat(_week(-20))
         selected_iso = selected.isoformat()
